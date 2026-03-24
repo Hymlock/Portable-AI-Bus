@@ -1,0 +1,39 @@
+{
+  "providers": [
+    {
+      "id": "codex",
+      "displayName": "Codex",
+      "role": "implementation",
+      "markersAny": [
+        "AGENTS.md"
+      ],
+      "install": [
+        {
+          "source": "providers/codex/AGENTS.md",
+          "destination": "AGENTS.md"
+        }
+      ]
+    },
+    {
+      "id": "claude",
+      "displayName": "Claude Code",
+      "role": "planning-review",
+      "markersAny": [
+        "CLAUDE.md",
+        ".claude",
+        ".claude/settings.json",
+        ".claude/settings.local.json"
+      ],
+      "install": [
+        {
+          "source": "providers/claude/CLAUDE.md",
+          "destination": "CLAUDE.md"
+        }
+      ]
+    }
+  ],
+  "recommendedPair": [
+    "codex",
+    "claude"
+  ]
+}

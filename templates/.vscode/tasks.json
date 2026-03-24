@@ -1,0 +1,24 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "AI: Watch Bus",
+      "type": "shell",
+      "command": "node .ai-bus/bin/ai_bus.js watch",
+      "isBackground": true,
+      "problemMatcher": []
+    },
+    {
+      "label": "AI: Validate Bus",
+      "type": "shell",
+      "command": "node .ai-bus/bin/validate_ai_bus.js",
+      "problemMatcher": []
+    },
+    {
+      "label": "AI: Show Next Prompt",
+      "type": "shell",
+      "command": "node .ai-bus/bin/ai_bus.js prompt",
+      "problemMatcher": []
+    }
+  ]
+}

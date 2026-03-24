@@ -1,0 +1,214 @@
+{
+  "name": "portable-ai-bus",
+  "displayName": "Portable AI Bus",
+  "description": "Chat-first AI workflow staging for Visual Studio Code workspaces.",
+  "version": "0.1.0",
+  "publisher": "local-dev",
+  "preview": true,
+  "license": "MIT",
+  "files": [
+    "dist/**",
+    "bin/**",
+    "providers/**",
+    "templates/**",
+    "media/**",
+    "README.md",
+    "HUMAN_GUIDE.md",
+    "OPERATOR.md",
+    "LICENSE"
+  ],
+  "icon": "media/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-org/portable-ai-bus.git"
+  },
+  "homepage": "https://github.com/your-org/portable-ai-bus",
+  "bugs": {
+    "url": "https://github.com/your-org/portable-ai-bus/issues"
+  },
+  "galleryBanner": {
+    "color": "#1f4d3a",
+    "theme": "dark"
+  },
+  "engines": {
+    "vscode": "^1.101.0"
+  },
+  "categories": [
+    "Chat",
+    "Other"
+  ],
+  "keywords": [
+    "ai",
+    "copilot",
+    "chat",
+    "workflow",
+    "agent"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onChatParticipant:portable-ai-bus.assistant",
+    "onCommand:portableAiBus.initializeWorkspace",
+    "onCommand:portableAiBus.startTask",
+    "onCommand:portableAiBus.showStatus",
+    "onCommand:portableAiBus.showPrompt",
+    "onCommand:portableAiBus.setPhase",
+    "onCommand:portableAiBus.suspend",
+    "onCommand:portableAiBus.resume",
+    "onCommand:portableAiBus.remove",
+    "onCommand:portableAiBus.openSettings",
+    "onCommand:portableAiBus.openHumanGuide"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "portableAiBus.initializeWorkspace",
+        "title": "Portable AI Bus: Initialize Workspace"
+      },
+      {
+        "command": "portableAiBus.startTask",
+        "title": "Portable AI Bus: Start Task"
+      },
+      {
+        "command": "portableAiBus.showStatus",
+        "title": "Portable AI Bus: Show Status"
+      },
+      {
+        "command": "portableAiBus.showPrompt",
+        "title": "Portable AI Bus: Show Next Prompt"
+      },
+      {
+        "command": "portableAiBus.setPhase",
+        "title": "Portable AI Bus: Set Phase"
+      },
+      {
+        "command": "portableAiBus.suspend",
+        "title": "Portable AI Bus: Suspend Workspace Bus"
+      },
+      {
+        "command": "portableAiBus.resume",
+        "title": "Portable AI Bus: Resume Workspace Bus"
+      },
+      {
+        "command": "portableAiBus.remove",
+        "title": "Portable AI Bus: Remove Workspace Bus"
+      },
+      {
+        "command": "portableAiBus.openSettings",
+        "title": "Portable AI Bus: Open Settings"
+      },
+      {
+        "command": "portableAiBus.openHumanGuide",
+        "title": "Portable AI Bus: Open Human Instructions"
+      }
+    ],
+    "chatParticipants": [
+      {
+        "id": "portable-ai-bus.assistant",
+        "name": "ai-bus",
+        "fullName": "Portable AI Bus",
+        "description": "Initialize, run, and manage the bus workflow in this workspace.",
+        "isSticky": true,
+        "commands": [
+          {
+            "name": "help",
+            "description": "Show the available AI Bus chat operations."
+          },
+          {
+            "name": "instructions",
+            "description": "Open the human instructions guide."
+          },
+          {
+            "name": "init",
+            "description": "Stage the bus into the current workspace."
+          },
+          {
+            "name": "start",
+            "description": "Start a task. Example: /start task: Fix auth flow goal: Keep tests green"
+          },
+          {
+            "name": "status",
+            "description": "Show the current bus status."
+          },
+          {
+            "name": "prompt",
+            "description": "Show the next prompt for the current phase."
+          },
+          {
+            "name": "phase",
+            "description": "Set the workflow phase. Example: /phase READY_FOR_REVIEW"
+          },
+          {
+            "name": "suspend",
+            "description": "Suspend the staged overlay while preserving runtime state."
+          },
+          {
+            "name": "resume",
+            "description": "Resume a suspended workspace bus."
+          },
+          {
+            "name": "remove",
+            "description": "Remove the workspace bus and staged files."
+          },
+          {
+            "name": "settings",
+            "description": "Open Portable AI Bus settings."
+          }
+        ]
+      }
+    ],
+    "configuration": {
+      "title": "Portable AI Bus",
+      "properties": {
+        "portableAiBus.instructionsFile": {
+          "type": "string",
+          "default": ".ai-bus/HUMAN_GUIDE.md",
+          "markdownDescription": "Human instructions live in `[.ai-bus/HUMAN_GUIDE.md](command:portableAiBus.openHumanGuide)`. This path is staged into each initialized workspace."
+        },
+        "portableAiBus.commandReference": {
+          "type": "string",
+          "default": "instructions | initialize the bus for this repo | start task: <task> goal: <goal> validation: <command> | show status | show next prompt | set phase to READY_FOR_REVIEW | suspend the bus | resume the bus | remove the bus | open settings",
+          "markdownDescription": "Basic chat instruction commands for `@ai-bus`. Use this as the quick in-settings reference for the LLM-facing workflow surface."
+        },
+        "portableAiBus.providers": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "markdownDescription": "Optional explicit provider IDs to install in the workspace. Leave empty to auto-detect from repo markers and fall back to the recommended pair."
+        },
+        "portableAiBus.stageTasksJson": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Stage `.vscode/tasks.json` from the bundled template when the workspace does not already have one."
+        },
+        "portableAiBus.stageCompatibilityWrappers": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Also stage the legacy `.cmd` and `.ps1` wrappers into the workspace root. Keep this off for a chat-only user experience."
+        },
+        "portableAiBus.showStatusBar": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Show the current AI Bus phase in the VS Code status bar."
+        },
+        "portableAiBus.autoInitializeOnOpen": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "When a workspace opens and no `.ai-bus` folder exists, prompt to initialize it."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/vscode": "^1.101.0",
+    "@vscode/vsce": "^3.6.2",
+    "typescript": "^5.8.3"
+  }
+}
