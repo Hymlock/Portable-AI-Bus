@@ -20,11 +20,11 @@
   "icon": "media/icon.png",
   "repository": {
     "type": "git",
-    "url": "https://github.com/your-org/portable-ai-bus.git"
+    "url": "https://github.com/Hymlock/Portable-AI-Bus.git"
   },
-  "homepage": "https://github.com/your-org/portable-ai-bus",
+  "homepage": "https://github.com/Hymlock/Portable-AI-Bus",
   "bugs": {
-    "url": "https://github.com/your-org/portable-ai-bus/issues"
+    "url": "https://github.com/Hymlock/Portable-AI-Bus/issues"
   },
   "galleryBanner": {
     "color": "#1f4d3a",
