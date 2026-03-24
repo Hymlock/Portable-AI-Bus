@@ -26,6 +26,7 @@ The extension contributes an `@ai-bus` participant with these basic instruction 
 Settings are exposed under `Portable AI Bus` in the VS Code settings UI:
 
 - `portableAiBus.instructionsFile`
+- `portableAiBus.commandReference`
 - `portableAiBus.providers`
 - `portableAiBus.stageTasksJson`
 - `portableAiBus.stageCompatibilityWrappers`
@@ -59,8 +60,5 @@ npx @vscode/vsce package
 Before publishing to the Marketplace, replace these placeholders in `package.json`:
 
 - `publisher`
-- `repository.url`
-- `homepage`
-- `bugs.url`
 
-The bundled icon and Marketplace metadata are now present so the extension packages cleanly, but those identity fields should point at the real project before publish.
+The repository URLs now point at this GitHub repository. Update publisher identity once you create the Marketplace publisher.
