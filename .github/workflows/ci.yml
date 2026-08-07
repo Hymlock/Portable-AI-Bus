@@ -89,6 +89,14 @@ jobs:
 
       - run: npm ci
 
+      # ubuntu-latest no longer ships xvfb preinstalled. The first dispatch of this job died
+      # in three seconds with `xvfb-run: command not found` and no other output - which is
+      # exactly the infrastructure failure Grok predicted when it argued this must not be a
+      # required job. Had it been required, an unrelated runner-image change would have
+      # blocked every merge.
+      - name: Install a virtual display
+        run: sudo apt-get update && sudo apt-get install -y xvfb
+
       # A headless runner has no display; VS Code needs one. xvfb-run supplies it.
       - name: Integration tiers (source + installed VSIX)
         run: xvfb-run -a npm run test:vscode

@@ -306,7 +306,17 @@ test('round cap halts immediately after durably writing the cap message', async 
 });
 
 test('authenticated heartbeats persist leases and transition to stale without granting authority', async (t) => {
-  const { root, server, request } = await setup(['codex', 'grok'], 20, { leaseStaleMs: 100, leaseSweepMs: 50 });
+  // 1000ms, not 100ms. At 100 the test raced the machine: between a heartbeat and the
+  // /v1/status call that asserts `live`, several awaits and an HTTP round trip elapse, and on
+  // a loaded CI runner that exceeds 100ms - so the lease had legitimately gone stale and the
+  // assertion failed with 'stale' !== 'live'. The product was correct; the test was measuring
+  // runner speed. Caught on windows-latest, 2026-08-07.
+  //
+  // The sweep stays well below the TTL so the stale transition is still observed promptly,
+  // and the wait below is comfortably past TTL + sweep. The cost is ~1.2s of wall clock,
+  // which is the right trade for a test that otherwise fails at random and teaches everyone
+  // to re-run CI until it goes green.
+  const { root, server, request } = await setup(['codex', 'grok'], 20, { leaseStaleMs: 1000, leaseSweepMs: 100 });
   t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true }); });
   const endpoint = JSON.parse(await fs.readFile(path.join(root, '.ai-bus', 'runtime', 'harness', 'endpoint.json'), 'utf8'));
   const heartbeat = await fetch(`http://127.0.0.1:${endpoint.port}/v1/heartbeat`, {
@@ -323,7 +333,8 @@ test('authenticated heartbeats persist leases and transition to stale without gr
   assert.equal(durable.instanceId, server.instanceId);
   assert.equal(durable.leases[0].clientId, 'monitor:one');
 
-  await new Promise((resolve) => setTimeout(resolve, 220));
+  // Past TTL (1000) + sweep (100), with headroom for a slow runner.
+  await new Promise((resolve) => setTimeout(resolve, 1400));
   const stale = await request('/v1/status');
   assert.equal(stale.body.workerLeases.seats.find((item) => item.seat === 'grok').state, 'stale');
   assert.match(await fs.readFile(server.auditPath, 'utf8'), /worker_lease_stale/);
