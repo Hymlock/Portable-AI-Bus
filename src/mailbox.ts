@@ -140,6 +140,16 @@ type SendInput = {
   kind?: string;
   subject: string;
   body: string;
+  /**
+   * Keep the baton with the SENDER instead of passing it to the recipient.
+   *
+   * Default-on for `ack`, because an ack means "received, I am working on it" - the sender is
+   * about to act, not handing over. Without this the baton bounced to whoever was WAITING:
+   * one exchange after shipping the baton, Grok acked "processing, will pass baton when those
+   * land" and the system immediately declared that Claude owed the next action. The signal
+   * pointed at the idle seat.
+   */
+  keepBaton?: boolean;
 };
 
 type ClaimInput = {
@@ -297,11 +307,19 @@ export class MailboxStore {
       // action. This is what makes a stall attributable instead of atmospheric - without it,
       // "nobody is doing anything" is indistinguishable from "someone is thinking hard", and
       // every stall on this project happened with both seats alive and heartbeating.
-      state.baton = {
-        holder: message.to,
-        since: message.createdAt,
-        reason: `#${seq} from ${message.from}: ${message.subject}`
-      };
+      // An ack keeps the baton by default: the sender has taken the work, not handed it back.
+      const keepsBaton = input.keepBaton ?? message.kind === 'ack';
+      state.baton = keepsBaton
+        ? {
+            holder: message.from,
+            since: state.baton?.holder === message.from ? state.baton.since : message.createdAt,
+            reason: `#${seq} ${message.from} acked and is working: ${message.subject}`
+          }
+        : {
+            holder: message.to,
+            since: message.createdAt,
+            reason: `#${seq} from ${message.from}: ${message.subject}`
+          };
       const designatedRound = state.haltPolicy.atRounds.includes(round) ||
         (state.haltPolicy.everyRounds !== null && round % state.haltPolicy.everyRounds === 0);
       if (round >= state.maxRounds || designatedRound) {
@@ -1153,6 +1171,7 @@ async function runCli(argv = process.argv.slice(2)) {
       const bodyFile = stringArg(args, 'body-file');
       const body = bodyFile ? await fs.readFile(path.resolve(bodyFile), 'utf8') : stringArg(args, 'body', true);
       const message = await store.send({
+        keepBaton: optionalBoolArg(args, 'keep-baton'),
         from: stringArg(args, 'from', true),
         to: stringArg(args, 'to', true),
         kind: stringArg(args, 'kind') || 'note',

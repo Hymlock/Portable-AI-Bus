@@ -523,7 +523,9 @@ export function seatToolInvocation(command: string, argv: string[], seat: string
           to: requiredOption(argv, '--to'),
           kind: option(argv, '--kind') ?? 'note',
           subject: requiredOption(argv, '--subject'),
-          body: messageBody(argv)
+          body: messageBody(argv),
+          // "I have it, I am working" - do not bounce the baton to whoever is waiting.
+          ...(flag(argv, '--keep-baton') ? { keepBaton: true } : {})
         }
       };
     case 'claim':
@@ -678,7 +680,7 @@ function validateCliArguments(command: string, args: string[]) {
     status: [],
     inbox: ['--after-seq'],
     read: [],
-    send: ['--to', '--kind', '--subject', '--body', '--body-file'],
+    send: ['--to', '--kind', '--subject', '--body', '--body-file', '--keep-baton'],
     claim: ['--paths', '--why'],
     release: ['--paths'],
     'complete-step': ['--summary', '--evidence'],
