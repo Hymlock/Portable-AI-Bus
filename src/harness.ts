@@ -821,11 +821,26 @@ export class HarnessServer {
       existing = undefined;
       this.leases.delete(key);
       if (this.leases.size >= MAX_WORKER_LEASES) {
-        const oldest = [...this.leases.entries()].sort(([, left], [, right]) => leaseLastSeen(left).localeCompare(leaseLastSeen(right)))[0];
-        if (oldest) {
-          this.leases.delete(oldest[0]);
-          this.staleLeaseKeys.delete(oldest[0]);
-          await this.audit({ event: 'worker_lease_pruned', seat: oldest[1].seat, clientId: oldest[1].clientId }).catch(() => undefined);
+        // Prune only leases that are already STALE. The previous behaviour evicted the
+        // oldest-seen lease unconditionally, which under pressure could drop a live one - the
+        // victim then looks like a network flake to whoever held it, which is the hardest
+        // class of fault to diagnose afterwards. Grok flagged this; refusing is the honest
+        // answer, because the cap means we genuinely cannot serve the request.
+        const stale = [...this.leases.entries()]
+          .filter(([key]) => this.staleLeaseKeys.has(key))
+          .sort(([, left], [, right]) => leaseLastSeen(left).localeCompare(leaseLastSeen(right)))[0];
+        if (stale) {
+          this.leases.delete(stale[0]);
+          this.staleLeaseKeys.delete(stale[0]);
+          await this.audit({ event: 'worker_lease_pruned', seat: stale[1].seat, clientId: stale[1].clientId }).catch(() => undefined);
+        } else {
+          await this.audit({ event: 'worker_lease_capacity', seat, clientId }).catch(() => undefined);
+          throw new HarnessHttpError(
+            429,
+            'lease_capacity',
+            `Worker lease capacity reached (${MAX_WORKER_LEASES}) and every lease is live. Retry shortly.`,
+            true
+          );
         }
       }
       this.leases.set(key, {

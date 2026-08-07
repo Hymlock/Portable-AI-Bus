@@ -495,7 +495,7 @@ class HarnessRequestError extends Error {
 
 async function runCli(argv = process.argv.slice(2)) {
   const command = argv[0];
-  const commands = new Set(['wait', 'watch', 'status', 'inbox', 'read', 'send', 'claim', 'release', 'complete-step', 'capabilities', 'run', 'tool']);
+  const commands = new Set(['wait', 'watch', 'status', 'inbox', 'read', 'send', 'claim', 'release', 'complete-step', 'complete-goal', 'capabilities', 'run', 'tool']);
   if (!command || !commands.has(command)) throw new Error(cliUsage());
   validateCliArguments(command, argv.slice(1));
   const controller = new AbortController();
@@ -568,6 +568,20 @@ export function seatToolInvocation(command: string, argv: string[], seat: string
       const paths = option(argv, '--paths');
       return { name: 'mailbox_release', input: { agent: seat, ...(paths === undefined ? {} : { paths: csv(paths, '--paths') }) } };
     }
+    case 'complete-goal':
+      // The harness has always exposed mailbox_complete_goal, but the worker client did not,
+      // so a seat had to reach past its own client to mailbox.js to declare completion - and
+      // that path needs the operator token rather than the seat credential. A seat that
+      // cannot record its own completion through its own client will either not record it or
+      // will borrow authority it should not have.
+      return {
+        name: 'mailbox_complete_goal',
+        input: {
+          agent: seat,
+          summary: requiredOption(argv, '--summary'),
+          evidence: csvOption(argv, '--evidence')
+        }
+      };
     case 'complete-step':
       return {
         name: 'mailbox_complete_step',
@@ -718,6 +732,7 @@ function validateCliArguments(command: string, args: string[]) {
     claim: ['--paths', '--why'],
     release: ['--paths'],
     'complete-step': ['--summary', '--evidence'],
+    'complete-goal': ['--summary', '--evidence'],
     capabilities: [],
     run: ['--capability', '--timeout-ms'],
     tool: ['--name', '--input-json']
