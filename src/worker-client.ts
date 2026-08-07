@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -506,7 +507,7 @@ async function runCli(argv = process.argv.slice(2)) {
   }
 }
 
-function seatToolInvocation(command: string, argv: string[], seat: string) {
+export function seatToolInvocation(command: string, argv: string[], seat: string) {
   switch (command) {
     case 'status':
       return { name: 'mailbox_status', input: {} };
@@ -522,7 +523,7 @@ function seatToolInvocation(command: string, argv: string[], seat: string) {
           to: requiredOption(argv, '--to'),
           kind: option(argv, '--kind') ?? 'note',
           subject: requiredOption(argv, '--subject'),
-          body: requiredOption(argv, '--body')
+          body: messageBody(argv)
         }
       };
     case 'claim':
@@ -563,7 +564,7 @@ function cliUsage() {
     '  status',
     '  inbox [--all] [--after-seq N]',
     '  read [--all]',
-    '  send --to AGENT --subject TEXT --body TEXT [--kind KIND]',
+    '  send --to AGENT --subject TEXT (--body-file PATH | --body TEXT) [--kind KIND]',
     '  claim --paths PATH[,PATH...] [--why TEXT]',
     '  release [--paths PATH[,PATH...]]',
     '  complete-step --summary TEXT [--evidence ITEM[,ITEM...]]',
@@ -613,6 +614,38 @@ function requiredOption(argv: string[], name: string) {
   return value;
 }
 
+/**
+ * Message body from `--body-file` (preferred) or `--body`.
+ *
+ * `--body` is shell-hostile and the failure is silent. A quoted shell argument containing
+ * backticks or `$(...)` is substituted *before* this process starts: on 2026-08-07 a message
+ * on the sibling Python bus lost the word `reap` to command substitution and was delivered
+ * altered, with only a stray "reap: command not found" on stderr to hint at it. Findings and
+ * code review - the main traffic here - are full of backticks.
+ *
+ * Worse, `--body "$(rm -rf x)"` executes on the SENDER's machine before any code here runs.
+ * Nothing in this process can defend against that, which is why the fix is to offer a path
+ * that never passes content through a shell at all.
+ *
+ * `--body` is kept for short one-liners and backward compatibility rather than removed.
+ */
+function messageBody(argv: string[]) {
+  const file = option(argv, '--body-file');
+  const inline = option(argv, '--body');
+  if (file && inline !== undefined) {
+    throw new Error('Pass either --body or --body-file, not both.');
+  }
+  if (file) {
+    try {
+      return readFileSync(file, 'utf8');
+    } catch (error) {
+      throw new Error(`Could not read --body-file ${file}: ${(error as Error).message}`);
+    }
+  }
+  if (!inline) throw new Error('Missing --body (or --body-file).');
+  return inline;
+}
+
 function flag(argv: string[], name: string) {
   return argv.includes(name);
 }
@@ -645,7 +678,7 @@ function validateCliArguments(command: string, args: string[]) {
     status: [],
     inbox: ['--after-seq'],
     read: [],
-    send: ['--to', '--kind', '--subject', '--body'],
+    send: ['--to', '--kind', '--subject', '--body', '--body-file'],
     claim: ['--paths', '--why'],
     release: ['--paths'],
     'complete-step': ['--summary', '--evidence'],
