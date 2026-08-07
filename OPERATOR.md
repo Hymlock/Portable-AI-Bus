@@ -220,6 +220,9 @@ Built-ins: codex, claude, grok.
 Expect under `.ai-bus/bin/`: at least `mailbox.js`, `harness.js`, `worker-client.js`, `skse-devkit.js`.
 Expect templates, providers, HUMAN_GUIDE, capabilities template install as implemented by `bus.ts` stageBundle.
 
+### Compatibility wrappers = Windows-only (by design)
+`portableAiBus.stageCompatibilityWrappers` defaults **false**. When true, only `.cmd`/`.ps1` files are staged — **no `.sh`**. Non-Windows operators use `node .ai-bus/bin/...` exclusively. Do not add untested POSIX wrapper twins unless someone owns CI for them.
+
 ## Troubleshooting
 
 | Problem | Check |

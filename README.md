@@ -191,6 +191,8 @@ Command: **Portable AI Bus: Run Language Model Worker** (`portableAiBus.runLangu
 | `providers` | Force provider ids |
 | `workflow.plannerSeat` / `workflow.implementerSeat` / `workflow.reviewerSeat` | Assign workflow roles to arbitrary seat IDs |
 | `stageTasksJson` / `stageCompatibilityWrappers` | Optional staging |
+
+**Compatibility wrappers are Windows-only.** `templates/` ships `.cmd` / `.ps1` helpers (`Start`, `Status`, `Watch`, …). There are **no** `.sh` siblings. Default `stageCompatibilityWrappers` is **false**; the chat-first path and staged `.vscode/tasks.json` use `node .ai-bus/bin/*.js`, which is cross-platform. On macOS/Linux use the Node CLIs (or `@ai-bus`), not the wrappers. Do not enable wrappers expecting POSIX coverage.
 | `showStatusBar` / `autoInitializeOnOpen` | UX |
 | `languageModelWorker.*` | enabled, vendor, modelId, maxTurns, allowedTools |
 | `harness.port` / `harness.autoStart` | VS Code-owned loopback harness lifecycle |
