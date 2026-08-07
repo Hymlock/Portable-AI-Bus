@@ -1,0 +1,94 @@
+# Continuous integration for Portable AI Bus.
+#
+# Why this exists: before it, there was no workflow at all. Every green number on this project
+# was produced locally, on one machine, and asserted by agents reviewing their own work. Two
+# separate incidents on 2026-08-07 showed what that costs - a "92/92 green" figure that never
+# opened VS Code and was quoted as the release bar, and a test suite that passed in a working
+# tree but failed in a fresh clone because a needed file was gitignored.
+#
+# The job split is deliberate and was the one point the two reviewing agents disagreed on.
+# Running everything in one required job looks stricter but is worse: the VS Code tiers need a
+# real editor, and a required job that fails for infrastructure reasons trains people to ignore
+# CI or switch it off. A gate nobody trusts is the same failure as a gate that cannot fail,
+# arriving from the other direction. So:
+#
+#   check    every push and PR, required. Must be boring and must stay green.
+#   vscode   on demand, on a label, and weekly. Allowed to be slow and environment-sensitive,
+#            never silently skipped while something else paints the badge green.
+
+name: CI
+
+on:
+  push:
+    branches: [main, 'codex/**', 'claude/**', 'grok/**']
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly, so the VS Code tiers cannot rot unnoticed between releases.
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: check (tests + audit)
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Developed on Windows, but the extension must not become Windows-only by accident.
+        # Path casing, junctions and atomic-rename behaviour differ, and the mailbox depends
+        # on all three.
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      # `npm ci`, never `npm install`: it honours the lockfile and fails if package.json and
+      # package-lock.json disagree. That is also the fresh-clone check - if the committed tree
+      # cannot install from what is in git, this job is where we find out.
+      - run: npm ci
+
+      # `npm run check`, not bare `npm test`. check = tests + audit. Using `npm test` here
+      # would reproduce the exact trap this workflow exists to prevent.
+      - run: npm run check
+
+      - name: Package VSIX
+        run: npx @vscode/vsce package --allow-missing-repository --no-dependencies
+
+      - uses: actions/upload-artifact@v4
+        if: matrix.os == 'ubuntu-latest'
+        with:
+          name: portable-ai-bus-vsix
+          path: '*.vsix'
+          if-no-files-found: error
+
+  vscode:
+    name: VS Code integration tiers
+    # Not on every push. These load a real editor, so they are slow and environment-sensitive;
+    # gating every commit on them would make red mean "the runner had a bad day" rather than
+    # "the code is broken".
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule' ||
+      contains(github.event.pull_request.labels.*.name, 'vscode-tier')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      # A headless runner has no display; VS Code needs one. xvfb-run supplies it.
+      - name: Integration tiers (source + installed VSIX)
+        run: xvfb-run -a npm run test:vscode
