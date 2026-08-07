@@ -469,7 +469,8 @@ export class WorkspaceBus {
       { from: 'templates', to: path.join(paths.busDir, 'templates') },
       { from: 'README.md', to: path.join(paths.busDir, 'README.md') },
       { from: 'HUMAN_GUIDE.md', to: path.join(paths.busDir, 'HUMAN_GUIDE.md') },
-      { from: 'OPERATOR.md', to: path.join(paths.busDir, 'OPERATOR.md') }
+      { from: 'OPERATOR.md', to: path.join(paths.busDir, 'OPERATOR.md') },
+      { from: 'TESTING.md', to: path.join(paths.busDir, 'TESTING.md') }
     ];
 
     for (const entry of copies) {

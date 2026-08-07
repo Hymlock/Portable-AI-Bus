@@ -13,6 +13,9 @@ Audience: humans running the extension, harness, and multi-agent sessions.
 | `set phase to <PHASE>` | Update status + prompt artifacts |
 | `mailbox status` / `inbox for <seat>` | Coordination mailbox |
 | `send message` / `claim` / `release claims` | Mailbox mutations (guided UI) |
+| **Configure Round, Step, and Goal Halting** | Set checkpoint and completion policies |
+| **Record Step Completion** / **Record Goal Completion** | Store structured summary/evidence and apply policy |
+| **Start Harness** / **Stop Harness** / **Show Harness and Worker Status** | Manage or inspect the harness owned by this VS Code window |
 | `suspend` / `resume` / `remove` | Overlay lifecycle |
 | `open settings` | `portableAiBus.*` |
 | **Run Language Model Worker** | Explicit bounded `vscode.lm` session |
@@ -32,6 +35,9 @@ node .ai-bus/bin/mailbox.js wait --for A --timeout 600
 node .ai-bus/bin/mailbox.js claim --agent A --paths path1,path2 --why "..."
 node .ai-bus/bin/mailbox.js release --agent A [--paths path1]
 node .ai-bus/bin/mailbox.js doctor
+node .ai-bus/bin/mailbox.js configure-halting [--on-step true|false] [--on-goal true|false] [--at-rounds 6,12] [--every-rounds 12]
+node .ai-bus/bin/mailbox.js complete-step --agent A --summary "..." [--evidence test,commit]
+node .ai-bus/bin/mailbox.js complete-goal --agent operator --summary "..." [--evidence test,release]
 node .ai-bus/bin/mailbox.js halt --reason "..."
 node .ai-bus/bin/mailbox.js resume [--add-rounds N]
 ```
@@ -39,8 +45,21 @@ node .ai-bus/bin/mailbox.js resume [--add-rounds N]
 ### Semantics
 - **Durable** inbox files + transcript; each send bumps `seq` and `round`.
 - **Claims accumulate**; releasing specific paths keeps the rest; do not edit under foreign claims.
-- **Round guard**: at `maxRounds`, further sends throw halted until `resume`.
+- A send increments both `seq` and `round`. If that new round triggers a round policy, the message is written first and the bus then halts.
+- Completion is a structured event containing scope (`step` or `goal`), actor, summary, optional evidence, timestamp, and whether it halted the bus. Ordinary message text never implies completion.
 - Exit `2` = halted; `3` = nothing waiting / wait timeout.
+
+### Halt policy matrix
+
+| Policy | Default | Trigger and authority |
+|--------|---------|-----------------------|
+| Hard `maxRounds` | 32 | Always enforced on sends; not disabled by the policy command |
+| `atRounds` | `[]` | Operator-selected positive round numbers |
+| `everyRounds` | off (`null`) | Every positive Nth round; `0`/`null` disables |
+| `onStepCompletion` | `false` | A seat may record its own step through the harness; operator/local CLI may also record |
+| `onGoalCompletion` | `true` | Harness goal completion is operator-only |
+
+`resume` clears `halted` and `stopReason`; it does not erase completion/transcript history or change the halt policy. After a hard-cap halt, use `--add-rounds N` with `N > 0` or the next send will meet the unchanged cap again. After an explicit or recurring checkpoint, a plain resume advances normally until the next configured trigger. Manual `halt --reason` remains available independently.
 
 ## Harness operations
 
@@ -49,18 +68,29 @@ node .ai-bus/bin/harness.js serve --root <workspace> [--port 47831]
 # port 0 = ephemeral
 ```
 
+Or use Command Palette **Start Harness**, **Stop Harness**, and **Show Harness and Worker Status**. A VS Code window stops only the harness instance it created. Its owned instance is cleaned up on Suspend, Remove, workspace-folder removal, and extension deactivation. External/other-window instances are not killed. `portableAiBus.harness.autoStart` defaults false and is ignored for uninitialized or suspended workspaces.
+
 ### Security model (actual)
 - Listen **`127.0.0.1` only**.
 - Bearer tokens: **operator** + one **seat** per registered mailbox agent.
 - Token files under
   `~/.portable-ai-bus/credentials/<sha256(workspace)[:24]>/<instanceId>/`
   (`operator.token`, `seats/<agent>.token`), mode 0600-ish; **removed on clean stop**.
-- Workspace lock file prevents two harnesses on the same root.
+- Workspace lock file prevents two harnesses on the same root. Dead owners are recovered only after an exclusive recovery election and an exact owner recheck; a live or ambiguous owner fails closed.
 - Runtime audit/endpoint under `.ai-bus/runtime/harness/` (no long-lived secrets in-repo).
 - Seat tokens cannot act as another agent; operator can.
 - Idempotent `POST /v1/tool` via `requestId` + canonical fingerprint; durable records under `runtime/harness/requests/`.
 - Halted mailbox → mutating tools return **423** (`mailbox_send|claim|release|read|capability_run`).
-- Wake: `GET /v1/wake?agent=&timeoutMs=` long-poll; concurrency limited.
+- Wake: `GET /v1/wake?agent=&clientId=&leaseId=&generation=&afterSeq=&timeoutMs=` long-poll; concurrency limited. Operator diagnostics may wake without a seat lease.
+
+### Worker lease semantics
+
+- `POST /v1/heartbeat` is seat-only. With no lease identity it requires a per-process `acquisitionId` and acquires the single live lease allowed for that seat; repeating the same acquisition is idempotent, while another nonce is fenced. With `leaseId` + `generation` it renews that exact lease.
+- `POST /v1/workers/release` is seat-only and releases only a matching lease identity.
+- Every lease is fenced by `instanceId`, `leaseId`, and generation. A harness restart rotates the instance and credentials. Expired/superseded generations return `409 lease_lost`; a competing client receives `409 lease_held` while the current lease is live.
+- Heartbeat and wake timestamps are persisted to `.ai-bus/runtime/harness/leases.json`; status reports registered seats as `live`, `stale`, or `never_seen`.
+- **Advisory only:** “live” means recent authenticated HTTP activity. It does not certify provider health, current computation, useful progress, instruction compliance, or message handling. Leases never confer tool authority or mutate mail/claims by themselves.
+- Heartbeats remain possible while mailbox mutations are halted. A wake against a halted mailbox can still report the halt; it does not resume the bus.
 
 ### Client sketch
 ```http
@@ -80,24 +110,47 @@ node .ai-bus/bin/worker-client.js wait --root <workspace> --seat <agent> [--time
 node .ai-bus/bin/worker-client.js watch --root <workspace> --seat <agent> [--timeout-ms 25000]
 ```
 
+`watch` persists a cursor outside the repository for its stable logical client ID and resets it only when the durable mailbox epoch changes. Delivery is at least once, not exactly once: downstream actions must be idempotent across a crash between handling a message and persisting its cursor. Wake pages and client/server response bodies are bounded.
+
 | Mode | Behaviour |
 |------|-----------|
-| `wait` | POST `/v1/heartbeat` with seat id, then GET `/v1/wake` long-poll; print one JSON result (`wake` + `messages`) |
-| `watch` | Loop `wait`; emit JSON only for **new** message `seq` values; on disconnect print `{event:"disconnected",...}` to stderr and retry |
+| `wait` | Discover current endpoint/token, acquire a lease, long-poll once, release, and print one JSON result |
+| `watch` | Retain and renew one lease; send a monotonic `afterSeq`; emit only new message sequences; rediscover/reconnect with bounded exponential jitter |
 
-Requirements: harness already serving; seat registered in endpoint; valid seat token file for current `instanceId`. Provider-neutral (any seat id). Prefer this over busy-polling `mailbox wait` when the harness is the coordination plane.
+Requirements: harness already serving; seat registered in endpoint; valid seat token file for current `instanceId`. Provider-neutral means the protocol does not interpret a model vendor—the caller remains responsible for launching and connecting its actual provider process. Stdout is JSON results only; connection transitions are bounded and written to stderr. SIGINT/SIGTERM abort an active long poll promptly and make a best-effort lease release; server-side expiry is the fallback.
 
 ### Recovery
 | Symptom | Action |
 |---------|--------|
-| `already owns this workspace` | Stop other harness PID; delete stale `.ai-bus/runtime/harness/server.lock` only if PID dead |
+| `already owns this workspace` | Inspect the PID/endpoint. Stop the owning harness normally; startup automatically recovers a well-formed lock only when its PID is dead |
+| `server_lock_recovery` / malformed lock | Another recovery is active or ownership is ambiguous. Do not delete blindly; inspect lock, endpoint, PID, and audit evidence |
 | Lost tokens after restart | Expected — instance rotates; re-read paths from serve stdout / start() |
-| Bus halted | `mailbox resume --add-rounds N` then retry |
+| Bus halted | Inspect `stopReason`; use `mailbox resume --add-rounds N` when the hard maximum needs more capacity |
+| `409 lease_held` | Another client has the seat's live lease; stop it or wait for server expiry |
+| `409 lease_lost` | Lease expired, was superseded, or belongs to an old instance; rediscover and acquire anew (`watch` does this) |
 | 409 request_id_reuse | Same id, different body — change id or body intentionally |
 | 409 indeterminate_request | Crash mid-flight — inspect evidence; new id |
 | Port in use | `--port 0` or free 47831 |
 | worker-client endpoint invalid | Start harness; confirm seat in `endpoint.json` seats list |
 | worker-client credential malformed | Token missing/rotated — restart harness or fix credentials dir |
+
+### VS Code reminder timer
+
+Settings:
+
+- `portableAiBus.reminders.intervalSeconds` — 5–600 seconds, default 15
+- `portableAiBus.reminders.notifyUnread` — default true
+- `portableAiBus.reminders.notifyStaleWorkers` — default true
+
+The tracker establishes a silent baseline per workspace, then notifies once when a newer unread sequence appears for a seat or when a previously observed lease becomes stale. Filesystem mailbox events may prompt an additional check. Polls are serialized to avoid overlapping runs. The timer reads durable state only: it never invokes `vscode.lm`, acknowledges mail, releases claims, launches a worker, or revives a stopped process.
+
+### Current limits and crash recovery
+
+- The reminder timer exists only while the extension is active and the workspace bus is initialized and not suspended. It is a notification aid, not an external supervisor.
+- `harness.autoStart` starts the loopback server, not a provider/model worker. `worker-client watch` waits for mail but does not launch or control the AI behind its seat.
+- A clean harness stop removes its current instance credentials. A process crash can leave an old instance directory in the user credentials root; its token does not match a new harness instance, but the directory should be inspected and removed manually when recovering from a crash.
+- Harness and mailbox locks recover only a well-formed, exactly rechecked owner whose PID is dead. Malformed or ambiguous ownership fails closed and requires operator inspection; never delete a lock solely because it looks old.
+- The default worker stale window is 60 seconds and is server-authoritative. Detection therefore lags the last heartbeat and remains an observation, not a health guarantee.
 
 ## Capabilities
 

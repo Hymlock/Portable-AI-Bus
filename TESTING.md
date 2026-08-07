@@ -37,14 +37,15 @@ Expect a green suite (mailbox, harness, capabilities, skse-devkit, lm-worker as 
 5. `@ai-bus show status` / `show next prompt`
 6. `@ai-bus start task: Smoke test goal: Verify overlay validation: npm test`
 7. `@ai-bus set phase to READY_FOR_CODEX` → status updates
-8. Suspend → overlay removed, `.ai-bus/runtime/` kept → Resume → restore → Remove → clean
+8. Start a VS Code-managed harness, then Suspend → owned harness/credentials stop, overlay removed, `.ai-bus/runtime/` kept → Resume → restore. Start again, then Remove → owned harness stops and workspace copy is cleaned.
+9. Start a harness outside this VS Code window; **Stop Harness** must report that this window owns no harness and leave the external process running. Stop it normally before testing Suspend/Remove.
 
 ### Mailbox smoke
 
-9. `@ai-bus mailbox status` (agents/rounds/claims)
-10. Command Palette → **Mailbox Send** (`codex` → `grok`, short body)
-11. `@ai-bus inbox for grok` shows unread
-12. Terminal in test workspace:
+10. `@ai-bus mailbox status` (agents/rounds/claims)
+11. Command Palette → **Mailbox Send** (`codex` → `grok`, short body)
+12. `@ai-bus inbox for grok` shows unread
+13. Terminal in test workspace:
 
 ```bash
 node .ai-bus/bin/mailbox.js status
@@ -53,13 +54,19 @@ node .ai-bus/bin/mailbox.js release --agent grok
 node .ai-bus/bin/mailbox.js doctor
 ```
 
-13. Optional halt/resume:
+14. Halt-policy smoke:
 
 ```bash
-node .ai-bus/bin/mailbox.js halt --reason "test"
-node .ai-bus/bin/mailbox.js send --from codex --to grok --subject x --body y   # expect fail / exit 2
-node .ai-bus/bin/mailbox.js resume --add-rounds 4
+node .ai-bus/bin/mailbox.js configure-halting --on-step true --on-goal true --at-rounds 3 --every-rounds 5
+node .ai-bus/bin/mailbox.js complete-step --agent grok --summary "smoke step" --evidence "npm test"
+# expect halted; completion appears in status/transcript
+node .ai-bus/bin/mailbox.js resume
+node .ai-bus/bin/mailbox.js complete-goal --agent operator --summary "smoke goal" --evidence "npm test"
+# expect halted; resume does not erase either completion or policy
+node .ai-bus/bin/mailbox.js resume
 ```
+
+In a fresh mailbox, verify the defaults independently: `maxRounds=32`, step completion continues, goal completion halts, `atRounds=[]`, `everyRounds=null`. For explicit/every-N/hard-cap cases, verify the triggering message exists before `halted=true`. After a hard-cap halt, verify plain resume cannot create capacity and `resume --add-rounds 4` can.
 
 ### Harness smoke (optional but recommended)
 
@@ -82,6 +89,13 @@ Checks:
 - Seat token cannot `from` another agent
 - Duplicate `requestId` same body → same result
 - After `mailbox halt`, claim/send via harness → 423
+- Operator token cannot forge a worker heartbeat
+- Two clients competing for one seat → second gets `409 lease_held`
+- Let a lease expire, reacquire it, then use the old identity → `409 lease_lost`
+- `/v1/status` reports `live`, then `stale`; treat both as advisory observations, never proof of work
+- Two processes using one logical client ID but different acquisition nonces cannot share a lease; retrying one nonce returns the same lease
+- Wake pages and HTTP responses stay bounded, and a persisted cursor resumes after the last successfully delivered sequence
+- Harness restart rotates `instanceId` and tokens; the old lease cannot be renewed
 
 Worker client (harness still up):
 
@@ -92,7 +106,17 @@ node .ai-bus/bin/worker-client.js watch --root . --seat grok
 # Ctrl+C ends watch; no VS Code UI required
 ```
 
-Stop harness cleanly (Ctrl+C); confirm credentials instance dir removed.
+For `watch`, send mail with increasing `seq`; confirm stdout emits each new sequence once and does not hot-loop on unchanged unread mail. Restart the harness and confirm stderr reports a bounded disconnect/reconnect transition while stdout remains JSON-only. Ctrl+C during an active long-poll should return promptly and attempt release. Stop the harness cleanly and confirm active wakes abort and the current credentials instance directory is removed.
+
+### VS Code harness and reminder smoke
+
+1. Command Palette → **Start Harness**; repeat it and confirm the same window does not create a second server.
+2. **Show Harness and Worker Status**; confirm endpoint, instance, PID, ownership, and lease timestamps agree with runtime files.
+3. **Stop Harness**; confirm only the owned instance stops. Repeat and confirm it reports no owned harness.
+4. Enable `portableAiBus.harness.autoStart`, reload an initialized workspace, and confirm one harness starts. Suspend the bus, reload, and confirm auto-start does not bypass suspension.
+5. With reminder interval set to 5 seconds, establish the initial quiet baseline. Send new mail and expect one unread notification; unchanged polls must not repeat it. While the harness stays running, stop heartbeats and let a previously live lease expire; expect one stale notification.
+6. Disable each notification setting independently. Confirm the status bar still refreshes, but the matching pop-up does not appear.
+7. Observe process/model logs while reminders fire: there must be no model invocation, mailbox acknowledgement, claim release, worker launch, or process revival.
 
 ### Capabilities smoke
 
@@ -132,6 +156,9 @@ Expect nested `tools/cmake/bin/cmake.exe`, `tools/vcpkg`, `libraries/CommonLibSS
 - Suspend / Resume / Remove
 - Open Settings / Open Human Instructions
 - Mailbox Status / Inbox / Send / Claim / Release
+- Start / Stop / Show Harness and Worker Status
+- Configure Round, Step, and Goal Halting
+- Record Step Completion / Record Goal Completion
 - Run Language Model Worker
 
 ## Settings checklist
@@ -144,6 +171,11 @@ Expect nested `tools/cmake/bin/cmake.exe`, `tools/vcpkg`, `libraries/CommonLibSS
 - `portableAiBus.showStatusBar`
 - `portableAiBus.autoInitializeOnOpen`
 - `portableAiBus.languageModelWorker.*`
+- `portableAiBus.harness.port`
+- `portableAiBus.harness.autoStart`
+- `portableAiBus.reminders.intervalSeconds`
+- `portableAiBus.reminders.notifyUnread`
+- `portableAiBus.reminders.notifyStaleWorkers`
 
 ## VSIX package check
 
@@ -162,6 +194,11 @@ Install `.vsix` into a normal VS Code window and repeat **workflow + mailbox** s
 - Claims ignored by agents (process issue, not bus)
 - Harness binding non-loopback (must not)
 - Tokens committed to git (must not)
+- Lease shown as proof that a model is progressing (it is advisory only)
+- Reminder timer acknowledging mail or invoking/restarting a model (must not)
+- Suspend/remove stopping an external harness that this VS Code window does not own
+- `watch` repeating unchanged unread sequences or writing connection diagnostics to stdout
+- Halt checkpoint dropping the message that triggered it
 - LM worker running without explicit command
 - Docs describing Unify as required (it is not)
 - SKSE adapter claiming to vendor toolchains (it must not)

@@ -8,7 +8,6 @@ const execFileAsync = promisify(execFile);
 const SCHEMA = 1;
 const DEFAULT_MAX_ROUNDS = 32;
 const LOCK_TIMEOUT_MS = 10_000;
-const STALE_LOCK_MS = 60_000;
 
 export type Claim = {
   path: string;
@@ -46,6 +45,25 @@ export type MailboxState = {
   halted: boolean;
   stopReason: string | null;
   claims: Record<string, Claim[]>;
+  haltPolicy: HaltPolicy;
+  completions: CompletionEvent[];
+};
+
+export type HaltPolicy = {
+  onStepCompletion: boolean;
+  onGoalCompletion: boolean;
+  atRounds: number[];
+  everyRounds: number | null;
+};
+
+export type CompletionEvent = {
+  id: string;
+  scope: 'step' | 'goal';
+  actor: string;
+  summary: string;
+  evidence: string[];
+  at: string;
+  halted: boolean;
 };
 
 export type MailboxStatus = MailboxState & {
@@ -72,6 +90,7 @@ type MailboxPaths = {
   statePath: string;
   transcriptPath: string;
   lockPath: string;
+  recoveryLockPath: string;
 };
 
 type SendInput = {
@@ -92,14 +111,51 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+function normalizeHaltRounds(value: unknown) {
+  if (!Array.isArray(value) || value.length > 256 || value.some((item) => !Number.isSafeInteger(item) || (item as number) < 1)) {
+    throw new Error('atRounds must contain at most 256 positive integers.');
+  }
+  return Array.from(new Set(value as number[])).sort((left, right) => left - right);
+}
+
+function normalizeEveryRounds(value: unknown): number | null {
+  if (value === null || value === 0) return null;
+  if (!Number.isSafeInteger(value) || (value as number) < 1) throw new Error('everyRounds must be a positive integer, zero, or null.');
+  return value as number;
+}
+
 function delay(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function delayUntil(ms: number, signal?: AbortSignal) {
+  if (!signal) return delay(ms);
+  if (signal.aborted) return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    const timer = setTimeout(finish, ms);
+    const onAbort = () => finish();
+    function finish() {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
 }
 
 function errorCode(error: unknown): string | undefined {
   return typeof error === 'object' && error !== null && 'code' in error
     ? String((error as NodeJS.ErrnoException).code)
     : undefined;
+}
+
+function processAlive(pid: number) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return errorCode(error) === 'EPERM';
+  }
 }
 
 function messageFileName(seq: number, from: string, to: string) {
@@ -119,7 +175,8 @@ export class MailboxStore {
       inboxDir: path.join(mailboxDir, 'inbox'),
       statePath: path.join(mailboxDir, 'state.json'),
       transcriptPath: path.join(mailboxDir, 'transcript.md'),
-      lockPath: path.join(mailboxDir, '.lock')
+      lockPath: path.join(mailboxDir, '.lock'),
+      recoveryLockPath: path.join(mailboxDir, '.lock.recovery')
     };
   }
 
@@ -195,6 +252,14 @@ export class MailboxStore {
       state.seq = seq;
       state.round = round;
       state.agents = knownAgents;
+      const designatedRound = state.haltPolicy.atRounds.includes(round) ||
+        (state.haltPolicy.everyRounds !== null && round % state.haltPolicy.everyRounds === 0);
+      if (round >= state.maxRounds || designatedRound) {
+        state.halted = true;
+        state.stopReason = round >= state.maxRounds
+          ? `maxRounds (${state.maxRounds}) reached`
+          : `designated round checkpoint (${round}) reached`;
+      }
       await this.writeStateUnsafe(state);
       await this.appendTranscriptUnsafe(message);
       return message;
@@ -206,13 +271,14 @@ export class MailboxStore {
     return (await this.allMessages()).filter((message) => message.to === agent && !message.read);
   }
 
-  async read(agent: string, all = false): Promise<BusMessage[]> {
+  async read(agent: string, all = false, limit?: number): Promise<BusMessage[]> {
     this.assertAgent(agent, 'agent');
+    if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1 || limit > 10_000)) throw new Error('read limit must be 1..10000.');
     return this.withLock(async () => {
       const unread = (await this.allMessagesUnsafe()).filter(
         (message) => message.to === agent && !message.read
       );
-      const selected = all ? unread : unread.slice(0, 1);
+      const selected = all ? unread.slice(0, limit ?? unread.length) : unread.slice(0, 1);
       const readAt = nowIso();
       for (const message of selected) {
         message.read = true;
@@ -227,24 +293,31 @@ export class MailboxStore {
     });
   }
 
-  async waitFor(agent: string, timeoutMs = 600_000, intervalMs = 500): Promise<'message' | 'timeout'> {
+  async waitFor(
+    agent: string,
+    timeoutMs = 600_000,
+    intervalMs = 500,
+    afterSeq = 0,
+    signal?: AbortSignal
+  ): Promise<'message' | 'timeout' | 'server_stopping'> {
     this.assertAgent(agent, 'agent');
     if (timeoutMs < 0 || intervalMs < 25) {
       throw new Error('Timeout must be non-negative and poll interval must be at least 25 ms.');
     }
     const deadline = Date.now() + timeoutMs;
     do {
+      if (signal?.aborted) return 'server_stopping';
       const state = await this.loadState();
       if (state.halted) {
         throw new BusHaltedError(state.stopReason ?? 'bus halted');
       }
-      if ((await this.inbox(agent)).length > 0) {
+      if ((await this.inbox(agent)).some((message) => message.seq > afterSeq)) {
         return 'message';
       }
       if (Date.now() >= deadline) {
         break;
       }
-      await delay(Math.min(intervalMs, Math.max(0, deadline - Date.now())));
+      await delayUntil(Math.min(intervalMs, Math.max(0, deadline - Date.now())), signal);
     } while (Date.now() <= deadline);
     return 'timeout';
   }
@@ -342,6 +415,68 @@ export class MailboxStore {
     });
   }
 
+  async configureHalting(policy: Partial<HaltPolicy>): Promise<MailboxState> {
+    if (policy.onStepCompletion === undefined && policy.onGoalCompletion === undefined &&
+        policy.atRounds === undefined && policy.everyRounds === undefined) {
+      throw new Error('At least one halt policy option is required.');
+    }
+    const atRounds = policy.atRounds === undefined ? undefined : normalizeHaltRounds(policy.atRounds);
+    const everyRounds = policy.everyRounds === undefined ? undefined : normalizeEveryRounds(policy.everyRounds);
+    return this.withLock(async () => {
+      const state = await this.loadStateUnsafe();
+      state.haltPolicy = {
+        onStepCompletion: policy.onStepCompletion ?? state.haltPolicy.onStepCompletion,
+        onGoalCompletion: policy.onGoalCompletion ?? state.haltPolicy.onGoalCompletion,
+        atRounds: atRounds ?? state.haltPolicy.atRounds,
+        everyRounds: everyRounds === undefined ? state.haltPolicy.everyRounds : everyRounds
+      };
+      await this.writeStateUnsafe(state);
+      await this.appendLineUnsafe(
+        `\n**HALT POLICY** step=${state.haltPolicy.onStepCompletion} goal=${state.haltPolicy.onGoalCompletion} ` +
+        `at=${state.haltPolicy.atRounds.join(',') || 'none'} every=${state.haltPolicy.everyRounds ?? 'off'}\n`
+      );
+      return state;
+    });
+  }
+
+  async complete(input: { scope: 'step' | 'goal'; actor: string; summary: string; evidence?: string[] }): Promise<CompletionEvent> {
+    this.assertAgent(input.actor, 'completion actor');
+    if (input.scope !== 'step' && input.scope !== 'goal') throw new Error('Completion scope must be step or goal.');
+    const summary = input.summary.trim();
+    if (!summary || summary.length > 10_000) throw new Error('Completion summary must be 1..10000 characters.');
+    const evidence = Array.from(new Set(input.evidence ?? []));
+    if (evidence.length > 32 || evidence.some((item) => typeof item !== 'string' || !item.trim() || item.length > 4_096)) {
+      throw new Error('Completion evidence must contain at most 32 non-empty strings up to 4096 characters each.');
+    }
+    return this.withLock(async () => {
+      const state = await this.loadStateUnsafe();
+      if (state.halted) throw new BusHaltedError(state.stopReason ?? 'bus halted');
+      const shouldHalt = input.scope === 'step' ? state.haltPolicy.onStepCompletion : state.haltPolicy.onGoalCompletion;
+      const event: CompletionEvent = {
+        id: randomUUID(),
+        scope: input.scope,
+        actor: input.actor,
+        summary,
+        evidence: evidence.map((item) => item.trim()),
+        at: nowIso(),
+        halted: shouldHalt
+      };
+      state.completions.push(event);
+      state.completions = state.completions.slice(-100);
+      state.agents = this.uniqueAgents([...state.agents, input.actor]);
+      if (shouldHalt) {
+        state.halted = true;
+        state.stopReason = `${input.scope} completed by ${input.actor}: ${summary}`;
+      }
+      await this.writeStateUnsafe(state);
+      await this.appendLineUnsafe(
+        `\n**${input.scope.toUpperCase()} COMPLETED** by \`${input.actor}\`${shouldHalt ? ' - BUS HALTED' : ''}\n\n${summary}\n` +
+        (event.evidence.length > 0 ? `\nEvidence: ${event.evidence.join(', ')}\n` : '')
+      );
+      return event;
+    });
+  }
+
   async resume(addRounds = 0): Promise<MailboxState> {
     if (!Number.isInteger(addRounds) || addRounds < 0) {
       throw new Error('addRounds must be a non-negative integer.');
@@ -374,7 +509,20 @@ export class MailboxStore {
     return (await this.loadState()).claims;
   }
 
+  async epoch(): Promise<string> {
+    return (await this.loadState()).createdAt;
+  }
+
   async doctor(): Promise<DoctorReport> {
+    const obstruction = await this.lockObstruction();
+    if (obstruction) {
+      return {
+        ok: false,
+        problems: [obstruction],
+        warnings: ['Stop all bus processes and verify the recorded PID before removing only the named lock file.'],
+        metrics: { messages: 0, unread: 0, claims: 0, temporaryFiles: 0 }
+      };
+    }
     return this.withLock(async () => {
       const problems: string[] = [];
       const warnings: string[] = [];
@@ -444,7 +592,7 @@ export class MailboxStore {
       }
 
       const mailboxNames = await fs.readdir(this.paths.mailboxDir);
-      const temporaryFiles = mailboxNames.filter((name) => name.endsWith('.tmp'));
+      const temporaryFiles = mailboxNames.filter((name) => name.endsWith('.tmp') || name.endsWith('.candidate'));
       if (temporaryFiles.length > 0) {
         warnings.push(`${temporaryFiles.length} orphan temporary file(s) found`);
       }
@@ -468,6 +616,26 @@ export class MailboxStore {
     });
   }
 
+  private async lockObstruction() {
+    const describe = async (lockPath: string, label: string) => {
+      if (!(await this.exists(lockPath))) return undefined;
+      const owner = await fs.readFile(lockPath, 'utf8')
+        .then((text) => JSON.parse(text) as { id?: unknown; pid?: unknown })
+        .catch(() => undefined);
+      if (!owner || typeof owner.id !== 'string' || !Number.isSafeInteger(owner.pid) || (owner.pid as number) < 1) {
+        return `${label} is malformed and blocks safe automatic recovery: ${lockPath}`;
+      }
+      return processAlive(owner.pid as number)
+        ? `${label} is held by live PID ${owner.pid}: ${lockPath}`
+        : `${label} was left by dead PID ${owner.pid} and blocks safe automatic recovery: ${lockPath}`;
+    };
+    const recovery = await describe(this.paths.recoveryLockPath, 'mailbox recovery lock');
+    if (recovery) return recovery;
+    const primary = await describe(this.paths.lockPath, 'mailbox lock');
+    if (primary?.includes('malformed') || primary?.includes('held by live')) return primary;
+    return undefined;
+  }
+
   private defaultState(): MailboxState {
     return {
       schema: SCHEMA,
@@ -478,15 +646,35 @@ export class MailboxStore {
       maxRounds: DEFAULT_MAX_ROUNDS,
       halted: false,
       stopReason: null,
-      claims: {}
+      claims: {},
+      haltPolicy: { onStepCompletion: false, onGoalCompletion: true, atRounds: [], everyRounds: null },
+      completions: []
     };
   }
 
   private async loadState(): Promise<MailboxState> {
     if (!(await this.exists(this.paths.statePath))) {
+      const [transcriptExists, inboxEntries] = await Promise.all([
+        this.exists(this.paths.transcriptPath),
+        fs.readdir(this.paths.inboxDir).catch((error: NodeJS.ErrnoException) => {
+          if (error.code === 'ENOENT') return [];
+          throw error;
+        })
+      ]);
+      if (transcriptExists || inboxEntries.some((name) => name.endsWith('.json'))) {
+        throw new Error(`Mailbox state is missing while durable artifacts remain: ${this.paths.statePath}`);
+      }
       return this.defaultState();
     }
-    return this.readJson<MailboxState>(this.paths.statePath);
+    const state = await this.readJson<MailboxState>(this.paths.statePath);
+    state.haltPolicy = {
+      onStepCompletion: state.haltPolicy?.onStepCompletion === true,
+      onGoalCompletion: state.haltPolicy?.onGoalCompletion !== false,
+      atRounds: normalizeHaltRounds(state.haltPolicy?.atRounds ?? []),
+      everyRounds: normalizeEveryRounds(state.haltPolicy?.everyRounds ?? null)
+    };
+    state.completions = Array.isArray(state.completions) ? state.completions : [];
+    return state;
   }
 
   private async loadStateUnsafe(): Promise<MailboxState> {
@@ -616,26 +804,24 @@ export class MailboxStore {
     await fs.mkdir(this.paths.mailboxDir, { recursive: true });
     const started = Date.now();
     const lockId = randomUUID();
-    let handle: fs.FileHandle | undefined;
-    while (!handle) {
+    let ownsLock = false;
+    while (!ownsLock) {
+      if (await this.exists(this.paths.recoveryLockPath)) {
+        if (Date.now() - started >= LOCK_TIMEOUT_MS) throw new Error(`Timed out waiting for mailbox lock recovery: ${this.paths.recoveryLockPath}`);
+        await delay(25);
+        continue;
+      }
       try {
-        handle = await fs.open(this.paths.lockPath, 'wx');
-        await handle.writeFile(`${JSON.stringify({ id: lockId, pid: process.pid, at: nowIso() })}\n`, 'utf8');
+        await this.publishExclusiveLock(this.paths.lockPath, { id: lockId, pid: process.pid, at: nowIso() });
+        ownsLock = true;
       } catch (error) {
-        if (!['EEXIST', 'EACCES', 'EPERM'].includes(errorCode(error) ?? '')) {
+        if (errorCode(error) !== 'EEXIST') {
           throw error;
         }
-        try {
-          const stat = await fs.stat(this.paths.lockPath);
-          if (Date.now() - stat.mtimeMs > STALE_LOCK_MS) {
-            await fs.rm(this.paths.lockPath, { force: true });
-            continue;
-          }
-        } catch (statError) {
-          if (errorCode(statError) !== 'ENOENT') {
-            throw statError;
-          }
-        }
+        const owner = await fs.readFile(this.paths.lockPath, 'utf8')
+          .then((text) => JSON.parse(text) as { id?: string; pid?: number })
+          .catch(() => undefined);
+        if (owner?.id && owner.pid && !processAlive(owner.pid) && await this.recoverMailboxLock(owner.id)) continue;
         if (Date.now() - started >= LOCK_TIMEOUT_MS) {
           throw new Error(`Timed out waiting for mailbox lock: ${this.paths.lockPath}`);
         }
@@ -646,7 +832,6 @@ export class MailboxStore {
     try {
       return await action();
     } finally {
-      await handle.close();
       try {
         const lock = JSON.parse(await fs.readFile(this.paths.lockPath, 'utf8')) as { id?: string };
         if (lock.id === lockId) {
@@ -655,6 +840,39 @@ export class MailboxStore {
       } catch (error) {
         if (errorCode(error) !== 'ENOENT') throw error;
       }
+    }
+  }
+
+  private async recoverMailboxLock(expectedId: string) {
+    const recoveryId = randomUUID();
+    try {
+      await this.publishExclusiveLock(this.paths.recoveryLockPath, { id: recoveryId, pid: process.pid, at: nowIso() });
+    } catch (error) {
+      if (errorCode(error) === 'EEXIST') return false;
+      throw error;
+    }
+    try {
+      const current = await fs.readFile(this.paths.lockPath, 'utf8')
+        .then((text) => JSON.parse(text) as { id?: string; pid?: number })
+        .catch(() => undefined);
+      if (current?.id !== expectedId || !current.pid || processAlive(current.pid)) return false;
+      await fs.rm(this.paths.lockPath, { force: true });
+      return true;
+    } finally {
+      const recovery = await fs.readFile(this.paths.recoveryLockPath, 'utf8')
+        .then((text) => JSON.parse(text) as { id?: string })
+        .catch(() => undefined);
+      if (recovery?.id === recoveryId) await fs.rm(this.paths.recoveryLockPath, { force: true });
+    }
+  }
+
+  private async publishExclusiveLock(destination: string, owner: Record<string, unknown>) {
+    const candidate = `${destination}.${process.pid}.${randomUUID()}.candidate`;
+    try {
+      await fs.writeFile(candidate, `${JSON.stringify(owner)}\n`, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+      await fs.link(candidate, destination);
+    } finally {
+      await fs.rm(candidate, { force: true });
     }
   }
 
@@ -754,6 +972,19 @@ function listArg(args: CliArgs, name: string) {
     .filter(Boolean);
 }
 
+function optionalBoolArg(args: CliArgs, name: string) {
+  const raw = stringArg(args, name);
+  if (!raw) return undefined;
+  if (raw === 'true') return true;
+  if (raw === 'false') return false;
+  throw new Error(`--${name} must be true or false.`);
+}
+
+function optionalIntArg(args: CliArgs, name: string) {
+  if (args[name] === undefined) return undefined;
+  return intArg(args, name, 0);
+}
+
 function printMessages(messages: BusMessage[], json: boolean) {
   if (json) {
     console.log(JSON.stringify(messages, null, 2));
@@ -823,6 +1054,10 @@ async function runCli(argv = process.argv.slice(2)) {
         console.log('timeout: no message waiting');
         return 3;
       }
+      if (result === 'server_stopping') {
+        console.log('wait cancelled: server stopping');
+        return 4;
+      }
       console.log('message waiting');
       return 0;
     }
@@ -856,6 +1091,29 @@ async function runCli(argv = process.argv.slice(2)) {
       console.log(JSON.stringify(report, null, 2));
       return report.ok ? 0 : 1;
     }
+    case 'configure-halting': {
+      const state = await store.configureHalting({
+        onStepCompletion: optionalBoolArg(args, 'on-step'),
+        onGoalCompletion: optionalBoolArg(args, 'on-goal'),
+        atRounds: args['at-rounds'] === undefined ? undefined : listArg(args, 'at-rounds').map((item) => Number(item)),
+        everyRounds: optionalIntArg(args, 'every-rounds')
+      });
+      console.log(json ? JSON.stringify(state, null, 2) :
+        `halt policy: step=${state.haltPolicy.onStepCompletion} goal=${state.haltPolicy.onGoalCompletion} ` +
+        `at=${state.haltPolicy.atRounds.join(',') || 'none'} every=${state.haltPolicy.everyRounds ?? 'off'}`);
+      return 0;
+    }
+    case 'complete-step':
+    case 'complete-goal': {
+      const event = await store.complete({
+        scope: command === 'complete-step' ? 'step' : 'goal',
+        actor: stringArg(args, 'agent', true),
+        summary: stringArg(args, 'summary', true),
+        evidence: listArg(args, 'evidence')
+      });
+      console.log(json ? JSON.stringify(event, null, 2) : `${event.scope} completed${event.halted ? '; bus halted' : ''}`);
+      return 0;
+    }
     case 'halt': {
       const state = await store.halt(stringArg(args, 'reason', true));
       console.log(json ? JSON.stringify(state, null, 2) : `halted: ${state.stopReason}`);
@@ -868,7 +1126,7 @@ async function runCli(argv = process.argv.slice(2)) {
     }
     default:
       throw new Error(
-        'usage: mailbox <init|send|inbox|read|wait|claim|release|claims|status|doctor|halt|resume> [options]'
+        'usage: mailbox <init|send|inbox|read|wait|claim|release|claims|status|doctor|configure-halting|complete-step|complete-goal|halt|resume> [options]'
       );
   }
 }

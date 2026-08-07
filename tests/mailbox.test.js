@@ -127,6 +127,56 @@ test('active worker registration fails closed at the round guard', async () => {
   }
 });
 
+test('step and goal completion use independent explicit halt policies', async () => {
+  const initial = await store.status();
+  assert.deepEqual(initial.haltPolicy, { onStepCompletion: false, onGoalCompletion: true, atRounds: [], everyRounds: null });
+  const firstStep = await store.complete({ scope: 'step', actor: 'codex', summary: 'Implemented parser', evidence: ['npm test'] });
+  assert.equal(firstStep.halted, false);
+  assert.equal((await store.status()).halted, false);
+
+  await store.configureHalting({ onStepCompletion: true, onGoalCompletion: false });
+  const secondStep = await store.complete({ scope: 'step', actor: 'codex', summary: 'Reviewed checkpoint' });
+  assert.equal(secondStep.halted, true);
+  assert.match((await store.status()).stopReason, /step completed by codex/);
+  await store.resume();
+
+  const goal = await store.complete({ scope: 'goal', actor: 'operator', summary: 'Goal evidence accepted' });
+  assert.equal(goal.halted, false);
+  const status = await store.status();
+  assert.equal(status.halted, false);
+  assert.deepEqual(status.completions.map((item) => item.scope), ['step', 'step', 'goal']);
+});
+
+test('completion records cannot mutate an already halted mailbox', async () => {
+  await store.halt('review checkpoint');
+  await assert.rejects(store.complete({ scope: 'step', actor: 'codex', summary: 'late mutation' }), /review checkpoint/);
+  assert.equal((await store.status()).completions.length, 0);
+});
+
+test('legacy mailbox state receives safe completion policy defaults', async () => {
+  const statePath = path.join(root, '.ai-bus', 'runtime', 'mailbox', 'state.json');
+  const legacy = JSON.parse(await fs.readFile(statePath, 'utf8'));
+  delete legacy.haltPolicy;
+  delete legacy.completions;
+  await fs.writeFile(statePath, `${JSON.stringify(legacy, null, 2)}\n`, 'utf8');
+  const status = await store.status();
+  assert.deepEqual(status.haltPolicy, { onStepCompletion: false, onGoalCompletion: true, atRounds: [], everyRounds: null });
+  assert.deepEqual(status.completions, []);
+});
+
+test('designated and recurring round checkpoints halt after durably writing the triggering message', async () => {
+  await store.configureHalting({ atRounds: [2], everyRounds: 3 });
+  await store.send({ from: 'codex', to: 'grok', subject: 'round one', body: 'continue' });
+  assert.equal((await store.status()).halted, false);
+  const checkpoint = await store.send({ from: 'grok', to: 'codex', subject: 'round two', body: 'pause after delivery' });
+  assert.equal(checkpoint.round, 2);
+  assert.match((await store.status()).stopReason, /designated round checkpoint \(2\)/);
+  assert.equal((await store.inbox('codex')).length, 1);
+  await store.resume();
+  await store.send({ from: 'codex', to: 'grok', subject: 'round three', body: 'recurring pause' });
+  assert.match((await store.status()).stopReason, /designated round checkpoint \(3\)/);
+});
+
 test('concurrent CLI senders receive unique ordered sequences without losing messages', async () => {
   const sends = Array.from({ length: 12 }, (_, index) =>
     execFileAsync(process.execPath, [
@@ -157,6 +207,19 @@ test('concurrent CLI senders receive unique ordered sequences without losing mes
   assert.equal(status.round, 12);
 });
 
+test('a dead mailbox owner is recovered without overlapping concurrent senders', async () => {
+  const lockPath = path.join(root, '.ai-bus', 'runtime', 'mailbox', '.lock');
+  await fs.writeFile(lockPath, `${JSON.stringify({ id: 'dead-owner', pid: 2147483647 })}\n`, 'utf8');
+  await Promise.all(Array.from({ length: 8 }, (_, index) => execFileAsync(process.execPath, [
+    mailboxCli, 'send', '--root', root, '--from', 'codex', '--to', 'grok', '--subject', `recovery-${index}`, '--body', 'one'
+  ])));
+  const messages = await store.inbox('grok');
+  assert.equal(messages.length, 8);
+  assert.deepEqual(messages.map((message) => message.seq), [1, 2, 3, 4, 5, 6, 7, 8]);
+  await assert.rejects(fs.access(lockPath));
+  await assert.rejects(fs.access(`${lockPath}.recovery`));
+});
+
 test('doctor reports healthy state and detects sequence drift', async () => {
   await store.send({ from: 'codex', to: 'grok', subject: 'health', body: 'check' });
   const healthy = await store.doctor();
@@ -171,4 +234,22 @@ test('doctor reports healthy state and detects sequence drift', async () => {
   const unhealthy = await store.doctor();
   assert.equal(unhealthy.ok, false);
   assert.match(unhealthy.problems.join('\n'), /state seq is 0; inbox maximum is 1/);
+});
+
+test('doctor reports a stranded recovery lock immediately with safe remediation', async () => {
+  const recoveryPath = path.join(root, '.ai-bus', 'runtime', 'mailbox', '.lock.recovery');
+  await fs.writeFile(recoveryPath, `${JSON.stringify({ id: 'stranded', pid: 2147483647 })}\n`, 'utf8');
+  const started = Date.now();
+  const report = await store.doctor();
+  assert.equal(report.ok, false);
+  assert.ok(Date.now() - started < 1000);
+  assert.match(report.problems.join('\n'), /recovery lock.*dead PID.*blocks safe automatic recovery/);
+  assert.match(report.warnings.join('\n'), /verify the recorded PID/);
+});
+
+test('missing state with durable messages fails closed instead of synthesizing a new epoch', async () => {
+  await store.send({ from: 'codex', to: 'grok', subject: 'durable', body: 'must survive' });
+  await fs.rm(path.join(root, '.ai-bus', 'runtime', 'mailbox', 'state.json'));
+  await assert.rejects(store.status(), /Mailbox state is missing while durable artifacts remain/);
+  await assert.rejects(store.send({ from: 'codex', to: 'grok', subject: 'unsafe', body: 'no' }), /Mailbox state is missing/);
 });

@@ -9,8 +9,8 @@ This is **not** a live AI-to-AI chat network and **not** an unattended auto-pilo
 | Layer | Purpose |
 |-------|---------|
 | **Workflow overlay** | Phase docs (`docs/ai-*.md`), provider standing orders, suspend/resume |
-| **Mailbox** | Durable sequenced messages, accumulated path claims, round guard |
-| **Harness** | Loopback HTTP control plane: seats, request IDs, capabilities, wakes |
+| **Mailbox** | Durable sequenced messages, accumulated path claims, configurable halt policies |
+| **Harness** | Loopback HTTP control plane: seats, request IDs, capabilities, wakes, advisory worker leases |
 | **Capabilities** | Allowlisted argv runners + evidence receipts (no shell) |
 | **SKSE adapter** | Discover/build/test against an **external** SKSE DevKit (not bundled) |
 | **LM worker** | Optional, **explicit** VS Code Language Model session (bounded turns) |
@@ -54,6 +54,9 @@ node .ai-bus/bin/mailbox.js claim --agent grok --paths src/foo.ts --why "reason"
 node .ai-bus/bin/mailbox.js release --agent grok --paths src/foo.ts   # omit --paths = release all
 node .ai-bus/bin/mailbox.js wait --for grok --timeout 600
 node .ai-bus/bin/mailbox.js doctor
+node .ai-bus/bin/mailbox.js configure-halting --on-step false --on-goal true --at-rounds 6,12 --every-rounds 12
+node .ai-bus/bin/mailbox.js complete-step --agent grok --summary "Parser complete" --evidence "npm test,commit abc123"
+node .ai-bus/bin/mailbox.js complete-goal --agent operator --summary "Release verified" --evidence "npm test,VSIX smoke"
 node .ai-bus/bin/mailbox.js halt --reason "converged"
 node .ai-bus/bin/mailbox.js resume --add-rounds 8
 ```
@@ -61,7 +64,9 @@ node .ai-bus/bin/mailbox.js resume --add-rounds 8
 **Behaviour (v0.2):**
 - Messages are durable JSON under `.ai-bus/runtime/mailbox/` with monotonic `seq` and round counter.
 - Claims **accumulate** per agent; broader claims replace nested narrower ones; **path-scoped release** is supported.
-- **Round guard**: when `round >= maxRounds`, sends halt until a human `resume` (optional extra rounds).
+- **Halting is structured and configurable.** The hard `maxRounds` cap always applies. Optional explicit round checkpoints and an every-N-round checkpoint can also pause the bus after the triggering message is durably written. Step- and goal-completion records have separate policies.
+- Safe defaults are: step completion continues, goal completion halts, no explicit/recurring checkpoints, and `maxRounds = 32`.
+- `resume` clears the current halt without erasing its reason or completion evidence from history. Add rounds when resuming from the hard maximum; policy settings remain in force.
 - Exit codes: `0` ok / message, `3` empty / timeout, `2` halted.
 - UI: Command Palette **Mailbox Status / Inbox / Send / Claim / Release** and `@ai-bus mailbox|inbox|send|claim|release`.
 
@@ -77,25 +82,33 @@ node .ai-bus/bin/harness.js serve --root <workspace> [--port 0]
 - **Operator token** + **per-seat tokens** written under the user credentials dir
   `~/.portable-ai-bus/credentials/<workspace-hash>/<instanceId>/` (not inside the git tree). Paths returned at start / mirrored in runtime endpoint metadata.
 - Auth: `Authorization: Bearer <token>`.
-- JSON API (v1): `/v1/status`, `/v1/tools`, `/v1/tool` (POST), `/v1/wake` (long-poll), `/v1/heartbeat`.
+- JSON API (v1): `/v1/status`, `/v1/tools`, `/v1/tool` (POST), `/v1/wake` (long-poll), `/v1/heartbeat`, `/v1/workers/release`.
 - **Request IDs** make tool invokes idempotent (fingerprint + durable records). Reuse with different input → `409`.
 - Seats cannot impersonate other agents; operator is full-power (treat as root).
 - While the mailbox is **halted**, mutating tools fail closed (`423`): send, claim, release, read-ack, capability_run.
 - Wake long-polls are concurrency-capped.
+- A seat heartbeat acquires or renews one fenced worker lease for that seat. Acquisition also carries a per-process nonce, so a lost-response retry is idempotent while a duplicate process reusing the same logical client ID receives `409 lease_held`. Leases carry the harness `instanceId`, a `leaseId`, and a generation; stale or superseded identities receive `409 lease_lost`.
+- Lease state is **advisory liveness only**: it proves recent authenticated heartbeat/wake traffic, not that a model is reasoning, making progress, following instructions, or even still healthy after its last request. A lease never grants mailbox authority, acknowledges mail, releases claims, or starts/stops a worker.
+
+### VS Code-managed harness and reminders
+
+The Command Palette provides **Start Harness**, **Stop Harness**, and **Show Harness and Worker Status**. The extension starts at most one harness that it owns per workspace. It will not stop a harness owned by another VS Code window or an external process. A managed harness is stopped when that workspace is suspended or removed, when its folder is removed from the window, or when the extension deactivates. `portableAiBus.harness.autoStart` is off by default and only starts for an initialized, non-suspended trusted workspace.
+
+The extension also checks durable unread counts and persisted advisory leases on a configurable timer. It reports only new unread-sequence and newly-stale transitions after establishing a quiet baseline. These reminder checks **never invoke a model, acknowledge mail, release claims, or revive a stopped process**.
 
 ### Worker client (provider-neutral wait/watch)
 
 Staged as `.ai-bus/bin/worker-client.js`. A seat process can block on harness wakes without knowing host details beyond the workspace root:
 
 ```bash
-# one-shot: heartbeat + long-poll /v1/wake (default timeout 25s, cap 30s)
+# one-shot: acquire lease, long-poll /v1/wake, then release
 node .ai-bus/bin/worker-client.js wait --root . --seat grok [--timeout-ms 25000]
 
-# loop until SIGINT/SIGTERM; prints only newly seen message seqs as JSON lines
+# keep one lease renewed until SIGINT/SIGTERM; print only new message seqs as JSON lines
 node .ai-bus/bin/worker-client.js watch --root . --seat grok
 ```
 
-Discovers `.ai-bus/runtime/harness/endpoint.json`, loads the seat token from the user credentials dir for that `instanceId`, requires `127.0.0.1`, and posts `/v1/heartbeat` before each wake. This is the supported unattended pattern when a harness is already running—not VS Code UI injection.
+The client is provider-neutral: a seat can be backed by any process able to run the staged Node CLI. It discovers `.ai-bus/runtime/harness/endpoint.json`, loads the matching seat token outside the repository, requires `127.0.0.1`, and acquires/renews/releases a fenced lease. `watch` persists its successful-delivery `afterSeq` cursor outside the repository, keys it to the logical client and mailbox epoch, suppresses unchanged unread mail, rediscovers rotated endpoints and credentials, and reconnects with bounded exponential jitter. Delivery is intentionally **at least once**: consumers must make side effects idempotent because a crash after the effect but before cursor persistence can redeliver a message. Wake pages and HTTP response bodies are bounded. Stdout stays machine-readable; connection transitions go to stderr. This is a durable wait loop for a process you already launched—not VS Code UI injection or proof that the provider acted on a wake.
 
 See `OPERATOR.md` for recovery and threat-model notes. Design lineage: `docs/PROVENANCE.md`.
 
@@ -148,6 +161,8 @@ Command: **Portable AI Bus: Run Language Model Worker** (`portableAiBus.runLangu
 
 **Mailbox:** status, inbox, send, claim, release.
 
+**Coordination:** start/stop/show harness, configure halting, record step completion, record goal completion.
+
 **LM worker:** Run Language Model Worker (explicit).
 
 `@ai-bus` examples: `help`, `initialize the bus for this repo`, `mailbox status`, `inbox for grok`, `start task: … goal: … validation: npm test`.
@@ -162,6 +177,9 @@ Command: **Portable AI Bus: Run Language Model Worker** (`portableAiBus.runLangu
 | `stageTasksJson` / `stageCompatibilityWrappers` | Optional staging |
 | `showStatusBar` / `autoInitializeOnOpen` | UX |
 | `languageModelWorker.*` | enabled, vendor, modelId, maxTurns, allowedTools |
+| `harness.port` / `harness.autoStart` | VS Code-owned loopback harness lifecycle |
+| `reminders.intervalSeconds` | Poll interval, 5–600 seconds (default 15) |
+| `reminders.notifyUnread` / `reminders.notifyStaleWorkers` | Transition-only notifications; both default true |
 
 ## Staging layout (initialized workspace)
 
@@ -207,5 +225,6 @@ Install the generated `.vsix` into a normal VS Code window for a non-F5 smoke te
 - Bundle game engines, Mantella, SKSE binaries, CommonLib sources, or LLM weights
 - Copy GPL multiplayer mod sources into the MIT surface
 - Silently inject prompts into Kilo/Codex/Claude UIs
+- Treat a heartbeat as evidence of goal progress or automatically restart a stopped worker
 - Run unbounded autonomous agent loops in the background
 - Claim that offscreen Skyrim simulation is solved (Ensouled product docs are separate)

@@ -1,11 +1,16 @@
 import * as vscode from 'vscode';
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
 import { PHASES, Phase, WorkspaceBus } from './bus';
 import { BusMessage, MailboxStatus, MailboxStore } from './mailbox';
 import { CapabilityRunner } from './capabilities';
 import { runVscodeLmWorker } from './vscode-lm-worker';
+import { HarnessManager } from './harness-manager';
+import { ReminderTracker } from './reminders';
 
 const activeLmWorkers = new Set<string>();
 const LM_WORKER_SEAT = 'pab-lm-worker';
+const harnessManager = new HarnessManager();
 
 type ChatAction =
   | { kind: 'help' }
@@ -32,6 +37,9 @@ export async function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(statusBar);
   const mailboxWatcher = vscode.workspace.createFileSystemWatcher('**/.ai-bus/runtime/mailbox/**/*');
   context.subscriptions.push(mailboxWatcher);
+  const reminderTracker = new ReminderTracker();
+  let reminderTimer: NodeJS.Timeout | undefined;
+  let reminderPollActive = false;
 
   const refreshStatusBar = async () => {
     const settings = bus.getConfiguration();
@@ -61,6 +69,11 @@ export async function activate(context: vscode.ExtensionContext) {
           label = `${label} · ✉${unreadTotal}`;
         }
         tooltip = `${tooltip}\n\n${renderMailboxStatus(mailbox)}`;
+        const staleSeats = await readStaleWorkerSeats(root);
+        if (staleSeats.length > 0) {
+          label = `${label} | stale:${staleSeats.length}`;
+          tooltip = `${tooltip}\n\nAdvisory stale worker heartbeats: ${staleSeats.join(', ')}`;
+        }
       } catch {
         // Mailbox may not be initialized yet.
       }
@@ -74,6 +87,53 @@ export async function activate(context: vscode.ExtensionContext) {
       statusBar.show();
     }
   };
+
+  const checkReminders = async () => {
+    if (reminderPollActive) return;
+    reminderPollActive = true;
+    try {
+      const root = await bus.getWorkspaceRoot();
+      if (!(await bus.isInitialized(root)) || await bus.isSuspended(root)) {
+        reminderTracker.reset(root);
+        return;
+      }
+      const store = mailboxFor(root);
+      const mailbox = await store.status();
+      const [inboxes, staleSeats] = await Promise.all([
+        Promise.all(mailbox.agents.map(async (agent) => [agent, await store.inbox(agent)] as const)),
+        readStaleWorkerSeats(root)
+      ]);
+      const newestUnreadSeq = Object.fromEntries(inboxes.map(([agent, messages]) => [agent, Math.max(0, ...messages.map((message) => message.seq))]));
+      const transitions = reminderTracker.observe(root, { unread: mailbox.unread, newestUnreadSeq, staleSeats });
+      const config = vscode.workspace.getConfiguration('portableAiBus');
+      if (config.get<boolean>('reminders.notifyUnread', true) && transitions.unreadAgents.length > 0) {
+        const detail = transitions.unreadAgents.map(({ agent, count }) => `${agent} (${count})`).join(', ');
+        void vscode.window.showInformationMessage(`Portable AI Bus: unread work is waiting for ${detail}.`, 'Show Mailbox')
+          .then((action) => { if (action === 'Show Mailbox') void vscode.commands.executeCommand('portableAiBus.mailboxStatus'); });
+      }
+      if (config.get<boolean>('reminders.notifyStaleWorkers', true) && transitions.staleSeats.length > 0) {
+        void vscode.window.showWarningMessage(
+          `Portable AI Bus: worker heartbeat became stale for ${transitions.staleSeats.join(', ')}. This is advisory and does not prove work progress.`,
+          'Show Harness Status'
+        ).then((action) => { if (action === 'Show Harness Status') void vscode.commands.executeCommand('portableAiBus.showHarnessStatus'); });
+      }
+    } catch {
+      // Missing workspace/runtime state is normal while folders and bus state change.
+    } finally {
+      reminderPollActive = false;
+      void refreshStatusBar();
+    }
+  };
+
+  const restartReminderTimer = () => {
+    if (reminderTimer) clearInterval(reminderTimer);
+    const seconds = vscode.workspace.getConfiguration('portableAiBus').get<number>('reminders.intervalSeconds', 15);
+    reminderTimer = setInterval(() => void checkReminders(), Math.max(5, Math.min(600, seconds)) * 1_000);
+    reminderTimer.unref();
+  };
+  context.subscriptions.push(new vscode.Disposable(() => {
+    if (reminderTimer) clearInterval(reminderTimer);
+  }));
 
   context.subscriptions.push(
     vscode.commands.registerCommand('portableAiBus.initializeWorkspace', async () => {
@@ -131,7 +191,9 @@ export async function activate(context: vscode.ExtensionContext) {
     }),
     vscode.commands.registerCommand('portableAiBus.suspend', async () => {
       await withWorkspaceAction(bus, async (root) => {
+        await harnessManager.stop(root);
         await bus.suspend(root);
+        reminderTracker.reset(root);
         void refreshStatusBar();
         void vscode.window.showInformationMessage('Portable AI Bus suspended for this workspace.');
       });
@@ -153,7 +215,9 @@ export async function activate(context: vscode.ExtensionContext) {
         if (confirmed !== 'Remove') {
           return;
         }
+        await harnessManager.stop(root);
         await bus.remove(root);
+        reminderTracker.reset(root);
         void refreshStatusBar();
       });
     }),
@@ -359,19 +423,117 @@ export async function activate(context: vscode.ExtensionContext) {
         }
       });
     }),
+    vscode.commands.registerCommand('portableAiBus.startHarness', async () => {
+      await withWorkspaceAction(bus, async (root) => {
+        if (!(await bus.isInitialized(root))) throw new Error('Initialize Portable AI Bus before starting the harness.');
+        if (await bus.isSuspended(root)) throw new Error('Resume Portable AI Bus before starting the harness.');
+        const port = vscode.workspace.getConfiguration('portableAiBus').get<number>('harness.port', 0);
+        const result = await harnessManager.start(root, port);
+        if (result.started) {
+          void vscode.window.showInformationMessage(
+            `Portable AI Bus harness started on 127.0.0.1:${result.endpoint.port}. Seat credentials were written outside the repository.`
+          );
+        } else {
+          void vscode.window.showInformationMessage('Portable AI Bus harness is already managed by this VS Code window.');
+        }
+      });
+    }),
+    vscode.commands.registerCommand('portableAiBus.stopHarness', async () => {
+      await withWorkspaceAction(bus, async (root) => {
+        if (await harnessManager.stop(root)) {
+          void vscode.window.showInformationMessage('Portable AI Bus harness stopped; its instance credentials were removed.');
+        } else {
+          void vscode.window.showInformationMessage('This VS Code window does not own a harness for the workspace.');
+        }
+      });
+    }),
+    vscode.commands.registerCommand('portableAiBus.showHarnessStatus', async () => {
+      await withWorkspaceAction(bus, async (root) => {
+        await showMarkdownDocument('Portable AI Bus Harness Status', await renderHarnessRuntimeStatus(root, harnessManager.owns(root)));
+      });
+    }),
+    vscode.commands.registerCommand('portableAiBus.configureHalting', async () => {
+      await withWorkspaceAction(bus, async (root) => {
+        const store = mailboxFor(root);
+        const current = await store.status();
+        const step = await vscode.window.showQuickPick(
+          [{ label: 'Pause', value: true }, { label: 'Continue', value: false }],
+          { title: 'After a structured step completion', placeHolder: current.haltPolicy.onStepCompletion ? 'Currently: Pause' : 'Currently: Continue' }
+        );
+        if (!step) return;
+        const goal = await vscode.window.showQuickPick(
+          [{ label: 'Pause', value: true }, { label: 'Continue', value: false }],
+          { title: 'After structured goal completion', placeHolder: current.haltPolicy.onGoalCompletion ? 'Currently: Pause' : 'Currently: Continue' }
+        );
+        if (!goal) return;
+        const atRaw = await vscode.window.showInputBox({
+          title: 'Explicit round checkpoints',
+          prompt: 'Comma-separated positive rounds; empty disables explicit checkpoints',
+          value: current.haltPolicy.atRounds.join(',')
+        });
+        if (atRaw === undefined) return;
+        const atRounds = atRaw.trim() ? parsePositiveRoundList(atRaw) : [];
+        const everyRaw = await vscode.window.showInputBox({
+          title: 'Recurring round checkpoint',
+          prompt: 'Pause every N rounds; zero disables (for example 12)',
+          value: String(current.haltPolicy.everyRounds ?? 0),
+          validateInput: (value) => /^\d+$/.test(value.trim()) ? undefined : 'Enter zero or a positive integer.'
+        });
+        if (everyRaw === undefined) return;
+        const state = await store.configureHalting({
+          onStepCompletion: step.value,
+          onGoalCompletion: goal.value,
+          atRounds,
+          everyRounds: Number(everyRaw) || null
+        });
+        void vscode.window.showInformationMessage(
+          `Halting: max ${state.maxRounds}; at ${state.haltPolicy.atRounds.join(',') || 'none'}; every ${state.haltPolicy.everyRounds ?? 'off'}; step ${state.haltPolicy.onStepCompletion}; goal ${state.haltPolicy.onGoalCompletion}.`
+        );
+      });
+    }),
+    vscode.commands.registerCommand('portableAiBus.completeStep', async () => {
+      await withWorkspaceAction(bus, async (root) => {
+        const actor = await pickAgent(root, 'Agent completing this step', true);
+        if (!actor) return;
+        const summary = await vscode.window.showInputBox({ title: 'Step completion summary', prompt: 'What was completed and verified?' });
+        if (!summary?.trim()) return;
+        const evidenceRaw = await vscode.window.showInputBox({ title: 'Step evidence', prompt: 'Optional comma-separated tests, commits, or receipt IDs' });
+        if (evidenceRaw === undefined) return;
+        const event = await mailboxFor(root).complete({ scope: 'step', actor, summary, evidence: splitCommaList(evidenceRaw) });
+        void vscode.window.showInformationMessage(`Step recorded${event.halted ? '; bus halted for review' : ''}.`);
+      });
+    }),
+    vscode.commands.registerCommand('portableAiBus.completeGoal', async () => {
+      await withWorkspaceAction(bus, async (root) => {
+        const summary = await vscode.window.showInputBox({ title: 'Goal completion summary', prompt: 'State the evidence proving the overall goal is complete' });
+        if (!summary?.trim()) return;
+        const evidenceRaw = await vscode.window.showInputBox({ title: 'Goal evidence', prompt: 'Comma-separated tests, commits, PRs, or receipt IDs' });
+        if (evidenceRaw === undefined) return;
+        const confirmed = await vscode.window.showWarningMessage('Record overall goal completion?', { modal: true, detail: summary }, 'Complete Goal');
+        if (confirmed !== 'Complete Goal') return;
+        const event = await mailboxFor(root).complete({ scope: 'goal', actor: 'operator', summary, evidence: splitCommaList(evidenceRaw) });
+        void vscode.window.showInformationMessage(`Goal completion recorded${event.halted ? '; bus halted' : ''}.`);
+      });
+    }),
     vscode.workspace.onDidSaveTextDocument(() => {
       void refreshStatusBar();
     }),
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (event.affectsConfiguration('portableAiBus')) {
+        if (event.affectsConfiguration('portableAiBus.reminders')) restartReminderTimer();
         void refreshStatusBar();
       }
     }),
-    vscode.workspace.onDidChangeWorkspaceFolders(() => {
+    vscode.workspace.onDidChangeWorkspaceFolders((event) => {
+      for (const removed of event.removed) {
+        const root = removed.uri.fsPath;
+        if (harnessManager.owns(root)) void harnessManager.stop(root);
+        reminderTracker.reset(root);
+      }
       void refreshStatusBar();
     }),
-    mailboxWatcher.onDidCreate(() => void refreshStatusBar()),
-    mailboxWatcher.onDidChange(() => void refreshStatusBar()),
+    mailboxWatcher.onDidCreate(() => { void refreshStatusBar(); void checkReminders(); }),
+    mailboxWatcher.onDidChange(() => { void refreshStatusBar(); void checkReminders(); }),
     mailboxWatcher.onDidDelete(() => void refreshStatusBar())
   );
 
@@ -391,11 +553,27 @@ export async function activate(context: vscode.ExtensionContext) {
   if (bus.getConfiguration().autoInitializeOnOpen) {
     void maybeOfferInitialization(bus);
   }
+  if (vscode.workspace.getConfiguration('portableAiBus').get<boolean>('harness.autoStart', false)) {
+    void (async () => {
+      try {
+        const root = await bus.getWorkspaceRoot();
+        if (await bus.isInitialized(root) && !(await bus.isSuspended(root))) {
+          await vscode.commands.executeCommand('portableAiBus.startHarness');
+        }
+      } catch {
+        // No active workspace is a valid startup state.
+      }
+    })();
+  }
 
+  restartReminderTimer();
+  void checkReminders();
   void refreshStatusBar();
 }
 
-export function deactivate() {}
+export async function deactivate() {
+  await harnessManager.stopAll();
+}
 
 async function pickLanguageModel(config: vscode.WorkspaceConfiguration) {
   const vendor = config.get<string>('languageModelWorker.vendor', '').trim();
@@ -436,6 +614,72 @@ function defaultLmWorkerTools() {
   ];
 }
 
+function splitCommaList(value: string) {
+  return value.split(',').map((item) => item.trim()).filter(Boolean);
+}
+
+function parsePositiveRoundList(value: string) {
+  const rounds = splitCommaList(value).map((item) => Number(item));
+  if (rounds.some((round) => !Number.isSafeInteger(round) || round < 1)) throw new Error('Round checkpoints must be positive integers.');
+  return rounds;
+}
+
+async function renderHarnessRuntimeStatus(root: string, ownedByWindow: boolean) {
+  const runtime = path.join(root, '.ai-bus', 'runtime', 'harness');
+  const readJson = async (name: string) => JSON.parse(await fs.readFile(path.join(runtime, name), 'utf8')) as Record<string, unknown>;
+  const endpoint = await readJson('endpoint.json').catch(() => undefined);
+  const leases = await readJson('leases.json').catch(() => undefined);
+  if (!endpoint) {
+    return ['# Harness status', '', 'No active harness endpoint is published for this workspace.', '',
+      `Owned by this VS Code window: **${ownedByWindow ? 'yes (starting/stopping)' : 'no'}**`].join('\n');
+  }
+  const staleAfterMs = Number(leases?.staleAfterMs);
+  const leaseRows = Array.isArray((leases as { leases?: unknown[] } | undefined)?.leases)
+    ? ((leases as { leases: Array<Record<string, unknown>> }).leases).map((lease) => {
+      const lastSeen = String(lease.lastWakeAt ?? lease.lastHeartbeatAt ?? '');
+      const live = Number.isFinite(staleAfterMs) && lastSeen && Date.now() - Date.parse(lastSeen) <= staleAfterMs;
+      return `| ${String(lease.seat)} | ${String(lease.clientId)} | ${live ? 'live' : 'stale'} | ${String(lease.lastHeartbeatAt ?? '—')} | ${String(lease.lastWakeAt ?? '—')} |`;
+    })
+    : [];
+  return [
+    '# Harness status', '',
+    `- Endpoint: \`${String(endpoint.host)}:${String(endpoint.port)}\``,
+    `- Instance: \`${String(endpoint.instanceId)}\``,
+    `- PID: \`${String(endpoint.pid)}\``,
+    `- Owned by this VS Code window: **${ownedByWindow ? 'yes' : 'no'}**`,
+    `- Lease file state: **${String(leases?.state ?? 'unavailable')}**`,
+    '- Worker state is advisory heartbeat freshness, not proof that a worker is processing or progressing.', '',
+    '| Seat | Client | Advisory state | Last heartbeat | Last wake |',
+    '|---|---|---|---|---|',
+    ...(leaseRows.length > 0 ? leaseRows : ['| — | — | — | — | — |'])
+  ].join('\n');
+}
+
+async function readStaleWorkerSeats(root: string) {
+  const leasesPath = path.join(root, '.ai-bus', 'runtime', 'harness', 'leases.json');
+  const value = await fs.readFile(leasesPath, 'utf8').then((text) => JSON.parse(text) as {
+    state?: string;
+    staleAfterMs?: number;
+    leases?: Array<{ seat?: string; lastHeartbeatAt?: string; lastWakeAt?: string }>;
+  }).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') return undefined;
+    throw error;
+  });
+  if (!value) return [];
+  if (value.state !== 'running' || !Number.isFinite(value.staleAfterMs) || !Array.isArray(value.leases)) return [];
+  const staleAfterMs = Number(value.staleAfterMs);
+  const now = Date.now();
+  const seen = new Set<string>();
+  const live = new Set<string>();
+  for (const lease of value.leases) {
+    if (!lease.seat) continue;
+    seen.add(lease.seat);
+    const timestamp = lease.lastWakeAt ?? lease.lastHeartbeatAt;
+    if (timestamp && now - Date.parse(timestamp) <= staleAfterMs) live.add(lease.seat);
+  }
+  return [...seen].filter((seat) => !live.has(seat)).sort();
+}
+
 async function handleChatAction(
   bus: WorkspaceBus,
   root: string,
@@ -465,6 +709,7 @@ async function handleChatAction(
       stream.markdown(['```text', await bus.getPrompt(root), '```'].join('\n'));
       return;
     case 'suspend':
+      await harnessManager.stop(root);
       await bus.suspend(root);
       stream.markdown('Portable AI Bus suspended. Runtime state remains under `.ai-bus/runtime/`.');
       return;
@@ -473,6 +718,7 @@ async function handleChatAction(
       stream.markdown('Portable AI Bus resumed for this workspace.');
       return;
     case 'remove':
+      await harnessManager.stop(root);
       await bus.remove(root);
       stream.markdown('Portable AI Bus removed from this workspace.');
       return;

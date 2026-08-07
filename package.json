@@ -15,6 +15,7 @@
     "README.md",
     "HUMAN_GUIDE.md",
     "OPERATOR.md",
+    "TESTING.md",
     "docs/**",
     "LICENSE"
   ],
@@ -74,7 +75,13 @@
     "onCommand:portableAiBus.mailboxSend",
     "onCommand:portableAiBus.mailboxClaim",
     "onCommand:portableAiBus.mailboxRelease",
-    "onCommand:portableAiBus.runLanguageModelWorker"
+    "onCommand:portableAiBus.runLanguageModelWorker",
+    "onCommand:portableAiBus.startHarness",
+    "onCommand:portableAiBus.stopHarness",
+    "onCommand:portableAiBus.showHarnessStatus",
+    "onCommand:portableAiBus.configureHalting",
+    "onCommand:portableAiBus.completeStep",
+    "onCommand:portableAiBus.completeGoal"
   ],
   "contributes": {
     "commands": [
@@ -141,6 +148,30 @@
       {
         "command": "portableAiBus.runLanguageModelWorker",
         "title": "Portable AI Bus: Run Language Model Worker"
+      },
+      {
+        "command": "portableAiBus.startHarness",
+        "title": "Portable AI Bus: Start Harness"
+      },
+      {
+        "command": "portableAiBus.stopHarness",
+        "title": "Portable AI Bus: Stop Harness"
+      },
+      {
+        "command": "portableAiBus.showHarnessStatus",
+        "title": "Portable AI Bus: Show Harness and Worker Status"
+      },
+      {
+        "command": "portableAiBus.configureHalting",
+        "title": "Portable AI Bus: Configure Round, Step, and Goal Halting"
+      },
+      {
+        "command": "portableAiBus.completeStep",
+        "title": "Portable AI Bus: Record Step Completion"
+      },
+      {
+        "command": "portableAiBus.completeGoal",
+        "title": "Portable AI Bus: Record Goal Completion"
       }
     ],
     "chatParticipants": [
@@ -287,6 +318,35 @@
           "items": { "type": "string" },
           "default": ["mailbox_status", "mailbox_inbox", "mailbox_read", "mailbox_send", "mailbox_claim", "mailbox_release", "capability_list", "capability_run"],
           "markdownDescription": "Private bus tools exposed to the worker. Capability execution remains separately constrained by each capability's allowedSeats grant."
+        },
+        "portableAiBus.harness.port": {
+          "type": "integer",
+          "default": 0,
+          "minimum": 0,
+          "maximum": 65535,
+          "markdownDescription": "Loopback port for a VS Code-managed harness. Zero selects an available ephemeral port; clients discover it from endpoint.json."
+        },
+        "portableAiBus.harness.autoStart": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Start the authenticated loopback harness when this trusted workspace opens. Off by default."
+        },
+        "portableAiBus.reminders.intervalSeconds": {
+          "type": "integer",
+          "default": 15,
+          "minimum": 5,
+          "maximum": 600,
+          "markdownDescription": "How often the extension checks durable mailbox counts and advisory worker leases. This timer never invokes a model or acknowledges mail."
+        },
+        "portableAiBus.reminders.notifyUnread": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Show one notification when an agent's unread count increases. Repeated polls do not repeat the notification."
+        },
+        "portableAiBus.reminders.notifyStaleWorkers": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Warn once when a previously observed worker heartbeat becomes stale. Heartbeats are advisory and do not prove work progress."
         }
       }
     }
