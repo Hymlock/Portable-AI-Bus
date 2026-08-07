@@ -376,7 +376,18 @@ export class HarnessServer {
         name: 'mailbox_send',
         description: 'Send one durable coordination message.',
         inputSchema: object(
-          { from: agent, to: agent, kind: { type: 'string' }, subject: { type: 'string' }, body: { type: 'string' } },
+          {
+            from: agent,
+            to: agent,
+            kind: { type: 'string' },
+            subject: { type: 'string' },
+            body: { type: 'string' },
+            // "I am reporting progress, not handing over." Omitted, an ack keeps the baton
+            // and everything else passes it. This was missing from the schema AND from the
+            // handler below, so --keep-baton worked on the direct CLI and was silently
+            // dropped on the HTTP path - which is the only path agents actually use.
+            keepBaton: { type: 'boolean' }
+          },
           ['from', 'to', 'subject', 'body']
         )
       },
@@ -657,7 +668,13 @@ export class HarnessServer {
           to,
           kind: optionalString(input.kind, 100) || 'note',
           subject: requireString(input.subject, 'subject', 1_000),
-          body: requireString(input.body, 'body', 256 * 1024)
+          body: requireString(input.body, 'body', 256 * 1024),
+          // Forwarded, not defaulted: `undefined` must reach the store so its own
+          // "an ack keeps the baton" rule still decides. Coercing to false here would
+          // silently undo that.
+          ...(input.keepBaton === undefined
+            ? {}
+            : { keepBaton: optionalBoolean(input.keepBaton, 'keepBaton') })
         });
       case 'mailbox_claim':
         return this.mailbox.claim({

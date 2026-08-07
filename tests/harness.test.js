@@ -515,3 +515,42 @@ test('lease capacity prunes a stale lease instead of refusing', async (t) => {
   await new Promise((resolve) => setTimeout(resolve, 600));
   assert.equal((await beat('grok', 'worker:grok')).status, 200);
 });
+
+test('keepBaton survives the HTTP tool path', async (t) => {
+  // The regression this locks: `keepBaton` was honoured by the direct CLI but absent from
+  // mailbox_send's inputSchema AND dropped by its handler, so `--keep-baton` was silently
+  // discarded on the HTTP path - the only path agents actually use. It failed silently: the
+  // sender believed it still held the baton while the baton had moved to an idle seat, which
+  // is indistinguishable from the other agent having gone quiet. Every stall we investigated
+  // had this available as a cause and nobody could see it.
+  const { root, server, request } = await setup(['codex', 'grok']);
+  t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
+
+  const send = (input, requestId) => request('/v1/tool', {
+    method: 'POST',
+    body: JSON.stringify({ requestId, name: 'mailbox_send', input })
+  });
+  const holder = async () => (await request('/v1/status')).body.mailbox.baton.holder;
+
+  const base = { from: 'codex', to: 'grok', subject: 'progress', body: 'still working' };
+
+  // keepBaton: true - the sender is reporting progress, not handing over.
+  await send({ ...base, kind: 'fix-report', keepBaton: true }, 'keep-1');
+  assert.equal(await holder(), 'codex', 'keepBaton:true must leave the baton with the sender');
+
+  // Omitted - the store's own default decides. A non-ack passes the baton.
+  await send({ ...base, kind: 'fix-report' }, 'default-1');
+  assert.equal(await holder(), 'grok', 'a non-ack with no keepBaton still passes the baton');
+
+  // Omitted on an ack - the store's "an ack keeps the baton" rule must still apply, which is
+  // why the handler forwards `undefined` rather than coercing it to false.
+  await send({ from: 'grok', to: 'codex', kind: 'ack', subject: 'ack', body: 'taken' }, 'ack-1');
+  assert.equal(await holder(), 'grok', 'an ack must keep the baton even with keepBaton absent');
+
+  // keepBaton: false - an explicit hand-off, overriding the ack default.
+  await send({ from: 'grok', to: 'codex', kind: 'ack', subject: 'over', body: 'yours' , keepBaton: false }, 'ack-2');
+  assert.equal(await holder(), 'codex', 'keepBaton:false must override the ack default');
+
+  const bad = await send({ ...base, keepBaton: 'yes' }, 'bad-1');
+  assert.equal(bad.status, 400, 'a non-boolean keepBaton must be rejected, not coerced');
+});
