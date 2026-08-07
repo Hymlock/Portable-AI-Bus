@@ -1,8 +1,8 @@
 {
   "name": "portable-ai-bus",
   "displayName": "Portable AI Bus",
-  "description": "Chat-first AI workflow staging for Visual Studio Code workspaces.",
-  "version": "0.1.0",
+  "description": "Chat-first multi-agent workflow staging and mailbox for Visual Studio Code workspaces.",
+  "version": "0.2.0",
   "publisher": "local-dev",
   "preview": true,
   "license": "MIT",
@@ -15,6 +15,7 @@
     "README.md",
     "HUMAN_GUIDE.md",
     "OPERATOR.md",
+    "docs/**",
     "LICENSE"
   ],
   "icon": "media/icon.png",
@@ -42,9 +43,20 @@
     "copilot",
     "chat",
     "workflow",
-    "agent"
+    "agent",
+    "mailbox",
+    "multi-agent",
+    "grok",
+    "codex",
+    "claude"
   ],
   "main": "./dist/extension.js",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "Portable AI Bus stages executable coordination tooling and allowlisted workspace capabilities, so it requires a trusted workspace."
+    }
+  },
   "activationEvents": [
     "onChatParticipant:portable-ai-bus.assistant",
     "onCommand:portableAiBus.initializeWorkspace",
@@ -56,7 +68,13 @@
     "onCommand:portableAiBus.resume",
     "onCommand:portableAiBus.remove",
     "onCommand:portableAiBus.openSettings",
-    "onCommand:portableAiBus.openHumanGuide"
+    "onCommand:portableAiBus.openHumanGuide",
+    "onCommand:portableAiBus.mailboxStatus",
+    "onCommand:portableAiBus.mailboxInbox",
+    "onCommand:portableAiBus.mailboxSend",
+    "onCommand:portableAiBus.mailboxClaim",
+    "onCommand:portableAiBus.mailboxRelease",
+    "onCommand:portableAiBus.runLanguageModelWorker"
   ],
   "contributes": {
     "commands": [
@@ -99,6 +117,30 @@
       {
         "command": "portableAiBus.openHumanGuide",
         "title": "Portable AI Bus: Open Human Instructions"
+      },
+      {
+        "command": "portableAiBus.mailboxStatus",
+        "title": "Portable AI Bus: Mailbox Status"
+      },
+      {
+        "command": "portableAiBus.mailboxInbox",
+        "title": "Portable AI Bus: Mailbox Inbox"
+      },
+      {
+        "command": "portableAiBus.mailboxSend",
+        "title": "Portable AI Bus: Mailbox Send"
+      },
+      {
+        "command": "portableAiBus.mailboxClaim",
+        "title": "Portable AI Bus: Mailbox Claim Paths"
+      },
+      {
+        "command": "portableAiBus.mailboxRelease",
+        "title": "Portable AI Bus: Mailbox Release Claims"
+      },
+      {
+        "command": "portableAiBus.runLanguageModelWorker",
+        "title": "Portable AI Bus: Run Language Model Worker"
       }
     ],
     "chatParticipants": [
@@ -106,7 +148,7 @@
         "id": "portable-ai-bus.assistant",
         "name": "ai-bus",
         "fullName": "Portable AI Bus",
-        "description": "Initialize, run, and manage the bus workflow in this workspace.",
+        "description": "Initialize, run, and manage the bus workflow and multi-agent mailbox in this workspace.",
         "isSticky": true,
         "commands": [
           {
@@ -127,7 +169,7 @@
           },
           {
             "name": "status",
-            "description": "Show the current bus status."
+            "description": "Show the current workflow phase status."
           },
           {
             "name": "prompt",
@@ -152,6 +194,26 @@
           {
             "name": "settings",
             "description": "Open Portable AI Bus settings."
+          },
+          {
+            "name": "mailbox",
+            "description": "Show multi-agent mailbox status (rounds, unread, claims)."
+          },
+          {
+            "name": "inbox",
+            "description": "Show unread mailbox messages. Example: /inbox grok"
+          },
+          {
+            "name": "send",
+            "description": "Send a mailbox message via prompts."
+          },
+          {
+            "name": "claim",
+            "description": "Claim workspace-relative paths on the mailbox."
+          },
+          {
+            "name": "release",
+            "description": "Release mailbox path claims."
           }
         ]
       }
@@ -166,7 +228,7 @@
         },
         "portableAiBus.commandReference": {
           "type": "string",
-          "default": "instructions | initialize the bus for this repo | start task: <task> goal: <goal> validation: <command> | show status | show next prompt | set phase to READY_FOR_REVIEW | suspend the bus | resume the bus | remove the bus | open settings",
+          "default": "instructions | initialize the bus for this repo | start task: <task> goal: <goal> validation: <command> | show status | show next prompt | set phase to READY_FOR_REVIEW | mailbox status | inbox for grok | send message | claim | release claims | suspend the bus | resume the bus | remove the bus | open settings",
           "markdownDescription": "Basic chat instruction commands for `@ai-bus`. Use this as the quick in-settings reference for the LLM-facing workflow surface."
         },
         "portableAiBus.providers": {
@@ -175,7 +237,7 @@
           "items": {
             "type": "string"
           },
-          "markdownDescription": "Optional explicit provider IDs to install in the workspace. Leave empty to auto-detect from repo markers and fall back to the recommended pair."
+          "markdownDescription": "Optional explicit provider IDs to install in the workspace (`codex`, `claude`, `grok`). Leave empty to auto-detect from repo markers and fall back to the recommended set."
         },
         "portableAiBus.stageTasksJson": {
           "type": "boolean",
@@ -190,12 +252,41 @@
         "portableAiBus.showStatusBar": {
           "type": "boolean",
           "default": true,
-          "markdownDescription": "Show the current AI Bus phase in the VS Code status bar."
+          "markdownDescription": "Show the current AI Bus phase (and mailbox unread count) in the VS Code status bar."
         },
         "portableAiBus.autoInitializeOnOpen": {
           "type": "boolean",
           "default": false,
           "markdownDescription": "When a workspace opens and no `.ai-bus` folder exists, prompt to initialize it."
+        },
+        "portableAiBus.languageModelWorker.enabled": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Enable the optional, explicitly user-started bounded language-model worker. It never starts from activation, timers, file watchers, or mailbox wake events."
+        },
+        "portableAiBus.languageModelWorker.vendor": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Opaque VS Code language-model vendor id. Configure together with modelId, or leave both empty to choose interactively."
+        },
+        "portableAiBus.languageModelWorker.modelId": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Opaque VS Code language-model id. The pair (vendor, modelId) is matched exactly and never parsed or silently replaced."
+        },
+        "portableAiBus.languageModelWorker.maxTurns": {
+          "type": "integer",
+          "default": 8,
+          "minimum": 1,
+          "maximum": 32,
+          "markdownDescription": "Maximum model turns in one explicitly started worker run."
+        },
+        "portableAiBus.languageModelWorker.allowedTools": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string" },
+          "default": ["mailbox_status", "mailbox_inbox", "mailbox_read", "mailbox_send", "mailbox_claim", "mailbox_release", "capability_list", "capability_run"],
+          "markdownDescription": "Private bus tools exposed to the worker. Capability execution remains separately constrained by each capability's allowedSeats grant."
         }
       }
     }
@@ -203,6 +294,8 @@
   "scripts": {
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
+    "test": "npm run compile && node --test \"tests/*.test.js\"",
+    "check": "npm test",
     "package": "vsce package"
   },
   "devDependencies": {

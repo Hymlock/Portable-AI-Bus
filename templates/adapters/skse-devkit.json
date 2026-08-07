@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 1,
+  "id": "skse-devkit",
+  "displayName": "SKSE / CommonLibSSE-NG devkit adapter",
+  "license": "MIT",
+  "cleanRoom": true,
+  "notes": [
+    "Devkit root is a toolchain, not a CMake project. configure/build target a sourceDir (workspace CMakeLists or a kit sample).",
+    "Real kit layout: tools/cmake/bin/cmake.exe, tools/ninja.exe, tools/vcpkg/vcpkg.exe, libraries/CommonLibSSE-NG, vcpkg-triplets/, samples like DragonbornLogbookNative.",
+    "Does not vendor or embed binaries. Root: --root | SKSE_DEVKIT_ROOT | ${workspace}/.ai-bus/toolchains/skse-devkit.",
+    "source/build paths are realpath-jailed to workspace or devkit root."
+  ],
+  "module": "src/adapters/skse-devkit.ts",
+  "cli": "node dist/adapters/skse-devkit.js",
+  "rootResolution": [
+    { "kind": "cli", "flag": "--root" },
+    { "kind": "env", "name": "SKSE_DEVKIT_ROOT" },
+    { "kind": "workspace", "path": ".ai-bus/toolchains/skse-devkit" }
+  ],
+  "sourceResolution": [
+    { "kind": "cli", "flag": "--source-dir" },
+    { "kind": "workspace", "path": "CMakeLists.txt" },
+    { "kind": "sample", "path": "<first kit dir containing CMakeLists.txt>" }
+  ],
+  "actions": [
+    { "id": "doctor", "description": "Inventory nested tools, CommonLib, triplets, samples, VS/SDK hints." },
+    { "id": "configure", "description": "cmake -S <sourceDir> -B <buildDir> -G Ninja (+ vcpkg) or cmake --preset <name>." },
+    { "id": "build", "description": "cmake --build <buildDir> [--target NAME]." },
+    { "id": "test", "description": "ctest --test-dir <buildDir> --output-on-failure." },
+    { "id": "search", "description": "Filesystem string search under CommonLib (no shell)." },
+    { "id": "validate-artifacts", "description": "Hash plugin DLL/PDB under build output." }
+  ],
+  "suggestedCapabilities": [
+    {
+      "id": "skse.doctor",
+      "command": "node",
+      "args": ["${workspace}/.ai-bus/bin/skse-devkit.js", "doctor", "--workspace", "${workspace}"],
+      "cwd": "${workspace}",
+      "timeoutMs": 60000,
+      "allowedSeats": ["codex", "claude", "grok", "*"]
+    },
+    {
+      "id": "skse.configure",
+      "command": "node",
+      "args": ["${workspace}/.ai-bus/bin/skse-devkit.js", "configure", "--workspace", "${workspace}"],
+      "cwd": "${workspace}",
+      "timeoutMs": 600000,
+      "allowedSeats": []
+    }
+  ],
+  "safety": {
+    "shell": false,
+    "env": "scrubbed-allowlist",
+    "timeoutDefaultMs": 600000,
+    "processTreeKill": true,
+    "exitWatchdogMs": 500,
+    "finalWatchdogMs": 5000,
+    "pathJail": ["workspace", "devkitRoot"],
+    "maxWalkFiles": 5000,
+    "maxOutputBytes": 262144
+  }
+}

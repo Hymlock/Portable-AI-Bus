@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
+import { MailboxStore } from './mailbox';
 
 export const PHASES = [
   'PLANNING',
@@ -152,6 +153,10 @@ export class WorkspaceBus {
     const paths = this.getPaths(root);
     await this.stageBundle(root);
     await fs.mkdir(paths.busDir, { recursive: true });
+    const capabilitiesPath = path.join(paths.busDir, 'capabilities.json');
+    if (!(await this.exists(capabilitiesPath))) {
+      await fs.copyFile(path.join(paths.busDir, 'templates', 'capabilities.json'), capabilitiesPath);
+    }
 
     const config = await this.readProvidersConfig(paths.busDir);
     const selectedProviders = await this.resolveProvidersToInstall(root, config);
@@ -189,6 +194,7 @@ export class WorkspaceBus {
     };
 
     await this.writeJson(paths.manifestPath, manifest);
+    await new MailboxStore(root).ensureInitialized(selectedProviders.map((provider) => provider.id));
     await this.ensurePromptArtifacts(root);
     return manifest;
   }
@@ -454,6 +460,11 @@ export class WorkspaceBus {
 
     const copies = [
       { from: 'bin', to: path.join(paths.busDir, 'bin') },
+      { from: 'dist/mailbox.js', to: path.join(paths.busDir, 'bin', 'mailbox.js') },
+      { from: 'dist/capabilities.js', to: path.join(paths.busDir, 'bin', 'capabilities.js') },
+      { from: 'dist/harness.js', to: path.join(paths.busDir, 'bin', 'harness.js') },
+      { from: 'dist/worker-client.js', to: path.join(paths.busDir, 'bin', 'worker-client.js') },
+      { from: 'dist/adapters/skse-devkit.js', to: path.join(paths.busDir, 'bin', 'skse-devkit.js') },
       { from: 'providers', to: path.join(paths.busDir, 'providers') },
       { from: 'templates', to: path.join(paths.busDir, 'templates') },
       { from: 'README.md', to: path.join(paths.busDir, 'README.md') },

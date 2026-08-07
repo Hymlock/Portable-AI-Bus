@@ -1,5 +1,11 @@
 import * as vscode from 'vscode';
 import { PHASES, Phase, WorkspaceBus } from './bus';
+import { BusMessage, MailboxStatus, MailboxStore } from './mailbox';
+import { CapabilityRunner } from './capabilities';
+import { runVscodeLmWorker } from './vscode-lm-worker';
+
+const activeLmWorkers = new Set<string>();
+const LM_WORKER_SEAT = 'pab-lm-worker';
 
 type ChatAction =
   | { kind: 'help' }
@@ -12,13 +18,20 @@ type ChatAction =
   | { kind: 'remove' }
   | { kind: 'settings' }
   | { kind: 'setPhase'; phase: Phase }
-  | { kind: 'start'; task: string; goal?: string; validation?: string };
+  | { kind: 'start'; task: string; goal?: string; validation?: string }
+  | { kind: 'mailboxStatus' }
+  | { kind: 'mailboxInbox'; agent?: string }
+  | { kind: 'mailboxSend' }
+  | { kind: 'mailboxClaim' }
+  | { kind: 'mailboxRelease' };
 
 export async function activate(context: vscode.ExtensionContext) {
   const bus = new WorkspaceBus(context);
   const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 10);
   statusBar.command = 'portableAiBus.showStatus';
   context.subscriptions.push(statusBar);
+  const mailboxWatcher = vscode.workspace.createFileSystemWatcher('**/.ai-bus/runtime/mailbox/**/*');
+  context.subscriptions.push(mailboxWatcher);
 
   const refreshStatusBar = async () => {
     const settings = bus.getConfiguration();
@@ -38,8 +51,22 @@ export async function activate(context: vscode.ExtensionContext) {
 
       const suspended = await bus.isSuspended(root);
       const status = suspended ? undefined : await bus.getStatus(root);
-      statusBar.text = bus.phaseLabel(status, suspended);
-      statusBar.tooltip = suspended || !status ? 'Portable AI Bus is suspended.' : bus.renderStatus(status);
+      let label = bus.phaseLabel(status, suspended);
+      let tooltip = suspended || !status ? 'Portable AI Bus is suspended.' : bus.renderStatus(status);
+
+      try {
+        const mailbox = await new MailboxStore(root).status();
+        const unreadTotal = Object.values(mailbox.unread).reduce((sum, count) => sum + count, 0);
+        if (unreadTotal > 0) {
+          label = `${label} · ✉${unreadTotal}`;
+        }
+        tooltip = `${tooltip}\n\n${renderMailboxStatus(mailbox)}`;
+      } catch {
+        // Mailbox may not be initialized yet.
+      }
+
+      statusBar.text = label;
+      statusBar.tooltip = tooltip;
       statusBar.show();
     } catch (error) {
       statusBar.text = 'AI Bus: Unavailable';
@@ -139,6 +166,199 @@ export async function activate(context: vscode.ExtensionContext) {
         await vscode.window.showTextDocument(document);
       });
     }),
+    vscode.commands.registerCommand('portableAiBus.mailboxStatus', async () => {
+      await withWorkspaceAction(bus, async (root) => {
+        const status = await mailboxFor(root).status();
+        await showMarkdownDocument('AI Bus Mailbox Status', ['# Mailbox status', '', '```text', renderMailboxStatus(status), '```'].join('\n'));
+        void refreshStatusBar();
+      });
+    }),
+    vscode.commands.registerCommand('portableAiBus.mailboxInbox', async () => {
+      await withWorkspaceAction(bus, async (root) => {
+        const agent = await pickAgent(root, 'Read inbox for which agent?');
+        if (!agent) {
+          return;
+        }
+        const messages = await mailboxFor(root).read(agent, true);
+        await showMarkdownDocument(
+          `AI Bus Inbox (${agent})`,
+          renderMessagesMarkdown(messages, `Unread for \`${agent}\``)
+        );
+        void refreshStatusBar();
+      });
+    }),
+    vscode.commands.registerCommand('portableAiBus.mailboxSend', async () => {
+      await withWorkspaceAction(bus, async (root) => {
+        const store = mailboxFor(root);
+        await store.ensureInitialized();
+        const from = await pickAgent(root, 'Send from', true);
+        if (!from) {
+          return;
+        }
+        const to = await pickAgent(root, 'Send to', true);
+        if (!to) {
+          return;
+        }
+        const kind =
+          (await vscode.window.showInputBox({
+            prompt: 'Kind',
+            value: 'note',
+            placeHolder: 'note | ack | finding | handoff | coordination'
+          })) || 'note';
+        const subject = await vscode.window.showInputBox({
+          prompt: 'Subject',
+          placeHolder: 'One-line subject'
+        });
+        if (!subject?.trim()) {
+          return;
+        }
+        const body = await vscode.window.showInputBox({
+          prompt: 'Body',
+          placeHolder: 'Message body'
+        });
+        if (!body?.trim()) {
+          return;
+        }
+        const message = await store.send({ from, to, kind, subject, body });
+        void vscode.window.showInformationMessage(`Sent mailbox #${message.seq} ${from} → ${to}`);
+        void refreshStatusBar();
+      });
+    }),
+    vscode.commands.registerCommand('portableAiBus.mailboxClaim', async () => {
+      await withWorkspaceAction(bus, async (root) => {
+        const agent = await pickAgent(root, 'Claim as agent', true);
+        if (!agent) {
+          return;
+        }
+        const pathsRaw = await vscode.window.showInputBox({
+          prompt: 'Paths to claim (comma-separated, workspace-relative)',
+          placeHolder: 'src/foo.ts,docs/'
+        });
+        if (!pathsRaw?.trim()) {
+          return;
+        }
+        const why =
+          (await vscode.window.showInputBox({
+            prompt: 'Why',
+            placeHolder: 'short reason'
+          })) || '';
+        const paths = pathsRaw
+          .split(',')
+          .map((item) => item.trim())
+          .filter(Boolean);
+        const held = await mailboxFor(root).claim({ agent, paths, why });
+        void vscode.window.showInformationMessage(
+          `${agent} holds: ${held.map((claim) => claim.path).join(', ') || 'none'}`
+        );
+        void refreshStatusBar();
+      });
+    }),
+    vscode.commands.registerCommand('portableAiBus.mailboxRelease', async () => {
+      await withWorkspaceAction(bus, async (root) => {
+        const agent = await pickAgent(root, 'Release claims for agent');
+        if (!agent) {
+          return;
+        }
+        const pathsRaw = await vscode.window.showInputBox({
+          prompt: 'Paths to release (empty = all)',
+          placeHolder: 'src/foo.ts'
+        });
+        if (pathsRaw === undefined) {
+          return;
+        }
+        const paths = pathsRaw
+          ?.split(',')
+          .map((item) => item.trim())
+          .filter(Boolean);
+        if (!paths || paths.length === 0) {
+          const confirmed = await vscode.window.showWarningMessage(
+            `Release every claim held by ${agent}?`,
+            { modal: true },
+            'Release All'
+          );
+          if (confirmed !== 'Release All') {
+            return;
+          }
+        }
+        const remaining = await mailboxFor(root).release(agent, paths && paths.length > 0 ? paths : undefined);
+        void vscode.window.showInformationMessage(
+          remaining.length === 0
+            ? `${agent} released all claims`
+            : `${agent} still holds: ${remaining.map((claim) => claim.path).join(', ')}`
+        );
+        void refreshStatusBar();
+      });
+    }),
+    vscode.commands.registerCommand('portableAiBus.runLanguageModelWorker', async () => {
+      await withWorkspaceAction(bus, async (root) => {
+        if (!(await bus.isInitialized(root))) {
+          throw new Error('Initialize Portable AI Bus in this workspace before running a language-model worker.');
+        }
+        if (activeLmWorkers.has(root)) {
+          throw new Error('A language-model worker is already running in this workspace.');
+        }
+        activeLmWorkers.add(root);
+        try {
+        const config = vscode.workspace.getConfiguration('portableAiBus');
+        if (!config.get<boolean>('languageModelWorker.enabled', false)) {
+          const choice = await vscode.window.showWarningMessage(
+            'Enable the optional language-model worker for this workspace? It can use model quota and invoke only the bus tools and seat capabilities you grant.',
+            { modal: true },
+            'Enable and Run'
+          );
+          if (choice !== 'Enable and Run') return;
+          await config.update('languageModelWorker.enabled', true, vscode.ConfigurationTarget.WorkspaceFolder);
+        }
+        const prompt = await vscode.window.showInputBox({
+          title: 'Portable AI Bus: Run LM Worker',
+          prompt: 'One bounded task for the selected model',
+          placeHolder: 'Read your mailbox, perform the requested checks, and report findings',
+          ignoreFocusOut: true
+        });
+        if (!prompt?.trim()) return;
+        const model = await pickLanguageModel(config);
+        if (!model) return;
+        const maxTurns = config.get<number>('languageModelWorker.maxTurns', 8);
+        const allowedTools = config.get<string[]>('languageModelWorker.allowedTools', defaultLmWorkerTools());
+        const grantedCapabilities = (await new CapabilityRunner(root).list())
+          .filter((item) => (item.allowedSeats ?? []).some((seat) => seat === '*' || seat === LM_WORKER_SEAT))
+          .map((item) => item.id);
+        const confirmed = await vscode.window.showWarningMessage(
+          `Run ${model.name} as the isolated ${LM_WORKER_SEAT} seat?`,
+          {
+            modal: true,
+            detail: [
+              `Provider/model: ${model.vendor} / ${model.id}`,
+              `Private tools: ${allowedTools.join(', ') || 'none'}`,
+              `Granted capabilities: ${grantedCapabilities.join(', ') || 'none'}`,
+              `Bound: ${maxTurns} model turns. Model and tool use may consume provider quota and send tool results to that provider.`
+            ].join('\n')
+          },
+          'Run'
+        );
+        if (confirmed !== 'Run') return;
+          const result = await vscode.window.withProgress(
+            { location: vscode.ProgressLocation.Notification, title: `Portable AI Bus: ${model.name}`, cancellable: true },
+            async (_progress, token) => runVscodeLmWorker({
+              root,
+              seat: LM_WORKER_SEAT,
+              model,
+              prompt,
+              allowedTools,
+              maxTurns,
+              token
+            })
+          );
+          await showMarkdownDocument(
+            'Portable AI Bus LM Worker Result',
+            [`# Language-model worker result`, '', result.text, '', `---`, `Model: \`${result.model.vendor}\` / \`${result.model.id}\`  `,
+              `Turns: ${result.turns}; tool calls: ${result.toolCalls}`].join('\n')
+          );
+        } finally {
+          activeLmWorkers.delete(root);
+        }
+      });
+    }),
     vscode.workspace.onDidSaveTextDocument(() => {
       void refreshStatusBar();
     }),
@@ -149,7 +369,10 @@ export async function activate(context: vscode.ExtensionContext) {
     }),
     vscode.workspace.onDidChangeWorkspaceFolders(() => {
       void refreshStatusBar();
-    })
+    }),
+    mailboxWatcher.onDidCreate(() => void refreshStatusBar()),
+    mailboxWatcher.onDidChange(() => void refreshStatusBar()),
+    mailboxWatcher.onDidDelete(() => void refreshStatusBar())
   );
 
   const participant = vscode.chat.createChatParticipant('portable-ai-bus.assistant', async (request, _chatContext, stream) => {
@@ -173,6 +396,45 @@ export async function activate(context: vscode.ExtensionContext) {
 }
 
 export function deactivate() {}
+
+async function pickLanguageModel(config: vscode.WorkspaceConfiguration) {
+  const vendor = config.get<string>('languageModelWorker.vendor', '').trim();
+  const id = config.get<string>('languageModelWorker.modelId', '').trim();
+  if ((vendor && !id) || (!vendor && id)) {
+    throw new Error('Configure both languageModelWorker.vendor and languageModelWorker.modelId, or leave both empty to choose interactively.');
+  }
+  if (vendor && id) {
+    const exact = await vscode.lm.selectChatModels({ vendor, id });
+    if (exact.length !== 1) throw new Error(`Expected one configured model for vendor=${vendor} id=${id}; found ${exact.length}.`);
+    return exact[0];
+  }
+  const models = await vscode.lm.selectChatModels();
+  if (models.length === 0) {
+    throw new Error('No VS Code language models are available. Install/configure a model provider such as GitHub Copilot or Unify, then try again.');
+  }
+  const picked = await vscode.window.showQuickPick(
+    models.map((model) => ({
+      label: model.name,
+      description: `${model.vendor} · ${model.family}`,
+      detail: model.id,
+      model
+    })),
+    { title: 'Select the exact model for this bounded run', matchOnDescription: true, matchOnDetail: true }
+  );
+  if (!picked) return undefined;
+  await Promise.all([
+    config.update('languageModelWorker.vendor', picked.model.vendor, vscode.ConfigurationTarget.WorkspaceFolder),
+    config.update('languageModelWorker.modelId', picked.model.id, vscode.ConfigurationTarget.WorkspaceFolder)
+  ]);
+  return picked.model;
+}
+
+function defaultLmWorkerTools() {
+  return [
+    'mailbox_status', 'mailbox_inbox', 'mailbox_read', 'mailbox_send',
+    'mailbox_claim', 'mailbox_release', 'capability_list', 'capability_run'
+  ];
+}
 
 async function handleChatAction(
   bus: WorkspaceBus,
@@ -237,6 +499,33 @@ async function handleChatAction(
           .join('\n')
       );
       return;
+    case 'mailboxStatus': {
+      const status = await mailboxFor(root).status();
+      stream.markdown(['```text', renderMailboxStatus(status), '```'].join('\n'));
+      return;
+    }
+    case 'mailboxInbox': {
+      const agent = action.agent || (await pickAgent(root, 'Inbox for which agent?'));
+      if (!agent) {
+        stream.markdown('No agent selected.');
+        return;
+      }
+      const messages = await mailboxFor(root).read(agent, true);
+      stream.markdown(renderMessagesMarkdown(messages, `Unread for \`${agent}\``));
+      return;
+    }
+    case 'mailboxSend':
+      await vscode.commands.executeCommand('portableAiBus.mailboxSend');
+      stream.markdown('Opened **Mailbox: Send Message** (Command Palette flow).');
+      return;
+    case 'mailboxClaim':
+      await vscode.commands.executeCommand('portableAiBus.mailboxClaim');
+      stream.markdown('Opened **Mailbox: Claim Paths**.');
+      return;
+    case 'mailboxRelease':
+      await vscode.commands.executeCommand('portableAiBus.mailboxRelease');
+      stream.markdown('Opened **Mailbox: Release Claims**.');
+      return;
   }
 }
 
@@ -268,6 +557,22 @@ function parseChatAction(request: vscode.ChatRequest): ChatAction {
   if (request.command === 'remove') {
     return { kind: 'remove' };
   }
+  if (request.command === 'mailboxStatus' || request.command === 'mailbox') {
+    return { kind: 'mailboxStatus' };
+  }
+  if (request.command === 'inbox') {
+    const agent = request.prompt.trim().split(/\s+/)[0];
+    return { kind: 'mailboxInbox', agent: agent || undefined };
+  }
+  if (request.command === 'send') {
+    return { kind: 'mailboxSend' };
+  }
+  if (request.command === 'claim') {
+    return { kind: 'mailboxClaim' };
+  }
+  if (request.command === 'release') {
+    return { kind: 'mailboxRelease' };
+  }
   if (request.command === 'phase') {
     const token = request.prompt.trim().toUpperCase();
     if (!isPhase(token)) {
@@ -293,6 +598,22 @@ function parseChatAction(request: vscode.ChatRequest): ChatAction {
   }
   if (/\b(init|initialize|install|setup)\b/.test(lower)) {
     return { kind: 'init' };
+  }
+  if (/\bmailbox\s+status\b/.test(lower) || /\bunread\b/.test(lower) || lower === 'mailbox') {
+    return { kind: 'mailboxStatus' };
+  }
+  if (/\binbox\b/.test(lower)) {
+    const match = prompt.match(/\binbox\b(?:\s+for)?\s+([a-zA-Z0-9_.-]+)/i);
+    return { kind: 'mailboxInbox', agent: match?.[1] };
+  }
+  if (/\b(send message|mailbox send|send on the bus)\b/.test(lower)) {
+    return { kind: 'mailboxSend' };
+  }
+  if (/\brelease\b/.test(lower) && /\bclaim/.test(lower)) {
+    return { kind: 'mailboxRelease' };
+  }
+  if (/\bclaim\b/.test(lower)) {
+    return { kind: 'mailboxClaim' };
   }
   if (/\bstatus\b/.test(lower)) {
     return { kind: 'status' };
@@ -351,6 +672,93 @@ function parseStartAction(prompt: string): ChatAction {
   };
 }
 
+function mailboxFor(root: string) {
+  return new MailboxStore(root);
+}
+
+async function pickAgent(root: string, title: string, allowCustom = false): Promise<string | undefined> {
+  let agents: string[] = [];
+  try {
+    agents = (await mailboxFor(root).status()).agents;
+  } catch {
+    agents = ['codex', 'claude', 'grok'];
+  }
+  if (agents.length === 0) {
+    agents = ['codex', 'claude', 'grok'];
+  }
+
+  const items = [
+    ...agents.map((id) => ({ label: id, description: 'registered agent' })),
+    ...(allowCustom ? [{ label: '$(edit) Other…', description: 'type an agent id', id: '__other__' }] : [])
+  ];
+
+  const selected = await vscode.window.showQuickPick(items, { title, placeHolder: title });
+  if (!selected) {
+    return undefined;
+  }
+  if ('id' in selected && selected.id === '__other__') {
+    const custom = await vscode.window.showInputBox({
+      prompt: 'Agent id',
+      placeHolder: 'codex | claude | grok',
+      validateInput: (value) => (/^[a-zA-Z0-9_.-]+$/.test(value.trim()) ? undefined : 'Invalid agent id')
+    });
+    return custom?.trim() || undefined;
+  }
+  return selected.label;
+}
+
+function renderMailboxStatus(status: MailboxStatus) {
+  const unread = Object.entries(status.unread)
+    .map(([agent, count]) => `  ${agent}: ${count}`)
+    .join('\n');
+  const claims = Object.entries(status.claims)
+    .map(([agent, held]) => {
+      if (held.length === 0) {
+        return `  ${agent}: (none)`;
+      }
+      return held.map((claim) => `  ${agent}: ${claim.path} — ${claim.why || '(no reason)'}`).join('\n');
+    })
+    .join('\n');
+  const commit = status.workspaceCommit
+    ? `${status.workspaceCommit.sha.slice(0, 12)}${status.workspaceCommit.dirty ? ' (dirty)' : ''}`
+    : '<not a git repo>';
+
+  return [
+    `round     ${status.round} / ${status.maxRounds}`,
+    `halted    ${status.halted}${status.stopReason ? ` — ${status.stopReason}` : ''}`,
+    `agents    ${status.agents.join(', ') || '(none)'}`,
+    `commit    ${commit}`,
+    'unread',
+    unread || '  (none)',
+    'claims',
+    claims || '  (none)'
+  ].join('\n');
+}
+
+function renderMessagesMarkdown(messages: BusMessage[], heading: string) {
+  if (messages.length === 0) {
+    return [`# ${heading}`, '', '_No unread messages._'].join('\n');
+  }
+  const blocks = messages.map((message) => {
+    const commit = message.workspaceCommit
+      ? `${message.workspaceCommit.sha.slice(0, 12)}${message.workspaceCommit.dirty ? ' (dirty)' : ''}`
+      : 'n/a';
+    return [
+      `## #${message.seq} ${message.from} → ${message.to} [${message.kind}]`,
+      '',
+      `**${escapeMarkdown(message.subject)}**`,
+      '',
+      `- round: ${message.round}`,
+      `- commit: \`${commit}\``,
+      `- at: ${message.createdAt}`,
+      '',
+      message.body.trim(),
+      ''
+    ].join('\n');
+  });
+  return [`# ${heading}`, '', ...blocks].join('\n');
+}
+
 async function withWorkspaceAction(bus: WorkspaceBus, action: (root: string) => Promise<void>) {
   try {
     const root = await bus.getWorkspaceRoot();
@@ -403,7 +811,26 @@ function helpText() {
     '- `suspend the bus`',
     '- `resume the bus`',
     '- `remove the bus`',
-    '- `open settings`'
+    '- `open settings`',
+    '',
+    '## Multi-agent mailbox',
+    '',
+    '- `mailbox status` — rounds, unread, claims',
+    '- `inbox for grok` — unread messages (also `/inbox grok`)',
+    '- `send message` — Command Palette send flow',
+    '- `claim` / `release claims` — path claims',
+    '',
+    'Agents can also use the staged CLI:',
+    '',
+    '```bash',
+    'node .ai-bus/bin/mailbox.js status',
+    'node .ai-bus/bin/mailbox.js read --for grok',
+    'node .ai-bus/bin/mailbox.js send --from grok --to codex --kind note --subject "..." --body "..."',
+    'node .ai-bus/bin/mailbox.js claim --agent grok --paths src/foo.ts --why "reason"',
+    'node .ai-bus/bin/mailbox.js release --agent grok',
+    '```',
+    '',
+    'Providers: **codex**, **claude**, **grok** (see `providers/providers.json`).'
   ].join('\n');
 }
 
