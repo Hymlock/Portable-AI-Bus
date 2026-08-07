@@ -45,6 +45,15 @@ export type WorkerClientOptions = {
   cursorPath?: string;
   persistCursor?: boolean;
   requestTimeoutMs?: number;
+  /**
+   * Reconcile the delivery cursor against UNREAD state before watching.
+   *
+   * Off by default and opt-in from the CLI. It costs a round trip and, more importantly, it
+   * belongs to the operator layer rather than the transport: the library's job is "emit what
+   * is newer than this cursor", and a unit test mocking that contract should not have to
+   * answer a status call to exercise it. Turning it on inside watchMailbox hung the suite.
+   */
+  reconcileUnread?: boolean;
 };
 
 export type WakeResult = {
@@ -137,6 +146,28 @@ export async function watchMailbox(
   const cursorPath = workerCursorPath(options, clientId);
   const savedCursor = options.persistCursor === false ? undefined : await loadCursor(cursorPath, options.seat, clientId);
   let afterSeq = savedCursor?.afterSeq ?? 0;
+  // The delivery cursor and the UNREAD state are two different notions of "seen", and they
+  // diverge silently. `watch` emits a message and advances the cursor WITHOUT acknowledging it,
+  // so a seat that watched, then restarted on `wait`, resumes past mail it never acted on:
+  // the mailbox reports N unread while every poll correctly answers "nothing newer".
+  //
+  // That trapped a seat for hours on 2026-08-07. It waited, saw nothing, and concluded the
+  // other agent owed it a reply - while three messages addressed to it sat unread. Both sides
+  // were reading their instruments correctly.
+  //
+  // Unread is the source of truth for "needs attention"; the cursor is only an optimisation.
+  // So if anything is unread, rewind and let it be delivered again. Emission is deduplicated by
+  // seq, so nothing is delivered twice within a run.
+  if (options.reconcileUnread && afterSeq > 0) {
+    const pending = await unreadCount(options, runtime).catch(() => 0);
+    if (pending > 0) {
+      runtime.transition?.({
+        event: 'connected',
+        message: `${pending} unread message(s) sit behind cursor ${afterSeq} - rewinding to deliver them`
+      });
+      afterSeq = 0;
+    }
+  }
   let mailboxEpoch: string | undefined = savedCursor?.mailboxEpoch;
   let reconnectAttempt = 0;
   let disconnected = false;
@@ -477,7 +508,10 @@ async function runCli(argv = process.argv.slice(2)) {
     timeoutMs: Number(option(argv, '--timeout-ms') ?? DEFAULT_TIMEOUT_MS),
     credentialsDir: option(argv, '--credentials-dir'),
     clientId: option(argv, '--client-id'),
-    signal: controller.signal
+    signal: controller.signal,
+    // On by default for a real operator: a seat that watched, restarted, and resumed past its
+    // own unread mail is invisible to both parties and stalls the exchange indefinitely.
+    reconcileUnread: !flag(argv, '--no-reconcile')
   };
   try {
     if (command === 'wait') {
@@ -736,6 +770,13 @@ function clientIdentity(value: string | undefined, seat: string) {
   const clientId = value ?? `worker-client:${seat}`;
   if (!/^[a-zA-Z0-9_.:-]{1,100}$/.test(clientId)) throw new Error('Invalid clientId.');
   return clientId;
+}
+
+/** How many messages are unread for this seat, per the mailbox - not per the cursor. */
+async function unreadCount(options: WorkerClientOptions, runtime: WorkerClientRuntime) {
+  const result = await callSeatTool(options, 'mailbox_status', {}, randomUUID(), runtime);
+  const status = result.result as { unread?: Record<string, number> } | undefined;
+  return status?.unread?.[options.seat] ?? 0;
 }
 
 function workerCursorPath(options: WorkerClientOptions, clientId: string) {

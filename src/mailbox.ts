@@ -469,7 +469,36 @@ export class MailboxStore {
     });
   }
 
-  async halt(reason: string): Promise<MailboxState> {
+  /**
+   * Stop the bus deliberately.
+   *
+   * `force` exists because of a real incident on 2026-08-07: halting while ANOTHER seat held
+   * the baton with unread mail left that seat able to read but not send - trapped, unable to
+   * either act or hand back. From its side it looked as though the halting agent had failed to
+   * pass the baton, and it had no way to say so, because saying so requires a send.
+   *
+   * Halting is still always allowed - a human must be able to stop anything - but halting ON
+   * TOP OF someone else's open action now requires saying you meant it.
+   */
+  async halt(reason: string, options: { force?: boolean; by?: string } = {}): Promise<MailboxState> {
+    if (!options.force) {
+      const current = await this.loadState();
+      const holder = current.baton?.holder;
+      if (holder && holder !== options.by) {
+        const unread = (await this.inbox(holder)).length;
+        if (unread > 0) {
+          throw new Error(
+            `Refusing to halt: ${holder} holds the baton with ${unread} unread message(s) and ` +
+            `would be trapped - able to read but not reply. Let them act, or pass --force if ` +
+            `you know they are gone.`
+          );
+        }
+      }
+    }
+    return this.haltUnchecked(reason);
+  }
+
+  private async haltUnchecked(reason: string): Promise<MailboxState> {
     if (!reason.trim()) {
       throw new Error('Halt reason must not be empty.');
     }
@@ -1288,7 +1317,10 @@ async function runCli(argv = process.argv.slice(2)) {
       return 0;
     }
     case 'halt': {
-      const state = await store.halt(stringArg(args, 'reason', true));
+      const state = await store.halt(stringArg(args, 'reason', true), {
+        force: Boolean(args.force),
+        by: stringArg(args, 'by')
+      });
       console.log(json ? JSON.stringify(state, null, 2) : `halted: ${state.stopReason}`);
       return 0;
     }
