@@ -30,7 +30,7 @@ npm run test:vscode:vsix
 npm run test:release
 ```
 
-The source runner uses an isolated temporary two-folder workspace and the installed VS Code executable (`VSCODE_EXECUTABLE_PATH` can override its location). It verifies the staged bundle and authenticated live harness, explicit stop, suspend/resume restoration, workspace-folder removal, and actual extension-host deactivation cleanup. It also checks that the recorded loopback port refuses connections and that the endpoint, lock, and instance credential directory are gone after each stop boundary.
+The source runner uses an isolated temporary multi-folder workspace and the installed VS Code executable (`VSCODE_EXECUTABLE_PATH` can override its location). It verifies ownership-safe staging, forged-manifest resistance, external-ledger integrity failure, suspend conflict preservation, symlink/junction ancestor rejection, authenticated live harness, explicit stop, suspend/resume restoration, workspace-folder removal, and actual extension-host deactivation cleanup. It also checks that the recorded loopback port refuses connections and that the endpoint, lock, and instance credential directory are gone after each stop boundary.
 
 The VSIX runner packages into a temporary directory, installs into a unique empty extensions directory, confirms the precise extension/version inventory and loaded physical path, checks critical shipped assets, then runs the lifecycle smoke through a separate no-op test driver. This prevents a source checkout from shadowing the artifact under test. Packaging invokes `vscode:prepublish`, so a clean clone cannot ship absent or stale `dist/` output.
 
@@ -61,7 +61,7 @@ This is an Electron extension-host test, not a browser-style headless test. Linu
    - `tmp/ai-prompts/current.txt` (if workflow prompts enabled)
 5. `@ai-bus show status` / `show next prompt`
 6. `@ai-bus start task: Smoke test goal: Verify overlay validation: npm test`
-7. `@ai-bus set phase to READY_FOR_CODEX` → status updates
+7. `@ai-bus set phase to READY_FOR_IMPLEMENTATION` → status updates
 8. Start a VS Code-managed harness, then Suspend → owned harness/credentials stop, overlay removed, `.ai-bus/runtime/` kept → Resume → restore. Start again, then Remove → owned harness stops and workspace copy is cleaned.
 9. Start a harness outside this VS Code window; **Stop Harness** must report that this window owns no harness and leave the external process running. Stop it normally before testing Suspend/Remove.
 
@@ -129,9 +129,15 @@ node .ai-bus/bin/worker-client.js wait --root . --seat grok --timeout-ms 3000
 # in another shell, mailbox send to grok; wait should return wake=message
 node .ai-bus/bin/worker-client.js watch --root . --seat grok
 # Ctrl+C ends watch; no VS Code UI required
+node .ai-bus/bin/worker-client.js status --root . --seat grok
+node .ai-bus/bin/worker-client.js read --root . --seat grok --all
+node .ai-bus/bin/worker-client.js claim --root . --seat grok --paths docs/ai-status.md --why smoke
+node .ai-bus/bin/worker-client.js release --root . --seat grok --paths docs/ai-status.md
 ```
 
 For `watch`, send mail with increasing `seq`; confirm stdout emits each new sequence once and does not hot-loop on unchanged unread mail. Restart the harness and confirm stderr reports a bounded disconnect/reconnect transition while stdout remains JSON-only. Ctrl+C during an active long-poll should return promptly and attempt release. Stop the harness cleanly and confirm active wakes abort and the current credentials instance directory is removed.
+
+The automated process test launches three independent seat processes, proves separate leases/wakes/releases, performs authenticated reads and claims, rejects cross-seat forgery and swapped credentials, checks strict parser failures cannot release claims, and verifies request-ID idempotency across OS processes. For manual negatives, try `release --paths`, `release --path x`, a duplicate option, and an unknown option; all must exit nonzero before contacting the harness.
 
 ### VS Code harness and reminder smoke
 

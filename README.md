@@ -30,6 +30,8 @@ npm test
 
 Primary UX: **Command Palette** (`Portable AI Bus: …`) and **`@ai-bus`**. Terminal CLIs are for agents and operators.
 
+Initialization preserves pre-existing repository files. Only files actually created by the bus enter its ownership ledger; user-modified managed files are preserved on reinitialize and remove. Destructive lifecycle operations require an HMAC-checked ownership ledger outside the repository, reject junction/symlink escapes, serialize through a cross-process workspace lock, and recover interrupted install or suspend state. The in-repo manifest is descriptive, not destructive authority.
+
 ## Providers
 
 Configured in `providers/providers.json` (staged into `.ai-bus/providers/`):
@@ -42,9 +44,11 @@ Configured in `providers/providers.json` (staged into `.ai-bus/providers/`):
 
 Default recommended set when fewer than two markers match: **codex + claude + grok**. Override with setting `portableAiBus.providers`.
 
-## Mailbox (agents + CLI)
+Provider identity does not determine responsibility. Configure `workflow.plannerSeat`, `workflow.implementerSeat`, and `workflow.reviewerSeat`; the assigned IDs are registered even when they are not built-in provider templates. Active initialized workspaces synchronize role changes automatically. A VS Code-owned harness is restarted to rotate its seat inventory; an externally owned harness must be restarted by its operator. Canonical phases are provider-neutral (`READY_FOR_IMPLEMENTATION`, `IMPLEMENTATION_IN_PROGRESS`, and `REVIEW_IN_PROGRESS`). Legacy model-named phases remain read-compatible for existing workspaces.
 
-After initialize, agents use:
+## Mailbox (operator CLI)
+
+The raw mailbox CLI is a trusted local/operator surface and accepts explicit actor IDs. Automated seats should use the authenticated worker client shown below so the harness enforces their identity.
 
 ```bash
 node .ai-bus/bin/mailbox.js status
@@ -96,7 +100,7 @@ The Command Palette provides **Start Harness**, **Stop Harness**, and **Show Har
 
 The extension also checks durable unread counts and persisted advisory leases on a configurable timer. It reports only new unread-sequence and newly-stale transitions after establishing a quiet baseline. These reminder checks **never invoke a model, acknowledge mail, release claims, or revive a stopped process**.
 
-### Worker client (provider-neutral wait/watch)
+### Worker client (provider-neutral seat tools + wait/watch)
 
 Staged as `.ai-bus/bin/worker-client.js`. A seat process can block on harness wakes without knowing host details beyond the workspace root:
 
@@ -106,9 +110,20 @@ node .ai-bus/bin/worker-client.js wait --root . --seat grok [--timeout-ms 25000]
 
 # keep one lease renewed until SIGINT/SIGTERM; print only new message seqs as JSON lines
 node .ai-bus/bin/worker-client.js watch --root . --seat grok
+
+# identity-bound mailbox and capability operations
+node .ai-bus/bin/worker-client.js status --root . --seat grok
+node .ai-bus/bin/worker-client.js read --root . --seat grok --all
+node .ai-bus/bin/worker-client.js send --root . --seat grok --to codex --subject "review" --body "ready"
+node .ai-bus/bin/worker-client.js claim --root . --seat grok --paths src/foo.ts --why "reviewing"
+node .ai-bus/bin/worker-client.js release --root . --seat grok --paths src/foo.ts
+node .ai-bus/bin/worker-client.js capabilities --root . --seat grok
+node .ai-bus/bin/worker-client.js run --root . --seat grok --capability bus.doctor --timeout-ms 60000
 ```
 
-The client is provider-neutral: a seat can be backed by any process able to run the staged Node CLI. It discovers `.ai-bus/runtime/harness/endpoint.json`, loads the matching seat token outside the repository, requires `127.0.0.1`, and acquires/renews/releases a fenced lease. `watch` persists its successful-delivery `afterSeq` cursor outside the repository, keys it to the logical client and mailbox epoch, suppresses unchanged unread mail, rediscovers rotated endpoints and credentials, and reconnects with bounded exponential jitter. Delivery is intentionally **at least once**: consumers must make side effects idempotent because a crash after the effect but before cursor persistence can redeliver a message. Wake pages and HTTP response bodies are bounded. Stdout stays machine-readable; connection transitions go to stderr. This is a durable wait loop for a process you already launched—not VS Code UI injection or proof that the provider acted on a wake.
+The client is provider-neutral: a seat can be backed by any process able to run the staged Node CLI. It discovers `.ai-bus/runtime/harness/endpoint.json`, requires a token whose embedded principal matches `--seat`, and sends identity-bound tools to the loopback harness. Its parser rejects unknown, duplicate, and valueless options, including ambiguous release commands. Mutating requests get UUIDs automatically; supply one stable `--request-id` only when retrying the exact same uncertain operation. Capability calls accept `--timeout-ms`, and the HTTP deadline is kept longer than the requested capability run.
+
+`watch` persists its successful-delivery `afterSeq` cursor outside the repository, keys it to the logical client and mailbox epoch, suppresses unchanged unread mail, rediscovers rotated endpoints and credentials, and reconnects with bounded exponential jitter. Delivery is intentionally **at least once**: consumers must make side effects idempotent because a crash after the effect but before cursor persistence can redeliver a message. Wake pages and HTTP response bodies are bounded. Stdout stays machine-readable; connection transitions go to stderr. This is a durable wait loop for a process you already launched—not VS Code UI injection or proof that the provider acted on a wake.
 
 See `OPERATOR.md` for recovery and threat-model notes. Design lineage: `docs/PROVENANCE.md`.
 
@@ -174,6 +189,7 @@ Command: **Portable AI Bus: Run Language Model Worker** (`portableAiBus.runLangu
 | `instructionsFile` | Staged human guide path |
 | `commandReference` | In-settings command cheat sheet |
 | `providers` | Force provider ids |
+| `workflow.plannerSeat` / `workflow.implementerSeat` / `workflow.reviewerSeat` | Assign workflow roles to arbitrary seat IDs |
 | `stageTasksJson` / `stageCompatibilityWrappers` | Optional staging |
 | `showStatusBar` / `autoInitializeOnOpen` | UX |
 | `languageModelWorker.*` | enabled, vendor, modelId, maxTurns, allowedTools |

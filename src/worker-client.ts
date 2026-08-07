@@ -43,6 +43,7 @@ export type WorkerClientOptions = {
   reconnectMaxMs?: number;
   cursorPath?: string;
   persistCursor?: boolean;
+  requestTimeoutMs?: number;
 };
 
 export type WakeResult = {
@@ -67,6 +68,12 @@ export type WorkerClientRuntime = {
   transition?: (event: WorkerTransition) => void;
 };
 
+export type SeatToolResult = {
+  instanceId: string;
+  requestId: string;
+  result: unknown;
+};
+
 const DEFAULT_TIMEOUT_MS = 25_000;
 const DEFAULT_RENEWAL_MS = 20_000;
 const DEFAULT_RECONNECT_MIN_MS = 250;
@@ -74,6 +81,7 @@ const DEFAULT_RECONNECT_MAX_MS = 10_000;
 const DUPLICATE_WAKE_DELAY_MS = 100;
 const RELEASE_TIMEOUT_MS = 500;
 const CONTROL_REQUEST_TIMEOUT_MS = 10_000;
+const MAX_TOOL_REQUEST_TIMEOUT_MS = 24 * 60 * 60_000 + 60_000;
 const WAKE_TIMEOUT_GRACE_MS = 5_000;
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 
@@ -213,6 +221,29 @@ export async function watchMailbox(
   }
 }
 
+/** Invoke one harness tool as the authenticated seat discovered for this workspace. */
+export async function callSeatTool(
+  options: WorkerClientOptions,
+  name: string,
+  input: Record<string, unknown> = {},
+  requestId: string = randomUUID(),
+  runtime: WorkerClientRuntime = {}
+): Promise<SeatToolResult> {
+  validateSeatOptions(options);
+  if (!/^[a-zA-Z0-9_.-]{1,100}$/.test(name)) throw new Error('Invalid harness tool name.');
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,99}$/.test(requestId)) throw new Error('Invalid requestId.');
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Harness tool input must be a JSON object.');
+  const connection = await discoverConnection(options);
+  const value = await requestJson(connection, '/v1/tool', {
+    method: 'POST',
+    body: JSON.stringify({ requestId, name, input }),
+    signal: options.signal
+  }, runtime, bounded(options.requestTimeoutMs ?? CONTROL_REQUEST_TIMEOUT_MS, 100, MAX_TOOL_REQUEST_TIMEOUT_MS, 'requestTimeoutMs'));
+  assertInstance(value, connection);
+  if (value.requestId !== requestId) throw new Error('Harness response requestId does not match the request.');
+  return { instanceId: connection.instanceId, requestId, result: value.result };
+}
+
 async function discoverConnection(options: WorkerClientOptions): Promise<Connection> {
   throwIfAborted(options.signal);
   const root = path.resolve(options.root);
@@ -228,6 +259,8 @@ async function discoverConnection(options: WorkerClientOptions): Promise<Connect
   const tokenPath = path.join(credentialsRoot, endpoint.instanceId, 'seats', `${options.seat}.token`);
   const token = (await fs.readFile(tokenPath, 'utf8')).trim();
   if (!/^pab1\.[a-zA-Z0-9_.-]+\.[A-Za-z0-9_-]{40,}$/.test(token)) throw new Error('Worker seat credential is malformed.');
+  const principal = token.slice('pab1.'.length, token.lastIndexOf('.'));
+  if (principal !== options.seat) throw new Error('Worker seat credential principal does not match the requested seat.');
   throwIfAborted(options.signal);
   return { ...endpoint, baseUrl: `http://${endpoint.host}:${endpoint.port}`, token };
 }
@@ -430,9 +463,9 @@ class HarnessRequestError extends Error {
 
 async function runCli(argv = process.argv.slice(2)) {
   const command = argv[0];
-  if (command !== 'wait' && command !== 'watch') {
-    throw new Error('Usage: worker-client <wait|watch> --root PATH --seat AGENT [--timeout-ms N] [--credentials-dir PATH] [--client-id ID]');
-  }
+  const commands = new Set(['wait', 'watch', 'status', 'inbox', 'read', 'send', 'claim', 'release', 'complete-step', 'capabilities', 'run', 'tool']);
+  if (!command || !commands.has(command)) throw new Error(cliUsage());
+  validateCliArguments(command, argv.slice(1));
   const controller = new AbortController();
   const stop = () => controller.abort();
   process.once('SIGINT', stop);
@@ -450,17 +483,104 @@ async function runCli(argv = process.argv.slice(2)) {
       await writeLine(process.stdout, `${JSON.stringify(await waitForMailbox(options))}\n`);
       return;
     }
-    const logTransition = transitionLogger(process.stderr);
-    await watchMailbox(options, (result) => writeLine(process.stdout, `${JSON.stringify(result)}\n`), { transition: logTransition });
+    if (command === 'watch') {
+      const logTransition = transitionLogger(process.stderr);
+      await watchMailbox(options, (result) => writeLine(process.stdout, `${JSON.stringify(result)}\n`), { transition: logTransition });
+      return;
+    }
+    const invocation = seatToolInvocation(command, argv, options.seat);
+    const explicitRequestTimeout = option(argv, '--request-timeout-ms');
+    if (explicitRequestTimeout !== undefined) {
+      options.requestTimeoutMs = positiveInteger(explicitRequestTimeout, '--request-timeout-ms', MAX_TOOL_REQUEST_TIMEOUT_MS);
+    } else if (command === 'run') {
+      const capabilityTimeout = option(argv, '--timeout-ms');
+      options.requestTimeoutMs = (capabilityTimeout === undefined
+        ? 24 * 60 * 60_000
+        : positiveInteger(capabilityTimeout, '--timeout-ms', 24 * 60 * 60_000)) + 10_000;
+    }
+    const result = await callSeatTool(options, invocation.name, invocation.input, option(argv, '--request-id'));
+    await writeLine(process.stdout, `${JSON.stringify(result)}\n`);
   } finally {
     process.removeListener('SIGINT', stop);
     process.removeListener('SIGTERM', stop);
   }
 }
 
+function seatToolInvocation(command: string, argv: string[], seat: string) {
+  switch (command) {
+    case 'status':
+      return { name: 'mailbox_status', input: {} };
+    case 'inbox':
+      return { name: 'mailbox_inbox', input: { agent: seat, all: flag(argv, '--all'), afterSeq: integerOption(argv, '--after-seq', 0) } };
+    case 'read':
+      return { name: 'mailbox_read', input: { agent: seat, all: flag(argv, '--all') } };
+    case 'send':
+      return {
+        name: 'mailbox_send',
+        input: {
+          from: seat,
+          to: requiredOption(argv, '--to'),
+          kind: option(argv, '--kind') ?? 'note',
+          subject: requiredOption(argv, '--subject'),
+          body: requiredOption(argv, '--body')
+        }
+      };
+    case 'claim':
+      return { name: 'mailbox_claim', input: { agent: seat, paths: csvOption(argv, '--paths'), why: option(argv, '--why') } };
+    case 'release': {
+      const paths = option(argv, '--paths');
+      return { name: 'mailbox_release', input: { agent: seat, ...(paths === undefined ? {} : { paths: csv(paths, '--paths') }) } };
+    }
+    case 'complete-step':
+      return {
+        name: 'mailbox_complete_step',
+        input: { agent: seat, summary: requiredOption(argv, '--summary'), evidence: optionalCsvOption(argv, '--evidence') }
+      };
+    case 'capabilities':
+      return { name: 'capability_list', input: {} };
+    case 'run':
+      return {
+        name: 'capability_run',
+        input: {
+          id: requiredOption(argv, '--capability'),
+          ...(option(argv, '--timeout-ms') === undefined
+            ? {}
+            : { timeoutMs: positiveInteger(requiredOption(argv, '--timeout-ms'), '--timeout-ms', 24 * 60 * 60_000) })
+        }
+      };
+    case 'tool':
+      return { name: requiredOption(argv, '--name'), input: jsonObjectOption(argv, '--input-json') };
+    default:
+      throw new Error(cliUsage());
+  }
+}
+
+function cliUsage() {
+  return [
+    'Usage: worker-client <command> --root PATH --seat AGENT [options]',
+    'Commands:',
+    '  wait|watch [--timeout-ms N] [--client-id ID]',
+    '  status',
+    '  inbox [--all] [--after-seq N]',
+    '  read [--all]',
+    '  send --to AGENT --subject TEXT --body TEXT [--kind KIND]',
+    '  claim --paths PATH[,PATH...] [--why TEXT]',
+    '  release [--paths PATH[,PATH...]]',
+    '  complete-step --summary TEXT [--evidence ITEM[,ITEM...]]',
+    '  capabilities',
+    '  run --capability ID [--timeout-ms N]',
+    '  tool --name TOOL [--input-json JSON]',
+    'Common tool options: [--credentials-dir PATH] [--request-id ID] [--request-timeout-ms N]'
+  ].join('\n');
+}
+
 function validateOptions(options: WorkerClientOptions) {
-  if (!/^[a-zA-Z0-9_.-]+$/.test(options.seat)) throw new Error('Invalid worker seat id.');
+  validateSeatOptions(options);
   requestedTimeout(options);
+}
+
+function validateSeatOptions(options: WorkerClientOptions) {
+  if (!/^[a-zA-Z0-9_.-]+$/.test(options.seat)) throw new Error('Invalid worker seat id.');
   if (options.clientId !== undefined) clientIdentity(options.clientId, options.seat);
 }
 
@@ -491,6 +611,85 @@ function requiredOption(argv: string[], name: string) {
   const value = option(argv, name);
   if (!value) throw new Error(`Missing ${name}.`);
   return value;
+}
+
+function flag(argv: string[], name: string) {
+  return argv.includes(name);
+}
+
+function integerOption(argv: string[], name: string, fallback: number) {
+  const raw = option(argv, name);
+  if (raw === undefined) return fallback;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 0) throw new Error(`${name} must be a non-negative integer.`);
+  return value;
+}
+
+function positiveInteger(raw: string, name: string, maximum: number) {
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 100 || value > maximum) throw new Error(`${name} must be 100..${maximum}.`);
+  return value;
+}
+
+function validateCliArguments(command: string, args: string[]) {
+  const valueOptions = new Set(['--root', '--seat', '--credentials-dir']);
+  const flags = new Set<string>();
+  if (command === 'wait' || command === 'watch') {
+    valueOptions.add('--timeout-ms');
+    valueOptions.add('--client-id');
+  } else {
+    valueOptions.add('--request-id');
+    valueOptions.add('--request-timeout-ms');
+  }
+  const commandValues: Record<string, string[]> = {
+    status: [],
+    inbox: ['--after-seq'],
+    read: [],
+    send: ['--to', '--kind', '--subject', '--body'],
+    claim: ['--paths', '--why'],
+    release: ['--paths'],
+    'complete-step': ['--summary', '--evidence'],
+    capabilities: [],
+    run: ['--capability', '--timeout-ms'],
+    tool: ['--name', '--input-json']
+  };
+  for (const name of commandValues[command] ?? []) valueOptions.add(name);
+  if (command === 'inbox' || command === 'read') flags.add('--all');
+  const seen = new Set<string>();
+  for (let index = 0; index < args.length; index += 1) {
+    const token = args[index];
+    if (!token.startsWith('--')) throw new Error(`Unexpected positional argument: ${token}`);
+    if (seen.has(token)) throw new Error(`Duplicate option: ${token}`);
+    seen.add(token);
+    if (flags.has(token)) continue;
+    if (!valueOptions.has(token)) throw new Error(`Unknown option for ${command}: ${token}`);
+    const value = args[index + 1];
+    if (value === undefined || value.startsWith('--')) throw new Error(`Missing value for ${token}.`);
+    index += 1;
+  }
+}
+
+function csvOption(argv: string[], name: string) {
+  return csv(requiredOption(argv, name), name);
+}
+
+function optionalCsvOption(argv: string[], name: string) {
+  const value = option(argv, name);
+  return value === undefined ? [] : csv(value, name);
+}
+
+function csv(value: string, name: string) {
+  const items = value.split(',').map((item) => item.trim()).filter(Boolean);
+  if (items.length === 0) throw new Error(`${name} must contain at least one value.`);
+  return items;
+}
+
+function jsonObjectOption(argv: string[], name: string) {
+  const raw = option(argv, name);
+  if (raw === undefined) return {};
+  const value = JSON.parse(raw) as unknown;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${name} must be a JSON object.`);
+  return value as Record<string, unknown>;
 }
 
 function bounded(value: number, minimum: number, maximum: number, name: string) {
@@ -618,7 +817,6 @@ function writeLine(stream: NodeJS.WritableStream, value: string) {
 
 if (require.main === module) {
   runCli().catch((error) => {
-    if (error instanceof Error && error.name === 'AbortError') return;
     process.stderr.write(`${JSON.stringify({ event: 'fatal', message: boundedMessage(error) })}\n`);
     process.exitCode = 1;
   });

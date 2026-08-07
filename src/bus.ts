@@ -1,19 +1,28 @@
 import * as vscode from 'vscode';
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import * as fs from 'node:fs/promises';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { MailboxStore } from './mailbox';
+import { credentialWorkspaceKey } from './workspace-key';
 
 export const PHASES = [
   'PLANNING',
-  'READY_FOR_CODEX',
-  'CODEX_IN_PROGRESS',
+  'READY_FOR_IMPLEMENTATION',
+  'IMPLEMENTATION_IN_PROGRESS',
   'READY_FOR_REVIEW',
-  'CLAUDE_REVIEW_IN_PROGRESS',
+  'REVIEW_IN_PROGRESS',
   'READY_FOR_FIXES',
   'DONE'
 ] as const;
 
 export type Phase = (typeof PHASES)[number];
+
+const LEGACY_PHASE_ALIASES: Record<string, Phase> = {
+  READY_FOR_CODEX: 'READY_FOR_IMPLEMENTATION',
+  CODEX_IN_PROGRESS: 'IMPLEMENTATION_IN_PROGRESS',
+  CLAUDE_REVIEW_IN_PROGRESS: 'REVIEW_IN_PROGRESS'
+};
 
 type ProviderRecord = {
   id: string;
@@ -28,14 +37,25 @@ type ProvidersConfig = {
 };
 
 type Manifest = {
+  schemaVersion?: 1 | 2;
   installedAt: string;
   installedFiles: string[];
+  managedFiles?: Record<string, string>;
   providers: string[];
 };
 
 type SuspendMarker = {
   suspendedAt: string;
   installedFiles: string[];
+};
+
+type OwnershipLedger = {
+  schemaVersion: 1;
+  workspaceKey: string;
+  managedFiles: Record<string, string>;
+  suspendedFiles?: string[];
+  pendingInstall?: { relativePath: string; previousHash?: string; nextHash: string };
+  mac: string;
 };
 
 export type BusStatus = {
@@ -83,15 +103,17 @@ const COMPATIBILITY_WRAPPERS = [
 
 const BASE_EXCLUDE_ENTRIES = [
   '.ai-bus/',
-  'AGENTS.md',
-  'CLAUDE.md',
-  'docs/ai-status.md',
-  'docs/ai-plan.md',
-  'docs/ai-handoff.md',
-  'docs/ai-review.md',
-  'docs/ai-automation.md',
   'tmp/ai-prompts/'
 ];
+
+const ALLOWED_OVERLAY_DESTINATIONS = new Set([
+  ...SHARED_TEMPLATE_MAP,
+  ...COMPATIBILITY_WRAPPERS,
+  { source: '', destination: 'AGENTS.md' },
+  { source: '', destination: 'CLAUDE.md' },
+  { source: '', destination: 'GROK.md' },
+  { source: '', destination: '.vscode/tasks.json' }
+].map((entry) => entry.destination.replace(/\\/g, '/')));
 
 const EXCLUDE_BLOCK_START = '# BEGIN AI_BUS_LOCAL';
 const EXCLUDE_BLOCK_END = '# END AI_BUS_LOCAL';
@@ -115,7 +137,10 @@ export class WorkspaceBus {
       stageTasksJson: config.get<boolean>('stageTasksJson', false),
       stageCompatibilityWrappers: config.get<boolean>('stageCompatibilityWrappers', false),
       autoInitializeOnOpen: config.get<boolean>('autoInitializeOnOpen', false),
-      showStatusBar: config.get<boolean>('showStatusBar', true)
+      showStatusBar: config.get<boolean>('showStatusBar', true),
+      plannerSeat: this.configuredSeat(config.get<string>('workflow.plannerSeat', 'claude'), 'workflow.plannerSeat'),
+      implementerSeat: this.configuredSeat(config.get<string>('workflow.implementerSeat', 'codex'), 'workflow.implementerSeat'),
+      reviewerSeat: this.configuredSeat(config.get<string>('workflow.reviewerSeat', 'claude'), 'workflow.reviewerSeat')
     };
   }
 
@@ -141,19 +166,27 @@ export class WorkspaceBus {
   }
 
   async initializeWorkspace(root: string, options?: { task?: string; goal?: string; validation?: string }) {
-    await this.stageBundle(root);
-    await this.installOverlay(root);
-    if (options?.task) {
-      await this.initTask(root, options);
-    }
-    return this.getStatus(root);
+    return this.withOverlayLock(root, async () => {
+      await this.installOverlayUnlocked(root);
+      if (options?.task) await this.initTaskUnlocked(root, options);
+      return this.getStatus(root);
+    });
   }
 
   async installOverlay(root: string): Promise<Manifest> {
+    return this.withOverlayLock(root, () => this.installOverlayUnlocked(root));
+  }
+
+  private async installOverlayUnlocked(root: string): Promise<Manifest> {
     const paths = this.getPaths(root);
     await this.stageBundle(root);
+    const previousOwnership = await this.reconcilePendingInstall(root, await this.readOwnershipLedger(root));
+    if (previousOwnership?.suspendedFiles) {
+      throw new Error('Resume or remove the suspended overlay before reinitializing it.');
+    }
     await fs.mkdir(paths.busDir, { recursive: true });
     const capabilitiesPath = path.join(paths.busDir, 'capabilities.json');
+    await this.assertContainedPath(root, capabilitiesPath, 'workspace capability configuration');
     if (!(await this.exists(capabilitiesPath))) {
       await fs.copyFile(path.join(paths.busDir, 'templates', 'capabilities.json'), capabilitiesPath);
     }
@@ -168,38 +201,91 @@ export class WorkspaceBus {
       templateMap.push(...COMPATIBILITY_WRAPPERS);
     }
 
-    const installedFiles: string[] = [];
+    const managedFiles: Record<string, string> = { ...(previousOwnership?.managedFiles ?? {}) };
+    const installedFiles: string[] = this.trustedOwnedFiles(managedFiles);
     for (const entry of templateMap) {
+      const relative = entry.destination.replace(/\\/g, '/');
       const destination = path.join(root, entry.destination);
-      await this.copyIfMissingOrManaged(paths.busDir, entry.source, destination);
-      installedFiles.push(entry.destination.replace(/\\/g, '/'));
+      const templateHash = await this.copyOwnedOverlay(
+        paths.busDir,
+        entry.source,
+        destination,
+        managedFiles[relative],
+        async (nextHash) => {
+          const previousHash = managedFiles[relative];
+          await this.writeOwnershipLedger(root, {
+            managedFiles,
+            pendingInstall: { relativePath: relative, ...(previousHash ? { previousHash } : {}), nextHash }
+          });
+        }
+      );
+      if (templateHash) {
+        installedFiles.push(relative);
+        managedFiles[relative] = templateHash;
+        await this.writeOwnershipLedger(root, { managedFiles });
+      }
     }
 
     if (settings.stageTasksJson) {
       const tasksPath = path.join(root, '.vscode', 'tasks.json');
-      const tasksTemplate = path.join(paths.busDir, 'templates', '.vscode', 'tasks.json');
-      if (!(await this.exists(tasksPath))) {
-        await fs.mkdir(path.dirname(tasksPath), { recursive: true });
-        await fs.copyFile(tasksTemplate, tasksPath);
-        installedFiles.push('.vscode/tasks.json');
+      const relative = '.vscode/tasks.json';
+      const templateHash = await this.copyOwnedOverlay(
+        paths.busDir,
+        '.vscode/tasks.json',
+        tasksPath,
+        managedFiles[relative],
+        async (nextHash) => {
+          const previousHash = managedFiles[relative];
+          await this.writeOwnershipLedger(root, {
+            managedFiles,
+            pendingInstall: { relativePath: relative, ...(previousHash ? { previousHash } : {}), nextHash }
+          });
+        }
+      );
+      if (templateHash) {
+        installedFiles.push(relative);
+        managedFiles[relative] = templateHash;
+        await this.writeOwnershipLedger(root, { managedFiles });
       }
     }
 
     await this.updateExcludeFile(paths, [...BASE_EXCLUDE_ENTRIES, ...installedFiles]);
 
     const manifest: Manifest = {
+      schemaVersion: 2,
       installedAt: new Date().toISOString(),
       installedFiles: Array.from(new Set(installedFiles)).sort(),
+      managedFiles,
       providers: selectedProviders.map((provider) => provider.id)
     };
 
+    const workflowPath = path.join(paths.busDir, 'workflow.json');
+    await this.assertContainedPath(root, workflowPath, 'workspace workflow configuration');
+    await this.assertContainedPath(root, paths.manifestPath, 'workspace install manifest');
+    await this.writeJson(workflowPath, {
+      schemaVersion: 1,
+      roles: {
+        planner: settings.plannerSeat,
+        implementer: settings.implementerSeat,
+        reviewer: settings.reviewerSeat
+      }
+    });
     await this.writeJson(paths.manifestPath, manifest);
-    await new MailboxStore(root).ensureInitialized(selectedProviders.map((provider) => provider.id));
+    await this.writeOwnershipLedger(root, { managedFiles });
+    const assignedSeats = [settings.plannerSeat, settings.implementerSeat, settings.reviewerSeat];
+    await new MailboxStore(root).ensureInitialized(Array.from(new Set([
+      ...selectedProviders.map((provider) => provider.id),
+      ...assignedSeats
+    ])));
     await this.ensurePromptArtifacts(root);
     return manifest;
   }
 
   async initTask(root: string, options: { task?: string; goal?: string; validation?: string }) {
+    return this.withOverlayLock(root, () => this.initTaskUnlocked(root, options));
+  }
+
+  private async initTaskUnlocked(root: string, options: { task?: string; goal?: string; validation?: string }) {
     const paths = this.getPaths(root);
     await this.ensureActive(root);
 
@@ -238,7 +324,7 @@ export class WorkspaceBus {
     await this.writeFile(
       paths.handoffPath,
       [
-        '# AI Handoff for Codex',
+        '# AI Handoff',
         '',
         '## Task',
         task,
@@ -298,13 +384,26 @@ export class WorkspaceBus {
     await this.ensureActive(root);
     const markdown = await this.readFile(paths.statusPath);
     const status = this.parseStatus(markdown);
-    if (!PHASES.includes(status.phase)) {
-      throw new Error(`Invalid phase: ${status.phase}`);
-    }
     return status;
   }
 
   async setPhase(
+    root: string,
+    phase: Phase,
+    options?: {
+      actor?: string;
+      task?: string;
+      summary?: string;
+      tests?: string;
+      files?: string;
+      result?: string;
+      next?: string;
+    }
+  ) {
+    return this.withOverlayLock(root, () => this.setPhaseUnlocked(root, phase, options));
+  }
+
+  private async setPhaseUnlocked(
     root: string,
     phase: Phase,
     options?: {
@@ -353,82 +452,139 @@ export class WorkspaceBus {
   }
 
   async getPrompt(root: string, phase?: Phase): Promise<string> {
-    const effectivePhase = phase ?? (await this.getStatus(root)).phase;
-    await this.writePromptArtifacts(root, effectivePhase);
-    return this.buildPrompt(effectivePhase);
+    return this.withOverlayLock(root, async () => {
+      await this.ensureActive(root);
+      const effectivePhase = phase ?? (await this.getStatus(root)).phase;
+      await this.writePromptArtifacts(root, effectivePhase);
+      return this.buildPrompt(effectivePhase);
+    });
   }
 
   async suspend(root: string) {
+    return this.withOverlayLock(root, () => this.suspendUnlocked(root));
+  }
+
+  private async suspendUnlocked(root: string) {
     const paths = this.getPaths(root);
     await this.ensureActive(root);
-    const manifest = await this.readManifest(paths.manifestPath);
-
-    await fs.rm(paths.suspendedOverlayDir, { recursive: true, force: true });
-    await fs.mkdir(paths.suspendedOverlayDir, { recursive: true });
-
-    for (const relativePath of manifest.installedFiles) {
+    await this.readManifest(paths.manifestPath);
+    const ownership = await this.requireOwnershipLedger(root);
+    if (ownership.suspendedFiles) throw new Error('Portable AI Bus ownership state is already suspended.');
+    const ownedFiles = this.trustedOwnedFiles(ownership.managedFiles);
+    const presentFiles: string[] = [];
+    for (const relativePath of ownedFiles) {
       const sourcePath = path.join(root, relativePath);
+      await this.assertContainedPath(root, sourcePath, `overlay path ${relativePath}`);
       if (!(await this.exists(sourcePath))) {
         continue;
       }
-      const backupPath = path.join(paths.suspendedOverlayDir, relativePath);
-      await fs.mkdir(path.dirname(backupPath), { recursive: true });
-      await fs.copyFile(sourcePath, backupPath);
-      await fs.rm(sourcePath, { force: true, recursive: true });
+      const sourceStat = await fs.lstat(sourcePath);
+      if (!sourceStat.isFile() || sourceStat.isSymbolicLink()) {
+        throw new Error(`Refusing to suspend non-file or symbolic-link overlay path: ${relativePath}`);
+      }
+      presentFiles.push(relativePath);
     }
 
+    await this.assertContainedPath(root, paths.suspendedOverlayDir, 'suspended overlay directory');
+    await fs.rm(paths.suspendedOverlayDir, { recursive: true, force: true });
+    await fs.mkdir(paths.suspendedOverlayDir, { recursive: true });
+    await this.assertContainedPath(root, paths.suspendedOverlayDir, 'suspended overlay directory');
+
+    await this.writeOwnershipLedger(root, { managedFiles: ownership.managedFiles, suspendedFiles: presentFiles });
     await this.writeJson(paths.suspendedMarkerPath, {
       suspendedAt: this.nowIso(),
-      installedFiles: manifest.installedFiles
+      installedFiles: presentFiles
     } satisfies SuspendMarker);
+
+    for (const relativePath of presentFiles) {
+      const sourcePath = path.join(root, relativePath);
+      const backupPath = path.join(paths.suspendedOverlayDir, relativePath);
+      await this.assertContainedPath(root, backupPath, `suspended overlay path ${relativePath}`);
+      await fs.mkdir(path.dirname(backupPath), { recursive: true });
+      await fs.rename(sourcePath, backupPath);
+    }
+
   }
 
   async resume(root: string) {
+    return this.withOverlayLock(root, () => this.resumeUnlocked(root));
+  }
+
+  private async resumeUnlocked(root: string) {
     const paths = this.getPaths(root);
-    if (!(await this.exists(paths.suspendedMarkerPath))) {
+    const [markerExists, ownership] = await Promise.all([
+      this.exists(paths.suspendedMarkerPath),
+      this.requireOwnershipLedger(root)
+    ]);
+    if (!ownership.suspendedFiles && !markerExists) {
       throw new Error('Portable AI Bus is not suspended in this workspace.');
     }
-
-    const marker = await this.readJson<SuspendMarker>(paths.suspendedMarkerPath);
-    for (const relativePath of marker.installedFiles) {
-      const backupPath = path.join(paths.suspendedOverlayDir, relativePath);
-      if (!(await this.exists(backupPath))) {
-        continue;
-      }
-      const destinationPath = path.join(root, relativePath);
-      await fs.mkdir(path.dirname(destinationPath), { recursive: true });
-      await fs.copyFile(backupPath, destinationPath);
+    if (!ownership.suspendedFiles) {
+      await fs.rm(paths.suspendedOverlayDir, { recursive: true, force: true });
+      await fs.rm(paths.suspendedMarkerPath, { force: true });
+      await this.ensurePromptArtifacts(root);
+      return;
     }
+    const restoreFiles = this.trustedOwnedFiles(ownership.managedFiles, ownership.suspendedFiles ?? []);
+    if (markerExists) {
+      const marker = await this.readJson<SuspendMarker>(paths.suspendedMarkerPath);
+      if (!Array.isArray(marker.installedFiles) || !this.sameStringSet(marker.installedFiles, restoreFiles)) {
+        throw new Error('Suspended overlay marker does not match the external ownership ledger.');
+      }
+    }
+    await this.restoreSuspendedOverlay(root, restoreFiles);
 
+    await this.writeOwnershipLedger(root, { managedFiles: ownership.managedFiles });
     await fs.rm(paths.suspendedOverlayDir, { recursive: true, force: true });
     await fs.rm(paths.suspendedMarkerPath, { force: true });
     await this.ensurePromptArtifacts(root);
   }
 
   async remove(root: string) {
-    const paths = this.getPaths(root);
-    const manifest = (await this.exists(paths.manifestPath))
-      ? await this.readManifest(paths.manifestPath)
-      : { installedAt: '', installedFiles: [], providers: [] };
+    return this.withOverlayLock(root, () => this.removeUnlocked(root));
+  }
 
-    for (const relativePath of manifest.installedFiles) {
+  private async removeUnlocked(root: string) {
+    const paths = this.getPaths(root);
+    const ownership = await this.readOwnershipLedger(root);
+    if (ownership?.suspendedFiles) {
+      const restoreFiles = this.trustedOwnedFiles(ownership.managedFiles, ownership.suspendedFiles);
+      await this.restoreSuspendedOverlay(root, restoreFiles);
+      await this.writeOwnershipLedger(root, { managedFiles: ownership.managedFiles });
+      await fs.rm(paths.suspendedOverlayDir, { recursive: true, force: true });
+      await fs.rm(paths.suspendedMarkerPath, { force: true });
+    }
+
+    for (const relativePath of this.trustedOwnedFiles(ownership?.managedFiles ?? {})) {
       const targetPath = path.join(root, relativePath);
-      if (await this.exists(targetPath)) {
+      await this.assertContainedPath(root, targetPath, `overlay path ${relativePath}`);
+      const expectedHash = ownership?.managedFiles[relativePath];
+      if (await this.exists(targetPath) && expectedHash && await this.fileHash(targetPath) === expectedHash) {
         await fs.rm(targetPath, { force: true, recursive: true });
       }
     }
 
+    await this.assertContainedPath(root, path.join(root, 'tmp', 'ai-prompts'), 'prompt artifact directory');
+    await this.assertContainedPath(root, paths.busDir, 'workspace bus directory');
     await fs.rm(path.join(root, 'tmp', 'ai-prompts'), { recursive: true, force: true });
     await fs.rm(paths.busDir, { recursive: true, force: true });
-    await this.clearExcludeFile(paths.excludePath);
+    await this.clearExcludeFile(paths);
+    await fs.rm(this.ownershipLedgerPath(root), { force: true });
   }
 
   async isInitialized(root: string): Promise<boolean> {
-    return this.exists(this.getPaths(root).busDir);
+    const paths = this.getPaths(root);
+    return (await this.exists(paths.manifestPath)) &&
+      (await this.exists(path.join(paths.busDir, 'bin', 'mailbox.js'))) &&
+      (await this.exists(path.join(paths.busDir, 'providers', 'providers.json')));
   }
 
   async isSuspended(root: string): Promise<boolean> {
-    return this.exists(this.getPaths(root).suspendedMarkerPath);
+    const [marker, ownership] = await Promise.all([
+      this.exists(this.getPaths(root).suspendedMarkerPath),
+      this.readOwnershipLedger(root)
+    ]);
+    return marker || ownership?.suspendedFiles !== undefined;
   }
 
   renderStatus(status: BusStatus): string {
@@ -456,7 +612,9 @@ export class WorkspaceBus {
 
   private async stageBundle(root: string) {
     const paths = this.getPaths(root);
+    await this.assertContainedPath(root, paths.busDir, 'workspace bus directory');
     await fs.mkdir(paths.busDir, { recursive: true });
+    await this.assertContainedPath(root, paths.busDir, 'workspace bus directory');
 
     const copies = [
       { from: 'bin', to: path.join(paths.busDir, 'bin') },
@@ -475,13 +633,20 @@ export class WorkspaceBus {
     ];
 
     for (const entry of copies) {
-      await this.copyFromExtension(entry.from, entry.to);
+      await this.copyFromExtension(root, entry.from, entry.to);
     }
   }
 
   private async ensureActive(root: string) {
     const paths = this.getPaths(root);
-    if (await this.exists(paths.suspendedMarkerPath)) {
+    for (const candidate of [paths.statusPath, paths.planPath, paths.handoffPath, paths.reviewPath, paths.promptDir]) {
+      await this.assertContainedPath(root, candidate, `workflow path ${path.relative(root, candidate)}`);
+    }
+    const [marker, ownership] = await Promise.all([
+      this.exists(paths.suspendedMarkerPath),
+      this.readOwnershipLedger(root)
+    ]);
+    if (marker || ownership?.suspendedFiles !== undefined) {
       throw new Error('Portable AI Bus is suspended. Resume it before using workflow actions.');
     }
     await this.requireFiles(root, [paths.statusPath, paths.planPath, paths.handoffPath, paths.reviewPath]);
@@ -504,26 +669,313 @@ export class WorkspaceBus {
     await this.writeFile(path.join(paths.promptDir, 'current.txt'), prompt);
   }
 
-  private async copyIfMissingOrManaged(busDir: string, sourceRelative: string, destinationPath: string) {
+  private async copyOwnedOverlay(
+    busDir: string,
+    sourceRelative: string,
+    destinationPath: string,
+    previousTemplateHash?: string,
+    beforeCopy?: (nextHash: string) => Promise<void>
+  ): Promise<string | undefined> {
     const sourcePath = path.join(busDir, 'templates', sourceRelative);
+    const root = path.dirname(busDir);
+    await this.assertContainedPath(root, destinationPath, `overlay destination ${path.relative(root, destinationPath)}`);
     await fs.mkdir(path.dirname(destinationPath), { recursive: true });
+    await this.assertContainedPath(root, destinationPath, `overlay destination ${path.relative(root, destinationPath)}`);
+    const sourceHash = await this.fileHash(sourcePath);
     if (!(await this.exists(destinationPath))) {
-      await fs.copyFile(sourcePath, destinationPath);
-      return;
+      await beforeCopy?.(sourceHash);
+      await this.atomicCopyFile(sourcePath, destinationPath);
+      return sourceHash;
     }
 
-    const [sourceContent, destinationContent] = await Promise.all([
-      this.readFile(sourcePath),
-      this.readFile(destinationPath)
-    ]);
-
-    if (destinationContent === sourceContent) {
-      return;
+    if (!previousTemplateHash) return undefined;
+    if (!/^[a-f0-9]{64}$/.test(previousTemplateHash)) return undefined;
+    const destinationStat = await fs.lstat(destinationPath);
+    if (!destinationStat.isFile() || destinationStat.isSymbolicLink()) {
+      throw new Error(`Refusing to update non-file or symbolic-link overlay path: ${destinationPath}`);
     }
+    const destinationHash = await this.fileHash(destinationPath);
+    if (destinationHash === previousTemplateHash) {
+      await beforeCopy?.(sourceHash);
+      await this.atomicCopyFile(sourcePath, destinationPath);
+      return sourceHash;
+    }
+    return previousTemplateHash;
+  }
 
-    const managedTargets = new Set(['AGENTS.md', 'CLAUDE.md']);
-    if (managedTargets.has(path.basename(destinationPath))) {
-      await fs.copyFile(sourcePath, destinationPath);
+  private trustedOwnedFiles(managedFiles: Record<string, string>, candidates = Object.keys(managedFiles)) {
+    if (!managedFiles || typeof managedFiles !== 'object' || Array.isArray(managedFiles) || !Array.isArray(candidates)) return [];
+    return Array.from(new Set(candidates.filter((relativePath) =>
+      typeof relativePath === 'string' &&
+      ALLOWED_OVERLAY_DESTINATIONS.has(relativePath) &&
+      /^[a-f0-9]{64}$/.test(managedFiles[relativePath] ?? '')
+    )));
+  }
+
+  private ownershipLedgerPath(root: string) {
+    return path.join(this.ownershipDirectory(), `${credentialWorkspaceKey(root)}.json`);
+  }
+
+  private ownershipDirectory() {
+    return path.join(os.homedir(), '.portable-ai-bus', 'ownership');
+  }
+
+  private ownershipKeyPath() {
+    return path.join(this.ownershipDirectory(), 'ledger.key');
+  }
+
+  private overlayLockPath(root: string) {
+    return path.join(this.ownershipDirectory(), `${credentialWorkspaceKey(root)}.lock`);
+  }
+
+  private async withOverlayLock<T>(root: string, operation: () => Promise<T>): Promise<T> {
+    const lockPath = this.overlayLockPath(root);
+    await this.assertContainedPath(os.homedir(), lockPath, 'external overlay lock');
+    await fs.mkdir(path.dirname(lockPath), { recursive: true, mode: 0o700 });
+    await this.assertContainedPath(os.homedir(), lockPath, 'external overlay lock');
+    const token = randomUUID();
+    const candidate = `${lockPath}.${process.pid}.${token}.candidate`;
+    await fs.mkdir(candidate, { mode: 0o700 });
+    await fs.writeFile(path.join(candidate, 'owner.json'), `${JSON.stringify({ pid: process.pid, token, acquiredAt: this.nowIso() })}\n`, { mode: 0o600 });
+    let acquired = false;
+    try {
+      for (let attempt = 0; attempt < 4 && !acquired; attempt += 1) {
+        try {
+          await fs.rename(candidate, lockPath);
+          acquired = true;
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          if (code !== 'EEXIST' && code !== 'ENOTEMPTY' && code !== 'EPERM') throw error;
+          const owner = await this.readJson<{ pid?: unknown; token?: unknown }>(path.join(lockPath, 'owner.json')).catch(() => undefined);
+          if (!owner || !Number.isInteger(owner.pid) || (owner.pid as number) < 1 || typeof owner.token !== 'string') {
+            throw new Error(`Overlay lifecycle lock is malformed: ${lockPath}`);
+          }
+          if (this.processAlive(owner.pid as number)) {
+            throw new Error(`Another process (${owner.pid}) owns the overlay lifecycle lock.`);
+          }
+          const stale = `${lockPath}.stale.${token}`;
+          try {
+            await fs.rename(lockPath, stale);
+            await fs.rm(stale, { recursive: true, force: true });
+          } catch (recoveryError) {
+            if ((recoveryError as NodeJS.ErrnoException).code !== 'ENOENT') throw recoveryError;
+          }
+        }
+      }
+      if (!acquired) throw new Error('Could not acquire the overlay lifecycle lock.');
+      return await operation();
+    } finally {
+      await fs.rm(candidate, { recursive: true, force: true });
+      if (acquired) {
+        const owner = await this.readJson<{ token?: string }>(path.join(lockPath, 'owner.json')).catch(() => undefined);
+        if (owner?.token === token) await fs.rm(lockPath, { recursive: true, force: true });
+      }
+    }
+  }
+
+  private processAlive(pid: number) {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === 'EPERM';
+    }
+  }
+
+  private async readOwnershipLedger(root: string): Promise<OwnershipLedger | undefined> {
+    const ledgerPath = this.ownershipLedgerPath(root);
+    await this.assertContainedPath(os.homedir(), ledgerPath, 'external ownership ledger');
+    if (!(await this.exists(ledgerPath))) return undefined;
+    const ledger = await this.readJson<OwnershipLedger>(ledgerPath);
+    const workspaceKey = credentialWorkspaceKey(root);
+    if (ledger.schemaVersion !== 1 || ledger.workspaceKey !== workspaceKey ||
+        !ledger.managedFiles || typeof ledger.managedFiles !== 'object' || Array.isArray(ledger.managedFiles) ||
+        (ledger.suspendedFiles !== undefined && !Array.isArray(ledger.suspendedFiles)) ||
+        !/^[a-f0-9]{64}$/.test(ledger.mac ?? '') ||
+        (ledger.pendingInstall !== undefined && (
+          !ledger.pendingInstall || typeof ledger.pendingInstall !== 'object' ||
+          !ALLOWED_OVERLAY_DESTINATIONS.has(ledger.pendingInstall.relativePath) ||
+          !/^[a-f0-9]{64}$/.test(ledger.pendingInstall.nextHash) ||
+          (ledger.pendingInstall.previousHash !== undefined && !/^[a-f0-9]{64}$/.test(ledger.pendingInstall.previousHash))
+        ))) {
+      throw new Error('Portable AI Bus external ownership ledger is invalid.');
+    }
+    const key = await this.readOwnershipKey(false);
+    if (!key || !this.validOwnershipMac(ledger, key)) {
+      throw new Error('Portable AI Bus external ownership ledger failed its integrity check.');
+    }
+    if (this.trustedOwnedFiles(ledger.managedFiles).length !== Object.keys(ledger.managedFiles).length) {
+      throw new Error('Portable AI Bus external ownership ledger contains an invalid path or hash.');
+    }
+    if (ledger.suspendedFiles && (ledger.suspendedFiles.length !== new Set(ledger.suspendedFiles).size ||
+        this.trustedOwnedFiles(ledger.managedFiles, ledger.suspendedFiles).length !== ledger.suspendedFiles.length)) {
+      throw new Error('Portable AI Bus external ownership ledger contains an invalid suspended path.');
+    }
+    return ledger;
+  }
+
+  private async reconcilePendingInstall(root: string, ledger: OwnershipLedger | undefined) {
+    if (!ledger?.pendingInstall) return ledger;
+    const pending = ledger.pendingInstall;
+    const candidate = path.join(root, pending.relativePath);
+    await this.assertContainedPath(root, candidate, `pending overlay path ${pending.relativePath}`);
+    const exists = await this.exists(candidate);
+    const currentHash = exists ? await this.fileHash(candidate) : undefined;
+    const managedFiles = { ...ledger.managedFiles };
+    if (currentHash === pending.nextHash) managedFiles[pending.relativePath] = pending.nextHash;
+    else if (pending.previousHash) managedFiles[pending.relativePath] = pending.previousHash;
+    else delete managedFiles[pending.relativePath];
+    const reconciled = {
+      managedFiles,
+      ...(ledger.suspendedFiles ? { suspendedFiles: ledger.suspendedFiles } : {})
+    };
+    await this.writeOwnershipLedger(root, reconciled);
+    return this.readOwnershipLedger(root);
+  }
+
+  private async requireOwnershipLedger(root: string) {
+    const ledger = await this.readOwnershipLedger(root);
+    if (!ledger) throw new Error('External overlay ownership evidence is missing; refusing a destructive operation. Reinitialize to establish ownership safely.');
+    return ledger;
+  }
+
+  private async writeOwnershipLedger(root: string, value: Pick<OwnershipLedger, 'managedFiles'> & Partial<Pick<OwnershipLedger, 'suspendedFiles' | 'pendingInstall'>>) {
+    const workspaceKey = credentialWorkspaceKey(root);
+    const ledgerPath = this.ownershipLedgerPath(root);
+    await this.assertContainedPath(os.homedir(), ledgerPath, 'external ownership ledger');
+    const temporary = `${ledgerPath}.${process.pid}.${Date.now()}.tmp`;
+    await fs.mkdir(path.dirname(ledgerPath), { recursive: true, mode: 0o700 });
+    await this.assertContainedPath(os.homedir(), ledgerPath, 'external ownership ledger');
+    const key = await this.readOwnershipKey(true);
+    const unsigned = { schemaVersion: 1 as const, workspaceKey, ...value };
+    const ledger = { ...unsigned, mac: this.ownershipMac(unsigned, key as Buffer) };
+    try {
+      await fs.writeFile(temporary, `${JSON.stringify(ledger, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+      await fs.rename(temporary, ledgerPath);
+      await fs.chmod(ledgerPath, 0o600).catch(() => undefined);
+    } finally {
+      await fs.rm(temporary, { force: true });
+    }
+  }
+
+  private async readOwnershipKey(create: boolean): Promise<Buffer | undefined> {
+    const keyPath = this.ownershipKeyPath();
+    await this.assertContainedPath(os.homedir(), keyPath, 'external ownership key');
+    try {
+      const encoded = (await fs.readFile(keyPath, 'utf8')).trim();
+      if (!/^[a-f0-9]{64}$/.test(encoded)) throw new Error('Portable AI Bus ownership key is malformed.');
+      return Buffer.from(encoded, 'hex');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || !create) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+        throw error;
+      }
+    }
+    await fs.mkdir(path.dirname(keyPath), { recursive: true, mode: 0o700 });
+    const encoded = randomBytes(32).toString('hex');
+    try {
+      await fs.writeFile(keyPath, `${encoded}\n`, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+      return Buffer.from(encoded, 'hex');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      return this.readOwnershipKey(false);
+    }
+  }
+
+  private ownershipMac(value: Omit<OwnershipLedger, 'mac'>, key: Buffer) {
+    return createHmac('sha256', key).update(this.stableJson(value)).digest('hex');
+  }
+
+  private validOwnershipMac(ledger: OwnershipLedger, key: Buffer) {
+    const { mac, ...unsigned } = ledger;
+    const expected = Buffer.from(this.ownershipMac(unsigned, key), 'hex');
+    const actual = Buffer.from(mac, 'hex');
+    return expected.length === actual.length && timingSafeEqual(expected, actual);
+  }
+
+  private stableJson(value: unknown): string {
+    if (Array.isArray(value)) return `[${value.map((item) => this.stableJson(item)).join(',')}]`;
+    if (value && typeof value === 'object') {
+      return `{${Object.entries(value as Record<string, unknown>)
+        .filter(([, item]) => item !== undefined)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, item]) => `${JSON.stringify(key)}:${this.stableJson(item)}`)
+        .join(',')}}`;
+    }
+    return JSON.stringify(value);
+  }
+
+  private async restoreSuspendedOverlay(root: string, restoreFiles: string[]) {
+    const paths = this.getPaths(root);
+    const operations: Array<{ backupPath: string; destinationPath: string; relativePath: string }> = [];
+    for (const relativePath of restoreFiles) {
+      const backupPath = path.join(paths.suspendedOverlayDir, relativePath);
+      const destinationPath = path.join(root, relativePath);
+      await this.assertContainedPath(root, backupPath, `suspended overlay path ${relativePath}`);
+      await this.assertContainedPath(root, destinationPath, `overlay destination ${relativePath}`);
+      const [backupExists, destinationExists] = await Promise.all([this.exists(backupPath), this.exists(destinationPath)]);
+      if (backupExists && destinationExists) {
+        throw new Error(`Refusing to overwrite a file created while suspended: ${relativePath}`);
+      }
+      if (!backupExists && !destinationExists) {
+        throw new Error(`Suspended overlay path is missing from both active and backup locations: ${relativePath}`);
+      }
+      if (!backupExists) continue; // A crash may have occurred before this file was moved.
+      const backupStat = await fs.lstat(backupPath);
+      if (!backupStat.isFile() || backupStat.isSymbolicLink()) {
+        throw new Error(`Refusing to restore non-file or symbolic-link overlay path: ${relativePath}`);
+      }
+      operations.push({ backupPath, destinationPath, relativePath });
+    }
+    for (const operation of operations) {
+      await fs.mkdir(path.dirname(operation.destinationPath), { recursive: true });
+      await this.assertContainedPath(root, operation.destinationPath, `overlay destination ${operation.relativePath}`);
+      await fs.rename(operation.backupPath, operation.destinationPath);
+    }
+  }
+
+  private sameStringSet(left: string[], right: string[]) {
+    return left.length === right.length && new Set(left).size === left.length && left.every((item) => right.includes(item));
+  }
+
+  private async assertContainedPath(base: string, candidate: string, label: string) {
+    const resolvedBase = path.resolve(base);
+    const resolvedCandidate = path.resolve(candidate);
+    const lexical = path.relative(resolvedBase, resolvedCandidate);
+    if (lexical === '..' || lexical.startsWith(`..${path.sep}`) || path.isAbsolute(lexical)) {
+      throw new Error(`Refusing ${label} outside its root: ${resolvedCandidate}`);
+    }
+    const canonicalBase = await fs.realpath(resolvedBase);
+    let existing = resolvedCandidate;
+    while (true) {
+      try {
+        await fs.lstat(existing);
+        break;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        const parent = path.dirname(existing);
+        if (parent === existing) throw new Error(`Cannot resolve a safe ancestor for ${label}.`);
+        existing = parent;
+      }
+    }
+    const canonicalExisting = await fs.realpath(existing);
+    const physical = path.relative(canonicalBase, canonicalExisting);
+    if (physical === '..' || physical.startsWith(`..${path.sep}`) || path.isAbsolute(physical)) {
+      throw new Error(`Refusing ${label} through an ancestor outside its root: ${resolvedCandidate}`);
+    }
+  }
+
+  private async fileHash(candidate: string) {
+    return createHash('sha256').update(await fs.readFile(candidate)).digest('hex');
+  }
+
+  private async atomicCopyFile(source: string, destination: string) {
+    const temporary = `${destination}.${process.pid}.${randomUUID()}.tmp`;
+    try {
+      await fs.copyFile(source, temporary);
+      await fs.rename(temporary, destination);
+    } finally {
+      await fs.rm(temporary, { force: true });
     }
   }
 
@@ -568,6 +1020,7 @@ export class WorkspaceBus {
   }
 
   private async updateExcludeFile(paths: BusPaths, entries: string[]) {
+    await this.assertContainedPath(paths.root, paths.excludePath, 'Git exclude file');
     if (!(await this.exists(path.dirname(paths.excludePath)))) {
       return;
     }
@@ -580,28 +1033,35 @@ export class WorkspaceBus {
 
     const escapedStart = this.escapeRegExp(EXCLUDE_BLOCK_START);
     const escapedEnd = this.escapeRegExp(EXCLUDE_BLOCK_END);
-    const pattern = new RegExp(`(?ms)^${escapedStart}\\r?\\n.*?^${escapedEnd}\\r?\\n?`);
+    const pattern = new RegExp(`^${escapedStart}\\r?\\n.*?^${escapedEnd}\\r?\\n?`, 'ms');
     const cleaned = existing.replace(pattern, '').trimEnd();
     const block = [EXCLUDE_BLOCK_START, ...uniqueEntries, EXCLUDE_BLOCK_END, ''].join('\n');
     const updated = cleaned ? `${cleaned}\n\n${block}` : block;
     await this.writeFile(paths.excludePath, updated);
   }
 
-  private async clearExcludeFile(excludePath: string) {
+  private async clearExcludeFile(paths: BusPaths) {
+    const excludePath = paths.excludePath;
+    await this.assertContainedPath(paths.root, excludePath, 'Git exclude file');
     if (!(await this.exists(excludePath))) {
       return;
     }
     const existing = await this.readFile(excludePath);
     const escapedStart = this.escapeRegExp(EXCLUDE_BLOCK_START);
     const escapedEnd = this.escapeRegExp(EXCLUDE_BLOCK_END);
-    const pattern = new RegExp(`(?ms)^${escapedStart}\\r?\\n.*?^${escapedEnd}\\r?\\n?`);
+    const pattern = new RegExp(`^${escapedStart}\\r?\\n.*?^${escapedEnd}\\r?\\n?`, 'ms');
     const cleaned = existing.replace(pattern, '').trim();
     await this.writeFile(excludePath, cleaned ? `${cleaned}\n` : '');
   }
 
   private parseStatus(markdown: string): BusStatus {
+    const rawPhase = this.extractSection(markdown, 'Current phase');
+    const phase = (PHASES as readonly string[]).includes(rawPhase)
+      ? rawPhase as Phase
+      : LEGACY_PHASE_ALIASES[rawPhase];
+    if (!phase) throw new Error(`Invalid phase: ${rawPhase}`);
     return {
-      phase: this.extractSection(markdown, 'Current phase') as Phase,
+      phase,
       currentTask: this.extractSection(markdown, 'Current task'),
       lastUpdate: this.extractSection(markdown, 'Last update'),
       log: this.extractSection(markdown, 'Log')
@@ -612,16 +1072,18 @@ export class WorkspaceBus {
     switch (phase) {
       case 'PLANNING':
         return [
-          'Read CLAUDE.md plus docs/ai-status.md, docs/ai-plan.md, docs/ai-handoff.md, and docs/ai-review.md.',
+          `You are the assigned planning seat: ${this.getConfiguration().plannerSeat}.`,
+          'Read the repository instructions plus docs/ai-status.md, docs/ai-plan.md, docs/ai-handoff.md, and docs/ai-review.md.',
           'For the current user task, inspect the repo and write:',
           '- a brief plan in docs/ai-plan.md',
           '- exact implementation steps in docs/ai-handoff.md',
-          'Then update docs/ai-status.md to READY_FOR_CODEX.',
+          'Then update docs/ai-status.md to READY_FOR_IMPLEMENTATION.',
           'Do not implement code.'
         ].join('\n');
-      case 'READY_FOR_CODEX':
+      case 'READY_FOR_IMPLEMENTATION':
         return [
-          'Read AGENTS.md plus docs/ai-status.md, docs/ai-handoff.md, and docs/ai-review.md.',
+          `You are the assigned implementation seat: ${this.getConfiguration().implementerSeat}.`,
+          'Read the repository instructions plus docs/ai-status.md, docs/ai-handoff.md, and docs/ai-review.md.',
           'Implement the current task from docs/ai-handoff.md.',
           'Make minimal targeted changes.',
           'Run validation if available.',
@@ -629,7 +1091,8 @@ export class WorkspaceBus {
         ].join('\n');
       case 'READY_FOR_REVIEW':
         return [
-          'Read CLAUDE.md plus docs/ai-status.md, docs/ai-plan.md, docs/ai-handoff.md, and docs/ai-review.md.',
+          `You are the assigned review seat: ${this.getConfiguration().reviewerSeat}.`,
+          'Read the repository instructions plus docs/ai-status.md, docs/ai-plan.md, docs/ai-handoff.md, and docs/ai-review.md.',
           'Review the current changes against the plan and acceptance criteria.',
           'Write required fixes to docs/ai-review.md.',
           'If acceptable, set docs/ai-status.md to DONE.',
@@ -638,30 +1101,33 @@ export class WorkspaceBus {
         ].join('\n');
       case 'READY_FOR_FIXES':
         return [
-          'Read AGENTS.md plus docs/ai-status.md, docs/ai-handoff.md, and docs/ai-review.md.',
+          `You are the assigned implementation seat: ${this.getConfiguration().implementerSeat}.`,
+          'Read the repository instructions plus docs/ai-status.md, docs/ai-handoff.md, and docs/ai-review.md.',
           'Apply the required fixes from docs/ai-review.md.',
           'Run validation if available.',
           'Then update docs/ai-status.md to READY_FOR_REVIEW.'
         ].join('\n');
       case 'DONE':
         return 'Workflow complete. Start a new task or reset docs/ai-status.md to PLANNING.';
-      case 'CODEX_IN_PROGRESS':
-        return 'Codex is currently implementing. Wait for docs/ai-status.md to move to READY_FOR_REVIEW.';
-      case 'CLAUDE_REVIEW_IN_PROGRESS':
-        return 'Claude is currently reviewing. Wait for docs/ai-status.md to move to READY_FOR_FIXES or DONE.';
+      case 'IMPLEMENTATION_IN_PROGRESS':
+        return `${this.getConfiguration().implementerSeat} is currently implementing. Wait for docs/ai-status.md to move to READY_FOR_REVIEW.`;
+      case 'REVIEW_IN_PROGRESS':
+        return `${this.getConfiguration().reviewerSeat} is currently reviewing. Wait for docs/ai-status.md to move to READY_FOR_FIXES or DONE.`;
     }
   }
 
   inferNextActor(phase: Phase) {
+    const roles = this.getConfiguration();
     switch (phase) {
       case 'PLANNING':
+        return roles.plannerSeat;
       case 'READY_FOR_REVIEW':
-      case 'CLAUDE_REVIEW_IN_PROGRESS':
-        return 'Claude';
-      case 'READY_FOR_CODEX':
+      case 'REVIEW_IN_PROGRESS':
+        return roles.reviewerSeat;
+      case 'READY_FOR_IMPLEMENTATION':
       case 'READY_FOR_FIXES':
-      case 'CODEX_IN_PROGRESS':
-        return 'Codex';
+      case 'IMPLEMENTATION_IN_PROGRESS':
+        return roles.implementerSeat;
       case 'DONE':
         return 'None';
     }
@@ -671,10 +1137,10 @@ export class WorkspaceBus {
     switch (phase) {
       case 'DONE':
         return 'Workflow complete. Start a new task or reset docs/ai-status.md to PLANNING.';
-      case 'CODEX_IN_PROGRESS':
-        return 'Codex is currently implementing. Wait for the phase to move to READY_FOR_REVIEW.';
-      case 'CLAUDE_REVIEW_IN_PROGRESS':
-        return 'Claude is currently reviewing. Wait for the phase to move to READY_FOR_FIXES or DONE.';
+      case 'IMPLEMENTATION_IN_PROGRESS':
+        return `${nextActor} is currently implementing. Wait for the phase to move to READY_FOR_REVIEW.`;
+      case 'REVIEW_IN_PROGRESS':
+        return `${nextActor} is currently reviewing. Wait for the phase to move to READY_FOR_FIXES or DONE.`;
       default:
         return `${nextActor} is up next. Paste the prompt below into ${nextActor}.`;
     }
@@ -746,8 +1212,9 @@ export class WorkspaceBus {
     return this.readJson<Manifest>(manifestPath);
   }
 
-  private async copyFromExtension(sourceRelative: string, destinationPath: string) {
+  private async copyFromExtension(root: string, sourceRelative: string, destinationPath: string) {
     const sourcePath = path.join(this.context.extensionUri.fsPath, sourceRelative);
+    await this.assertContainedPath(root, destinationPath, `staged bundle path ${path.relative(root, destinationPath)}`);
     const sourceStat = await fs.stat(sourcePath);
     if (sourceStat.isDirectory()) {
       await fs.rm(destinationPath, { recursive: true, force: true });
@@ -757,7 +1224,8 @@ export class WorkspaceBus {
     }
 
     await fs.mkdir(path.dirname(destinationPath), { recursive: true });
-    await fs.copyFile(sourcePath, destinationPath);
+    await this.assertContainedPath(root, destinationPath, `staged bundle path ${path.relative(root, destinationPath)}`);
+    await this.atomicCopyFile(sourcePath, destinationPath);
   }
 
   private async requireFiles(root: string, filePaths: string[]) {
@@ -783,7 +1251,13 @@ export class WorkspaceBus {
 
   private async writeFile(filePath: string, content: string) {
     await fs.mkdir(path.dirname(filePath), { recursive: true });
-    await fs.writeFile(filePath, content, 'utf8');
+    const temporary = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+    try {
+      await fs.writeFile(temporary, content, 'utf8');
+      await fs.rename(temporary, filePath);
+    } finally {
+      await fs.rm(temporary, { force: true });
+    }
   }
 
   private async readJson<T>(filePath: string): Promise<T> {
@@ -797,6 +1271,14 @@ export class WorkspaceBus {
 
   private escapeRegExp(value: string) {
     return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  private configuredSeat(value: string, setting: string) {
+    const seat = value.trim();
+    if (!/^[a-zA-Z0-9_.-]{1,100}$/.test(seat)) {
+      throw new Error(`portableAiBus.${setting} must be a valid seat id.`);
+    }
+    return seat;
   }
 
   private nowIso() {

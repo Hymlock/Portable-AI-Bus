@@ -12,12 +12,16 @@ const REQUIRED_FILES = [
 
 const VALID_PHASES = new Set([
   'PLANNING',
+  'READY_FOR_IMPLEMENTATION',
+  'IMPLEMENTATION_IN_PROGRESS',
+  'READY_FOR_REVIEW',
+  'REVIEW_IN_PROGRESS',
+  'READY_FOR_FIXES',
+  'DONE',
+  // Read-only compatibility for workspaces staged before provider-neutral phase names.
   'READY_FOR_CODEX',
   'CODEX_IN_PROGRESS',
-  'READY_FOR_REVIEW',
-  'CLAUDE_REVIEW_IN_PROGRESS',
-  'READY_FOR_FIXES',
-  'DONE'
+  'CLAUDE_REVIEW_IN_PROGRESS'
 ]);
 
 function read(relativePath) {

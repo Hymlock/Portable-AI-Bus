@@ -20,11 +20,22 @@ Audience: humans running the extension, harness, and multi-agent sessions.
 | `open settings` | `portableAiBus.*` |
 | **Run Language Model Worker** | Explicit bounded `vscode.lm` session |
 
-Phases include: `PLANNING`, `READY_FOR_CODEX`, `CODEX_IN_PROGRESS`, `READY_FOR_REVIEW`, `CLAUDE_REVIEW_IN_PROGRESS`, `READY_FOR_FIXES`, `DONE`.
+Canonical phases are `PLANNING`, `READY_FOR_IMPLEMENTATION`, `IMPLEMENTATION_IN_PROGRESS`, `READY_FOR_REVIEW`, `REVIEW_IN_PROGRESS`, `READY_FOR_FIXES`, and `DONE`. Older model-named phase values are normalized when read. Role assignment comes from `.ai-bus/workflow.json`, generated from the three `portableAiBus.workflow.*Seat` settings. Setting changes synchronize active initialized folders; VS Code-owned harnesses restart automatically, while external harnesses require an operator restart.
+
+### Overlay ownership and recovery
+
+- Pre-existing files are never silently adopted. Bus-created files are tracked by content hash in an HMAC-protected ledger under `~/.portable-ai-bus/ownership/`; `.ai-bus/install-state.json` is descriptive only.
+- Reinitialization preserves customized managed files and keeps ownership of deselected overlay files until explicit removal. Remove deletes only an unchanged managed hash; customized files survive.
+- Initialize, suspend, resume, and remove share an external per-workspace process lock. A live owner fails closed; a well-formed dead owner is recovered.
+- A write-ahead pending-install record reconciles interruption before/after each copy. Suspension state is external-ledger authoritative, so resume can recover a missing/stale in-repo marker and partially completed moves.
+- Lifecycle paths are lexically and physically contained. Symlink/junction ancestors that escape the workspace or user ownership root are rejected before mutation.
+- Missing, malformed, or integrity-failed external ownership evidence blocks destructive operations. Do not hand-edit the ledger or key.
 
 ## Mailbox operations
 
 Staged binary: `.ai-bus/bin/mailbox.js` (from `dist/mailbox.js`).
+
+This is a trusted operator/local-recovery interface: its actor flags are not authenticated. Provider processes should use the seat client below.
 
 ```bash
 node .ai-bus/bin/mailbox.js init --agents codex,claude,grok [--max-rounds 32]
@@ -99,15 +110,23 @@ POST /v1/tool
 {"requestId":"unique-1","name":"mailbox_status","input":{}}
 ```
 
-After **transient failure**, mint a **new** `requestId` (failed ids stick as `recorded_failure` until pruned).
+After a transport failure with an uncertain outcome, retry the exact same tool/input with the same `requestId`. After a definitive recorded tool failure, correct the cause and use a new ID; failed IDs stick as `recorded_failure` until pruned. Never reuse an ID with different input.
 
-### Worker client (seat-side wait / watch)
+### Worker client (authenticated seat tools / wait / watch)
 
 Staged: `.ai-bus/bin/worker-client.js` (from `dist/worker-client.js`).
 
 ```bash
 node .ai-bus/bin/worker-client.js wait --root <workspace> --seat <agent> [--timeout-ms 25000] [--credentials-dir PATH]
 node .ai-bus/bin/worker-client.js watch --root <workspace> --seat <agent> [--timeout-ms 25000]
+node .ai-bus/bin/worker-client.js status --root <workspace> --seat <agent>
+node .ai-bus/bin/worker-client.js read --root <workspace> --seat <agent> --all
+node .ai-bus/bin/worker-client.js send --root <workspace> --seat <agent> --to <seat> --subject "..." --body "..."
+node .ai-bus/bin/worker-client.js claim --root <workspace> --seat <agent> --paths path1,path2 --why "..."
+node .ai-bus/bin/worker-client.js release --root <workspace> --seat <agent> [--paths path1,path2]
+node .ai-bus/bin/worker-client.js complete-step --root <workspace> --seat <agent> --summary "..." [--evidence test,commit]
+node .ai-bus/bin/worker-client.js capabilities --root <workspace> --seat <agent>
+node .ai-bus/bin/worker-client.js run --root <workspace> --seat <agent> --capability <id> [--timeout-ms N]
 ```
 
 `watch` persists a cursor outside the repository for its stable logical client ID and resets it only when the durable mailbox epoch changes. Delivery is at least once, not exactly once: downstream actions must be idempotent across a crash between handling a message and persisting its cursor. Wake pages and client/server response bodies are bounded.
@@ -116,8 +135,11 @@ node .ai-bus/bin/worker-client.js watch --root <workspace> --seat <agent> [--tim
 |------|-----------|
 | `wait` | Discover current endpoint/token, acquire a lease, long-poll once, release, and print one JSON result |
 | `watch` | Retain and renew one lease; send a monotonic `afterSeq`; emit only new message sequences; rediscover/reconnect with bounded exponential jitter |
+| seat tools | Bind actor identity to the matching token principal; strict argument parsing; idempotent UUID request by default |
 
 Requirements: harness already serving; seat registered in endpoint; valid seat token file for current `instanceId`. Provider-neutral means the protocol does not interpret a model vendor—the caller remains responsible for launching and connecting its actual provider process. Stdout is JSON results only; connection transitions are bounded and written to stderr. SIGINT/SIGTERM abort an active long poll promptly and make a best-effort lease release; server-side expiry is the fallback.
+
+Seat commands additionally require the token's embedded principal to equal `--seat`. Unknown, duplicate, missing-value, and extra arguments fail before any request; malformed `release --paths` never degrades into release-all. Capability `--timeout-ms` is forwarded to the runner and the client HTTP deadline remains longer than that requested run.
 
 ### Recovery
 | Symptom | Action |

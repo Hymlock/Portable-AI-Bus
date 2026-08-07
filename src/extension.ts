@@ -40,6 +40,7 @@ export async function activate(context: vscode.ExtensionContext) {
   const reminderTracker = new ReminderTracker();
   let reminderTimer: NodeJS.Timeout | undefined;
   let reminderPollActive = false;
+  let workflowSync = Promise.resolve();
 
   const refreshStatusBar = async () => {
     const settings = bus.getConfiguration();
@@ -521,6 +522,26 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (event.affectsConfiguration('portableAiBus')) {
         if (event.affectsConfiguration('portableAiBus.reminders')) restartReminderTimer();
+        if (event.affectsConfiguration('portableAiBus.workflow')) {
+          workflowSync = workflowSync.then(async () => {
+            for (const folder of vscode.workspace.workspaceFolders ?? []) {
+              const root = folder.uri.fsPath;
+              if (!(await bus.isInitialized(root)) || await bus.isSuspended(root)) continue;
+              const ownedHarness = harnessManager.owns(root);
+              const externalEndpoint = !ownedHarness && await fileExists(path.join(root, '.ai-bus', 'runtime', 'harness', 'endpoint.json'));
+              if (ownedHarness) await harnessManager.stop(root);
+              await bus.installOverlay(root);
+              if (ownedHarness) {
+                const port = vscode.workspace.getConfiguration('portableAiBus', folder.uri).get<number>('harness.port', 0);
+                await harnessManager.start(root, port);
+              } else if (externalEndpoint) {
+                void vscode.window.showWarningMessage('Portable AI Bus workflow seats changed. Restart the external workspace harness to provision credentials for newly assigned seats.');
+              }
+            }
+          }).catch((error) => {
+            void vscode.window.showErrorMessage(`Could not synchronize Portable AI Bus workflow seats: ${asErrorMessage(error)}`);
+          });
+        }
         void refreshStatusBar();
       }
     }),
@@ -1011,6 +1032,17 @@ async function withWorkspaceAction(bus: WorkspaceBus, action: (root: string) => 
     await action(root);
   } catch (error) {
     void vscode.window.showErrorMessage(asErrorMessage(error));
+    throw error;
+  }
+}
+
+async function fileExists(candidate: string) {
+  try {
+    await fs.access(candidate);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
   }
 }
 

@@ -1,7 +1,7 @@
 # AI Automation
 
 ## Goal
-Use a local overlay to automate a repo-based Codex and Claude handoff loop without adding tracked project changes.
+Use a local overlay to coordinate provider-neutral planning, implementation, and review seats without adding tracked project changes.
 
 ## Primary user flow
 The intended user-facing flow is through the VS Code extension and `@ai-bus` chat:
@@ -18,7 +18,7 @@ The intended user-facing flow is through the VS Code extension and `@ai-bus` cha
 - `start task: <task> goal: <goal> validation: <command>`
 - `show status`
 - `show the next prompt`
-- `set phase to READY_FOR_CODEX`
+- `set phase to READY_FOR_IMPLEMENTATION`
 - `suspend the bus`
 - `resume the bus`
 - `remove the bus`
@@ -32,7 +32,7 @@ node .ai-bus/bin/validate_ai_bus.js
 node .ai-bus/bin/ai_bus.js status
 node .ai-bus/bin/ai_bus.js prompt
 node .ai-bus/bin/ai_bus.js init --task "..." --goal "..."
-node .ai-bus/bin/ai_bus.js set-phase --phase READY_FOR_CODEX --actor Claude --summary "Planning complete" --next Codex
+node .ai-bus/bin/ai_bus.js set-phase --phase READY_FOR_IMPLEMENTATION --actor planner-seat --summary "Planning complete" --next implementer-seat
 node .ai-bus/bin/ai_bus.js watch
 ```
 
@@ -40,7 +40,7 @@ node .ai-bus/bin/ai_bus.js watch
 Current prompt artifacts are written to:
 - `tmp/ai-prompts/current.txt`
 - `tmp/ai-prompts/planning.txt`
-- `tmp/ai-prompts/ready_for_codex.txt`
+- `tmp/ai-prompts/ready_for_implementation.txt`
 - `tmp/ai-prompts/ready_for_review.txt`
 - `tmp/ai-prompts/ready_for_fixes.txt`
 

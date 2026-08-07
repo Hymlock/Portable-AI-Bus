@@ -61,13 +61,17 @@ Use Command Palette → **Configure Round, Step, and Goal Halting**, **Record St
 
 ### Commands agents use
 ```bash
-node .ai-bus/bin/mailbox.js status
-node .ai-bus/bin/mailbox.js read --for grok
-node .ai-bus/bin/mailbox.js send --from grok --to codex --kind note --subject "..." --body "..."
-node .ai-bus/bin/mailbox.js claim --agent grok --paths src/foo.ts --why "fixing bug"
-node .ai-bus/bin/mailbox.js release --agent grok
+node .ai-bus/bin/worker-client.js status --root . --seat grok
+node .ai-bus/bin/worker-client.js read --root . --seat grok --all
+node .ai-bus/bin/worker-client.js send --root . --seat grok --to codex --kind note --subject "..." --body "..."
+node .ai-bus/bin/worker-client.js claim --root . --seat grok --paths src/foo.ts --why "fixing bug"
+node .ai-bus/bin/worker-client.js release --root . --seat grok --paths src/foo.ts
+```
+
+These commands require the harness and the matching seat credential. They prevent a seat from pretending to be another agent. The raw `mailbox.js` commands below are operator controls:
+
+```bash
 node .ai-bus/bin/mailbox.js configure-halting --on-step false --on-goal true --at-rounds 6,12 --every-rounds 12
-node .ai-bus/bin/mailbox.js complete-step --agent grok --summary "Step verified" --evidence "npm test"
 node .ai-bus/bin/mailbox.js complete-goal --agent operator --summary "Goal verified" --evidence "npm test,VSIX smoke"
 node .ai-bus/bin/mailbox.js resume --add-rounds 12
 ```
@@ -77,6 +81,8 @@ node .ai-bus/bin/mailbox.js resume --add-rounds 12
 - **Resume** — bring the overlay back
 - **Remove** — uninstall the bus from this repo (including the local `.ai-bus` copy)
 
+Existing project files are not adopted merely because their names match a template. The bus records only files it created, keeps destructive ownership evidence outside the repository, preserves customized files on removal, and refuses unsafe symlink/junction paths or conflicting files created during suspension.
+
 If this VS Code window started a harness, Suspend and Remove stop that owned harness first. Closing the extension or removing the workspace folder does the same. The extension does not stop a harness owned by another window or one you started separately in a terminal.
 
 ## Providers
@@ -85,6 +91,8 @@ The bus can detect which assistants you already use (markers like `AGENTS.md`, `
 If it is unsure, it installs the recommended set: **Codex + Claude + Grok**.
 
 You can force the list in settings: `portableAiBus.providers`.
+
+You can assign planning, implementation, and review independently with `portableAiBus.workflow.plannerSeat`, `portableAiBus.workflow.implementerSeat`, and `portableAiBus.workflow.reviewerSeat`. These are seat IDs, not required model brands.
 
 ## Optional: Language Model worker inside VS Code
 There is a command **Run Language Model Worker**. It is:

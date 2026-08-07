@@ -4,10 +4,47 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const { HarnessServer } = require('../dist/harness.js');
-const { waitForMailbox, watchMailbox } = require('../dist/worker-client.js');
+const { callSeatTool, waitForMailbox, watchMailbox } = require('../dist/worker-client.js');
 
 const TOKEN_A = `pab1.worker.${'a'.repeat(48)}`;
 const TOKEN_B = `pab1.worker.${'b'.repeat(48)}`;
+
+test('seat tool calls authenticate, bind request identity, and validate the harness instance', async (t) => {
+  const fixture = await clientFixture(t, 'instance-a', TOKEN_A);
+  const calls = [];
+  const result = await callSeatTool({
+    root: fixture.root,
+    seat: 'worker',
+    credentialsDir: fixture.credentialsDir
+  }, 'mailbox_send', {
+    from: 'worker', to: 'reviewer', subject: 'ready', body: 'please audit'
+  }, 'stable-request-id', { fetch: scriptedFetch(calls, [
+    json({ ok: true, instanceId: 'instance-a', requestId: 'stable-request-id', result: { seq: 4 } })
+  ]) });
+
+  assert.deepEqual(result, { instanceId: 'instance-a', requestId: 'stable-request-id', result: { seq: 4 } });
+  assert.equal(calls[0].pathname, '/v1/tool');
+  assert.equal(calls[0].authorization, `Bearer ${TOKEN_A}`);
+  assert.deepEqual(calls[0].body, {
+    requestId: 'stable-request-id',
+    name: 'mailbox_send',
+    input: { from: 'worker', to: 'reviewer', subject: 'ready', body: 'please audit' }
+  });
+});
+
+test('seat tool calls reject mismatched harness and request identities', async (t) => {
+  const fixture = await clientFixture(t, 'instance-a', TOKEN_A);
+  await assert.rejects(callSeatTool({
+    root: fixture.root, seat: 'worker', credentialsDir: fixture.credentialsDir
+  }, 'mailbox_status', {}, 'expected-id', { fetch: scriptedFetch([], [
+    json({ ok: true, instanceId: 'instance-b', requestId: 'expected-id', result: {} })
+  ]) }), /instanceId/);
+  await assert.rejects(callSeatTool({
+    root: fixture.root, seat: 'worker', credentialsDir: fixture.credentialsDir
+  }, 'mailbox_status', {}, 'expected-id', { fetch: scriptedFetch([], [
+    json({ ok: true, instanceId: 'instance-a', requestId: 'other-id', result: {} })
+  ]) }), /requestId/);
+});
 
 test('one-shot wait acquires, polls with its lease, and releases', async (t) => {
   const fixture = await clientFixture(t, 'instance-a', TOKEN_A);
@@ -339,6 +376,27 @@ test('provider-neutral worker client integrates with durable harness mail', asyn
   assert.equal(result.wake, 'message');
   assert.equal(result.messages[0].subject, 'wake');
   assert.equal((await server.mailbox.status()).unread.worker, 1);
+});
+
+test('seat credential principal binding handles dotted ids without prefix confusion', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'portable-ai-bus-dotted-seat-'));
+  const credentialsDir = path.join(root, '.test-credentials');
+  await fs.mkdir(path.join(root, '.ai-bus'), { recursive: true });
+  await fs.writeFile(path.join(root, '.ai-bus', 'capabilities.json'), JSON.stringify({ version: 1, capabilities: [] }));
+  const server = new HarnessServer(root, { credentialsDir });
+  await server.mailbox.ensureInitialized(['review', 'review.bot']);
+  await server.start(0);
+  t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true }); });
+
+  const dotted = await callSeatTool({ root, seat: 'review.bot', credentialsDir }, 'mailbox_status');
+  assert.equal(dotted.instanceId, server.instanceId);
+
+  const seatDir = path.join(credentialsDir, server.instanceId, 'seats');
+  await fs.copyFile(path.join(seatDir, 'review.bot.token'), path.join(seatDir, 'review.token'));
+  await assert.rejects(
+    callSeatTool({ root, seat: 'review', credentialsDir }, 'mailbox_status'),
+    /principal does not match/
+  );
 });
 
 async function clientFixture(t, instanceId, token) {

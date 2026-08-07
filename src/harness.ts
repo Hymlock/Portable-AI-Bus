@@ -496,7 +496,7 @@ export class HarnessServer {
         throw new HarnessHttpError(400, 'invalid_request', asMessage(error));
       }
       const result = await this.executeIdempotent(principal, body);
-      this.respond(response, 200, { ok: true, requestId: body.requestId, result });
+      this.respond(response, 200, { ok: true, instanceId: this.instanceId, requestId: body.requestId, result });
       return;
     }
     this.respond(response, 404, { ok: false, error: { code: 'not_found', message: 'Not found', retriable: false } });
@@ -912,8 +912,21 @@ export class HarnessServer {
 
   private async atomicJson(destination: string, value: unknown) {
     const temporary = `${destination}.${process.pid}.${randomUUID()}.tmp`;
-    await fs.writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
-    await fs.rename(temporary, destination);
+    try {
+      await fs.writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+      for (let attempt = 0; ; attempt += 1) {
+        try {
+          await fs.rename(temporary, destination);
+          break;
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          if (attempt >= 5 || (code !== 'EPERM' && code !== 'EACCES')) throw error;
+          await new Promise((resolve) => setTimeout(resolve, 10 * (2 ** attempt)));
+        }
+      }
+    } finally {
+      await fs.rm(temporary, { force: true });
+    }
   }
 }
 

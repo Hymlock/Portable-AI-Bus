@@ -270,6 +270,24 @@
           },
           "markdownDescription": "Optional explicit provider IDs to install in the workspace (`codex`, `claude`, `grok`). Leave empty to auto-detect from repo markers and fall back to the recommended set."
         },
+        "portableAiBus.workflow.plannerSeat": {
+          "type": "string",
+          "default": "claude",
+          "pattern": "^[a-zA-Z0-9_.-]{1,100}$",
+          "markdownDescription": "Seat assigned planning work. This is an agent id, not a required model vendor. Initialized active workspaces synchronize automatically; restart an externally owned harness afterward."
+        },
+        "portableAiBus.workflow.implementerSeat": {
+          "type": "string",
+          "default": "codex",
+          "pattern": "^[a-zA-Z0-9_.-]{1,100}$",
+          "markdownDescription": "Seat assigned implementation and fix work. This is an agent id, not a required model vendor. Initialized active workspaces synchronize automatically; restart an externally owned harness afterward."
+        },
+        "portableAiBus.workflow.reviewerSeat": {
+          "type": "string",
+          "default": "claude",
+          "pattern": "^[a-zA-Z0-9_.-]{1,100}$",
+          "markdownDescription": "Seat assigned review work. It may be the same seat as planning or a separate agent. Initialized active workspaces synchronize automatically; restart an externally owned harness afterward."
+        },
         "portableAiBus.stageTasksJson": {
           "type": "boolean",
           "default": false,
