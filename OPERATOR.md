@@ -81,6 +81,22 @@ node .ai-bus/bin/harness.js serve --root <workspace> [--port 47831]
 
 Or use Command Palette **Start Harness**, **Stop Harness**, and **Show Harness and Worker Status**. A VS Code window stops only the harness instance it created. Its owned instance is cleaned up on Suspend, Remove, workspace-folder removal, and extension deactivation. External/other-window instances are not killed. `portableAiBus.harness.autoStart` defaults false and is ignored for uninitialized or suspended workspaces.
 
+### In-process harness vs CLI process (reload)
+
+Two ways to run the loopback server — they fail differently:
+
+| Mode | How | Survives extension host reload? | Survives VS Code restart? |
+|------|-----|----------------------------------|---------------------------|
+| **CLI** | `node .ai-bus/bin/harness.js serve --root …` in a terminal or external process | **Yes** (independent PID) | Only if you left the process running outside the window |
+| **Extension-managed** | Command Palette **Start Harness** / `harness.autoStart` via `HarnessManager` | **No** — server lives in the extension host; reload/deactivate tears it down | **No** |
+
+**Operational consequences**
+
+1. After **Developer: Reload Window** or an extension update, expect endpoint/credentials to be gone if the harness was extension-owned. Seats must re-discover; old seat tokens for the previous `instanceId` will 401.
+2. Multi-agent drills that must survive reloads should use the **CLI** harness, not the palette start.
+3. `Stop Harness` only stops the instance **this window created**. It will not kill a CLI harness another agent started — check `stall-check` / endpoint PID before assuming the bus is down.
+4. Mailbox **code** changes require a harness restart either way: the running process holds the compiled server; your local `dist/` is not hot-reloaded into an already-listening PID.
+
 ### Security model (actual)
 - Listen **`127.0.0.1` only**.
 - Bearer tokens: **operator** + one **seat** per registered mailbox agent.
