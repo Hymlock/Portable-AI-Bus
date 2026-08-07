@@ -47,6 +47,29 @@ export type MailboxState = {
   claims: Record<string, Claim[]>;
   haltPolicy: HaltPolicy;
   completions: CompletionEvent[];
+  /**
+   * What this bus is FOR, and how a human will know it is finished.
+   *
+   * Halt policies answered "have we talked too much?" when the question agents actually need
+   * is "are we finished?". Without this, a productive exchange halts at the round cap while an
+   * unproductive one burns the same budget saying nothing, and neither outcome is
+   * distinguishable afterwards.
+   *
+   * `doneWhen` is deliberately prose. Nothing here can evaluate whether an architecture is
+   * sound, so `complete-goal` records a CLAIM that a human checks against this text - the same
+   * freshness-not-truthfulness boundary the rest of the system uses. Writing the criteria
+   * down BEFORE the work is what makes the later claim falsifiable.
+   */
+  goal: Goal | null;
+};
+
+export type Goal = {
+  statement: string;
+  doneWhen: string;
+  setAt: string;
+  setBy: string | null;
+  /** Per-seat assignment, so "who owns which part of done_when" is durable, not conversational. */
+  assignments: Record<string, string>;
 };
 
 export type HaltPolicy = {
@@ -415,6 +438,50 @@ export class MailboxStore {
     });
   }
 
+  /** Record what the bus is for. Overwrites any previous goal; history lives in the transcript. */
+  async setGoal(goal: { statement: string; doneWhen: string; setBy?: string }): Promise<MailboxState> {
+    if (!goal.statement?.trim()) throw new Error('goal statement is required.');
+    if (!goal.doneWhen?.trim()) {
+      // Refusing a goal without completion criteria is the point. A goal you cannot check is
+      // a mood, and it would make `complete-goal` unfalsifiable.
+      throw new Error('done-when is required: a goal with no completion criteria cannot be checked.');
+    }
+    return this.withLock(async () => {
+      const state = await this.loadStateUnsafe();
+      state.goal = {
+        statement: goal.statement.trim(),
+        doneWhen: goal.doneWhen.trim(),
+        setAt: nowIso(),
+        setBy: goal.setBy ?? null,
+        assignments: state.goal?.assignments ?? {}
+      };
+      await this.writeStateUnsafe(state);
+      await this.appendLineUnsafe(
+        `\n---\n\n## GOAL\n\n${state.goal.statement}\n\n**Done when:** ${state.goal.doneWhen}\n\n---\n`
+      );
+      return state;
+    });
+  }
+
+  /**
+   * Assign a seat its slice of `doneWhen`.
+   *
+   * Without this, division of labour lives only in whichever message happened to describe it,
+   * so a seat that joins late - or returns after going dark - has no durable answer to "what
+   * am I responsible for?". That is how work silently goes unowned.
+   */
+  async assignGoal(seat: string, responsibility: string): Promise<MailboxState> {
+    return this.withLock(async () => {
+      const state = await this.loadStateUnsafe();
+      if (!state.goal) throw new Error('No goal set. Run: mailbox goal --statement ... --done-when ...');
+      if (!state.agents.includes(seat)) throw new Error(`Unknown seat: ${seat}`);
+      state.goal.assignments[seat] = responsibility;
+      await this.writeStateUnsafe(state);
+      await this.appendLineUnsafe(`\n**ASSIGNED** ${seat}: ${responsibility}\n`);
+      return state;
+    });
+  }
+
   async configureHalting(policy: Partial<HaltPolicy>): Promise<MailboxState> {
     if (policy.onStepCompletion === undefined && policy.onGoalCompletion === undefined &&
         policy.atRounds === undefined && policy.everyRounds === undefined) {
@@ -648,7 +715,8 @@ export class MailboxStore {
       stopReason: null,
       claims: {},
       haltPolicy: { onStepCompletion: false, onGoalCompletion: true, atRounds: [], everyRounds: null },
-      completions: []
+      completions: [],
+      goal: null
     };
   }
 
@@ -1091,6 +1159,23 @@ async function runCli(argv = process.argv.slice(2)) {
       console.log(JSON.stringify(report, null, 2));
       return report.ok ? 0 : 1;
     }
+    case 'goal': {
+      const state = await store.setGoal({
+        statement: stringArg(args, 'statement', true)!,
+        doneWhen: stringArg(args, 'done-when', true)!,
+        setBy: stringArg(args, 'by')
+      });
+      console.log(json ? JSON.stringify(state, null, 2) :
+        `goal set: ${state.goal!.statement}
+  done when: ${state.goal!.doneWhen}`);
+      return 0;
+    }
+    case 'assign': {
+      const state = await store.assignGoal(stringArg(args, 'seat', true)!, stringArg(args, 'responsibility', true)!);
+      console.log(json ? JSON.stringify(state, null, 2) :
+        Object.entries(state.goal!.assignments).map(([seat, task]) => `${seat}: ${task}`).join('\n'));
+      return 0;
+    }
     case 'configure-halting': {
       const state = await store.configureHalting({
         onStepCompletion: optionalBoolArg(args, 'on-step'),
@@ -1126,7 +1211,7 @@ async function runCli(argv = process.argv.slice(2)) {
     }
     default:
       throw new Error(
-        'usage: mailbox <init|send|inbox|read|wait|claim|release|claims|status|doctor|configure-halting|complete-step|complete-goal|halt|resume> [options]'
+        'usage: mailbox <init|send|inbox|read|wait|claim|release|claims|status|doctor|goal|assign|configure-halting|complete-step|complete-goal|halt|resume> [options]'
       );
   }
 }
