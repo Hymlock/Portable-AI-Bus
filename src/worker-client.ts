@@ -495,7 +495,7 @@ class HarnessRequestError extends Error {
 
 async function runCli(argv = process.argv.slice(2)) {
   const command = argv[0];
-  const commands = new Set(['wait', 'watch', 'status', 'inbox', 'read', 'send', 'claim', 'release', 'complete-step', 'complete-goal', 'capabilities', 'run', 'tool']);
+  const commands = new Set(['wait', 'watch', 'listen', 'status', 'inbox', 'read', 'send', 'claim', 'release', 'complete-step', 'complete-goal', 'capabilities', 'run', 'tool']);
   if (!command || !commands.has(command)) throw new Error(cliUsage());
   validateCliArguments(command, argv.slice(1));
   const controller = new AbortController();
@@ -516,6 +516,15 @@ async function runCli(argv = process.argv.slice(2)) {
   try {
     if (command === 'wait') {
       await writeLine(process.stdout, `${JSON.stringify(await waitForMailbox(options))}\n`);
+      return;
+    }
+    if (command === 'listen') {
+      const outcome = await listenForMailbox(options, argv);
+      await writeLine(process.stdout, `${JSON.stringify(outcome)}
+`);
+      // Exit code IS the contract for a wake-on-exit runtime: 0 act, 2 stop, 3 sleep again.
+      if (outcome.listen === 'halted') process.exitCode = 2;
+      else if (outcome.listen === 'timeout') process.exitCode = 3;
       return;
     }
     if (command === 'watch') {
@@ -611,6 +620,7 @@ function cliUsage() {
     'Usage: worker-client <command> --root PATH --seat AGENT [options]',
     'Commands:',
     '  wait|watch [--timeout-ms N] [--client-id ID]',
+    '  listen [--deadline-s N]   blocks until mail, then EXITS (for wake-on-exit runtimes)',
     '  status',
     '  inbox [--all] [--after-seq N]',
     '  read [--all]',
@@ -717,9 +727,12 @@ function positiveInteger(raw: string, name: string, maximum: number) {
 function validateCliArguments(command: string, args: string[]) {
   const valueOptions = new Set(['--root', '--seat', '--credentials-dir']);
   const flags = new Set<string>();
-  if (command === 'wait' || command === 'watch') {
+  if (command === 'wait' || command === 'watch' || command === 'listen') {
     valueOptions.add('--timeout-ms');
     valueOptions.add('--client-id');
+    // Reconciliation is on by default; this turns it off. A FLAG, not a value option.
+    flags.add('--no-reconcile');
+    if (command === 'listen') valueOptions.add('--deadline-s');
   } else {
     valueOptions.add('--request-id');
     valueOptions.add('--request-timeout-ms');
@@ -728,7 +741,7 @@ function validateCliArguments(command: string, args: string[]) {
     status: [],
     inbox: ['--after-seq'],
     read: [],
-    send: ['--to', '--kind', '--subject', '--body', '--body-file', '--keep-baton'],
+    send: ['--to', '--kind', '--subject', '--body', '--body-file'],
     claim: ['--paths', '--why'],
     release: ['--paths'],
     'complete-step': ['--summary', '--evidence'],
@@ -739,6 +752,8 @@ function validateCliArguments(command: string, args: string[]) {
   };
   for (const name of commandValues[command] ?? []) valueOptions.add(name);
   if (command === 'inbox' || command === 'read') flags.add('--all');
+  // --keep-baton takes no value: listing it as a value option made it consume the next token.
+  if (command === 'send') flags.add('--keep-baton');
   const seen = new Set<string>();
   for (let index = 0; index < args.length; index += 1) {
     const token = args[index];
@@ -880,6 +895,45 @@ function deadlineSignal(parent: AbortSignal | undefined, milliseconds: number) {
 function boundedMessage(error: unknown) {
   const value = error instanceof Error ? error.message : String(error);
   return value.length <= 300 ? value : `${value.slice(0, 297)}...`;
+}
+
+/**
+ * Block until mail arrives, then EXIT.
+ *
+ * Neither existing primitive suits an agent whose runtime wakes it on process termination:
+ * `watch` never exits, so messages land in a stream nobody reads while every diagnostic shows
+ * a healthy lease; `wait` exits correctly but the harness caps a single poll at 30s. Both were
+ * observed failing this way on 2026-08-07 - one seat sat deaf for hours holding a valid lease.
+ *
+ * This existed as an unversioned script beside the mailbox, which is its own problem: the loop
+ * depended on a file that lived on exactly one machine and was in no repository. Folding it in
+ * makes it testable, shippable, and present for anyone who clones this.
+ *
+ * Exit semantics are the contract: 0 mail waiting · 2 bus halted · 3 deadline, nothing came.
+ * A halt is deliberate and must NOT be retried through, which is why it is distinct from 3.
+ */
+async function listenForMailbox(options: WorkerClientOptions, argv: string[]) {
+  const deadlineSeconds = Number(option(argv, '--deadline-s') ?? 3600);
+  if (!Number.isFinite(deadlineSeconds) || deadlineSeconds <= 0) throw new Error('--deadline-s must be positive.');
+  const giveUpAt = Date.now() + deadlineSeconds * 1000;
+  let retries = 0;
+  while (Date.now() < giveUpAt) {
+    try {
+      const result = await waitForMailbox({ ...options, timeoutMs: Math.min(DEFAULT_TIMEOUT_MS, Math.max(1000, giveUpAt - Date.now())) });
+      if (result.wake === 'message') return { listen: 'message', ...result };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/bus_halted|halted/i.test(message)) return { listen: 'halted', reason: message };
+      // A lease outliving the process that held it is normal on restart, not a failure.
+      if (/lease_held|409|ECONNREFUSED|endpoint/i.test(message)) {
+        retries += 1;
+        await abortableDelay(3000, options.signal);
+        continue;
+      }
+      throw error;
+    }
+  }
+  return { listen: 'timeout', deadlineSeconds, retries };
 }
 
 function transitionLogger(stream: NodeJS.WritableStream) {
