@@ -578,17 +578,21 @@ export function seatToolInvocation(command: string, argv: string[], seat: string
       return { name: 'mailbox_release', input: { agent: seat, ...(paths === undefined ? {} : { paths: csv(paths, '--paths') }) } };
     }
     case 'complete-goal':
-      // The harness has always exposed mailbox_complete_goal, but the worker client did not,
-      // so a seat had to reach past its own client to mailbox.js to declare completion - and
-      // that path needs the operator token rather than the seat credential. A seat that
-      // cannot record its own completion through its own client will either not record it or
-      // will borrow authority it should not have.
+      // Kept, but it will 403: mailbox_complete_goal is OPERATOR-ONLY by deliberate design -
+      // a seat should not be able to declare the whole engagement finished on its own say-so.
+      //
+      // I added this command believing the gap was an oversight. It was not; the gap was the
+      // AUTHORITY, not the plumbing, and shipping it made an unusable command look available.
+      // Removing it again would just restore the original confusion - someone would rediscover
+      // mailbox_complete_goal in the tool list and wonder why the client lacked it. So it stays
+      // and explains itself: see the 403 handler in runCli, which turns
+      // "operator_required" into the actual instruction.
       return {
         name: 'mailbox_complete_goal',
         input: {
           agent: seat,
           summary: requiredOption(argv, '--summary'),
-          evidence: csvOption(argv, '--evidence')
+          evidence: optionalCsvOption(argv, '--evidence')
         }
       };
     case 'complete-step':
@@ -962,7 +966,17 @@ function writeLine(stream: NodeJS.WritableStream, value: string) {
 
 if (require.main === module) {
   runCli().catch((error) => {
-    process.stderr.write(`${JSON.stringify({ event: 'fatal', message: boundedMessage(error) })}\n`);
+    let message = boundedMessage(error);
+    // Turn an authority refusal into the actual instruction. `complete-goal` is operator-only
+    // on purpose - a seat must not be able to declare the whole engagement finished on its own
+    // say-so - but a bare 403 tells the caller nothing about what to do instead, and the
+    // caller is an agent that will otherwise either retry it or quietly skip recording.
+    if (message.includes('operator_required')) {
+      message += ' | complete-goal is operator-only by design. Use `complete-step` for your own'
+        + ' progress, or ask the operator to run:'
+        + ' node dist/mailbox.js complete-goal --root <root> --agent <seat> --summary "..."';
+    }
+    process.stderr.write(`${JSON.stringify({ event: 'fatal', message })}\n`);
     process.exitCode = 1;
   });
 }
