@@ -61,6 +61,24 @@ export type MailboxState = {
    * down BEFORE the work is what makes the later claim falsifiable.
    */
   goal: Goal | null;
+  /**
+   * Who owes the next action.
+   *
+   * A stall is not a transport failure - every stall this project has had happened while both
+   * seats were alive, leased and heartbeating. It is an OWNERSHIP failure: nobody held an open
+   * action, and nothing in the system could say so. `status` showed green throughout.
+   *
+   * Sending passes the baton to the recipient: the sender has just acted, the recipient now
+   * owes a response. If the holder goes quiet past a threshold while the goal is unmet and the
+   * bus is not halted, that is a stall with a NAME attached - see `stallCheck`.
+   */
+  baton: Baton | null;
+};
+
+export type Baton = {
+  holder: string;
+  since: string;
+  reason: string;
 };
 
 export type Goal = {
@@ -275,6 +293,15 @@ export class MailboxStore {
       state.seq = seq;
       state.round = round;
       state.agents = knownAgents;
+      // Sending passes the baton. The sender has just acted; the recipient now owes the next
+      // action. This is what makes a stall attributable instead of atmospheric - without it,
+      // "nobody is doing anything" is indistinguishable from "someone is thinking hard", and
+      // every stall on this project happened with both seats alive and heartbeating.
+      state.baton = {
+        holder: message.to,
+        since: message.createdAt,
+        reason: `#${seq} from ${message.from}: ${message.subject}`
+      };
       const designatedRound = state.haltPolicy.atRounds.includes(round) ||
         (state.haltPolicy.everyRounds !== null && round % state.haltPolicy.everyRounds === 0);
       if (round >= state.maxRounds || designatedRound) {
@@ -480,6 +507,38 @@ export class MailboxStore {
       await this.appendLineUnsafe(`\n**ASSIGNED** ${seat}: ${responsibility}\n`);
       return state;
     });
+  }
+
+  /**
+   * Is anyone actually on the hook right now?
+   *
+   * Deliberately reports rather than acts. An automatic reassignment would paper over the
+   * question a human needs answered - WHY did the holder stop - and would let a broken loop
+   * look self-healing.
+   */
+  async stallCheck(staleAfterSeconds = 300): Promise<{
+    stalled: boolean; reason: string; holder: string | null; heldSeconds: number | null;
+  }> {
+    const state = await this.loadState();
+    if (state.halted) {
+      return { stalled: false, reason: `halted: ${state.stopReason ?? 'no reason recorded'}`, holder: null, heldSeconds: null };
+    }
+    if (!state.goal) {
+      return { stalled: true, reason: 'no goal set - nothing to be finished, so nobody owes an action', holder: null, heldSeconds: null };
+    }
+    if (!state.baton) {
+      return { stalled: true, reason: 'goal is open but NOBODY holds the baton - no open action exists', holder: null, heldSeconds: null };
+    }
+    const held = (Date.now() - Date.parse(state.baton.since)) / 1000;
+    if (held > staleAfterSeconds) {
+      return {
+        stalled: true,
+        reason: `${state.baton.holder} has held the baton ${Math.round(held)}s without acting (${state.baton.reason})`,
+        holder: state.baton.holder,
+        heldSeconds: Math.round(held)
+      };
+    }
+    return { stalled: false, reason: `${state.baton.holder} owes the next action`, holder: state.baton.holder, heldSeconds: Math.round(held) };
   }
 
   async configureHalting(policy: Partial<HaltPolicy>): Promise<MailboxState> {
@@ -716,7 +775,8 @@ export class MailboxStore {
       claims: {},
       haltPolicy: { onStepCompletion: false, onGoalCompletion: true, atRounds: [], everyRounds: null },
       completions: [],
-      goal: null
+      goal: null,
+      baton: null
     };
   }
 
@@ -1176,6 +1236,15 @@ async function runCli(argv = process.argv.slice(2)) {
         Object.entries(state.goal!.assignments).map(([seat, task]) => `${seat}: ${task}`).join('\n'));
       return 0;
     }
+    case 'stall-check': {
+      const report = await store.stallCheck(intArg(args, 'stale-after', 300));
+      if (json) { console.log(JSON.stringify(report, null, 2)); }
+      else {
+        console.log(report.stalled ? `STALLED: ${report.reason}` : `ok: ${report.reason}`);
+        if (report.holder) console.log(`  baton: ${report.holder} (${report.heldSeconds}s)`);
+      }
+      return report.stalled ? 1 : 0;
+    }
     case 'configure-halting': {
       const state = await store.configureHalting({
         onStepCompletion: optionalBoolArg(args, 'on-step'),
@@ -1211,7 +1280,7 @@ async function runCli(argv = process.argv.slice(2)) {
     }
     default:
       throw new Error(
-        'usage: mailbox <init|send|inbox|read|wait|claim|release|claims|status|doctor|goal|assign|configure-halting|complete-step|complete-goal|halt|resume> [options]'
+        'usage: mailbox <init|send|inbox|read|wait|claim|release|claims|status|doctor|goal|assign|stall-check|configure-halting|complete-step|complete-goal|halt|resume> [options]'
       );
   }
 }
