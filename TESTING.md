@@ -2,17 +2,27 @@
 
 Run before commit, VSIX install, or Marketplace work.
 
+## What each command actually covers
+
+| Command | Covers | Does **not** cover |
+|---------|--------|--------------------|
+| `npm test` | `tsc` + `node --test tests/*.test.js` (unit/integration in Node) | Extension host, VSIX install, real VS Code activation |
+| `npm run check` | `npm test` **and** `npm audit --audit-level=high` | Extension host / VSIX |
+| `npm run test:vscode:source` | Real VS Code, extension loaded from this source tree | Packaged Marketplace artifact |
+| `npm run test:vscode:vsix` | Package → install into empty profile → lifecycle smoke on **that** VSIX | Fast iteration |
+| `npm run test:all` / `check:release` | Node suite + both VS Code tiers (or check + vscode) | Marketplace identity / CI on GitHub |
+
+**Do not quote `npm test` alone as the release bar.** Agents and humans have done that and missed entire tiers. Prefer `npm run check` for everyday gates and `npm run test:all` (or `check:release`) before merge when a desktop with VS Code is available.
+
 ## One-time setup
 
 ```bash
 npm install
 npm run compile
-npm test
+npm run check
 ```
 
-`npm test` = `tsc` + `node --test tests/*.test.js`.
-
-Expect a green suite (mailbox, harness, capabilities, skse-devkit, lm-worker as present). If compile fails, do not package.
+Expect a green Node suite (mailbox, harness, capabilities, skse-devkit, lm-worker, worker-client as present). If compile fails, do not package.
 
 ### Automated VS Code extension-host smoke
 
@@ -236,8 +246,10 @@ Install `.vsix` into a normal VS Code window and repeat **workflow + mailbox** s
 
 ## Minimum bar before commit / share
 
-- [ ] `npm test` green
-- [ ] F5 initialize + mailbox send/inbox
+- [ ] `npm run check` green (Node tests **plus** audit — not `npm test` alone)
+- [ ] On a desktop with VS Code: `npm run test:vscode:vsix` or full `npm run test:all`
+- [ ] F5 or installed VSIX: initialize + mailbox send/inbox
 - [ ] Docs match staged bin names and v0.2 behaviour
 - [ ] No secrets in repo
 - [ ] PROVENANCE still accurate if dependencies changed
+- [ ] If merging to `main`: GitHub CI must run at least `npm ci` + `npm run check` (see PR process); do not merge on agent-asserted green only

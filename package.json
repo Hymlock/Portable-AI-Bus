@@ -379,7 +379,8 @@
     "test:vscode": "npm run test:vscode:source && npm run test:vscode:vsix",
     "test:all": "npm test && npm run test:vscode",
     "test:release": "npm test && npm run test:vscode:vsix",
-    "check": "npm test",
+    "check": "npm test && npm audit --audit-level=high",
+    "check:release": "npm run check && npm run test:vscode",
     "package": "vsce package"
   },
   "devDependencies": {
