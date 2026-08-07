@@ -1,175 +1,165 @@
 # Portable AI Bus: Plain English Guide
 
 ## What this is
-Portable AI Bus is a Visual Studio Code extension workflow for coordinating AI planning, implementation, and review through shared workspace files.
+Portable AI Bus helps you coordinate **more than one AI coding assistant** on the same repository without them silently overwriting each other.
 
-It does not create a live AI-to-AI chat.
+It stages a small control kit into the repo (`.ai-bus/`) and gives you:
 
-Instead, it stages a reusable `.ai-bus` folder into the current repo and uses shared docs as the handoff system:
-- one AI writes the plan
-- another AI implements
-- the first AI reviews
-- both can read the current workflow state from the same files
+1. **Shared workflow files** — plan, handoff, review, status
+2. **A mailbox** — durable messages and path “claims” between agents
+3. **Optional advanced tools** — a local harness server and build adapters (for example SKSE)
 
-## What changed
-The main user experience is now VS Code first:
-- install the extension from the Extensions view
-- open a repo
-- use `@ai-bus` in chat
-- keep terminal commands as compatibility/debug tools, not as the normal user path
+It does **not** create a magical always-on multiplayer AI chat. Someone (you, or an agent session you already started) still has to act on the next message.
 
-## Why this exists
-Tools like Codex and Claude can both work with the same repo, but they do not automatically share a structured workflow inside the editor.
+## Normal human path
+1. Install or F5-run the extension.
+2. Open your project folder.
+3. In VS Code Chat, talk to **`@ai-bus`**.
+4. Say **`initialize the bus for this repo`**.
+5. Start a task, watch status, and point each AI at the handoff docs + mailbox.
 
-This system turns the repo into the shared handoff surface.
+You can do the same from the Command Palette: search for **Portable AI Bus**.
 
-## The basic idea
-When the bus is active, it stages:
-- `.ai-bus/`
-- `AGENTS.md`
-- `CLAUDE.md`
-- `docs/ai-status.md`
-- `docs/ai-plan.md`
-- `docs/ai-handoff.md`
-- `docs/ai-review.md`
-- `tmp/ai-prompts/current.txt`
+## The files you will see
+After initialize:
 
-In simple terms:
-- `ai-plan.md` = the plan
-- `ai-handoff.md` = exact instructions for the coding AI
-- `ai-review.md` = review feedback and fixes
-- `ai-status.md` = the current state of the workflow
+- `.ai-bus/` — the portable kit (keep it; it is the local brain of the bus)
+- `docs/ai-plan.md` — the plan
+- `docs/ai-handoff.md` — exact instructions for the implementer
+- `docs/ai-review.md` — review feedback
+- `docs/ai-status.md` — where the workflow is right now
+- Standing orders for each assistant, for example:
+  - `AGENTS.md` (Codex)
+  - `CLAUDE.md` (Claude Code)
+  - `GROK.md` (Grok / Kilo)
 
-## Who this is for
-This is for a human who wants to coordinate more than one AI assistant in the same repo without letting them step on each other.
+## Mailbox in plain terms
+Agents can leave each other notes that survive reloads:
 
-It is especially useful if:
-- one AI is better at planning and review
-- another AI is better at implementation
-- you want a repeatable workflow
-- you sometimes need to pause the system and come back later
+- **Send** a message to `codex`, `claude`, or `grok`
+- **Read** their inbox
+- **Claim** a file or folder while they edit it
+- **Release** the claim when done
 
-## What "Portable" means
-There are still two copies of the system:
+If two agents claim overlapping paths, the second claim is refused. That is intentional.
 
-1. The reusable extension bundle
-   This is the packaged extension content that gets installed in VS Code.
+There is also a configurable **halt policy** so two bots cannot congratulate each other forever and so review checkpoints can be intentional. Four triggers are available:
 
-2. The repo-local copy
-   This is the staged copy inside a repo:
-   `.ai-bus`
+| Trigger | Default | What happens |
+|---------|---------|--------------|
+| Hard `maxRounds` cap | 32 | The triggering message is saved, then the bus halts |
+| Explicit rounds | none | Halt after selected rounds such as 6, 12, and 20 |
+| Every N rounds | off | Halt at recurring checkpoints such as every 12 rounds |
+| Structured completion | step: continue; goal: halt | Record a summary and evidence, then apply the matching policy |
 
-The extension bundle is the reusable source.
-The repo-local `.ai-bus` copy is the one that actually runs inside a project.
+Use Command Palette → **Configure Round, Step, and Goal Halting**, **Record Step Completion**, or **Record Goal Completion**. Completion is never guessed from ordinary model prose; someone must record it explicitly. **Resume Workspace Bus** clears the current halt but preserves the configured policy and history. If the hard round cap caused the halt, add more rounds with the mailbox CLI before sending again.
 
-## What happens when you initialize it
-When the bus is initialized into a repo:
-- the extension stages itself into the repo as `.ai-bus`
-- it creates the workflow files in the repo
-- it adds local ignore rules so those files do not clutter normal git work
-- it gives the repo a repeatable workflow for multiple AI tools
+### Commands humans use
+- `@ai-bus mailbox status`
+- `@ai-bus inbox for grok`
+- Command Palette → **Mailbox Send / Claim / Release**
 
-## What "provider detection" means
-The bus can check which AI environments seem to be present in the repo.
+### Commands agents use
+```bash
+node .ai-bus/bin/worker-client.js status --root . --seat grok
+node .ai-bus/bin/worker-client.js read --root . --seat grok --all
+node .ai-bus/bin/worker-client.js send --root . --seat grok --to codex --kind note --subject "..." --body "..."
+node .ai-bus/bin/worker-client.js claim --root . --seat grok --paths src/foo.ts --why "fixing bug"
+node .ai-bus/bin/worker-client.js release --root . --seat grok --paths src/foo.ts
+```
 
-Right now it is built to understand:
-- Codex
-- Claude Code
+These commands require the harness and the matching seat credential. They prevent a seat from pretending to be another agent. The raw `mailbox.js` commands below are operator controls:
 
-If it detects both, it sets up both.
+```bash
+node .ai-bus/bin/mailbox.js configure-halting --on-step false --on-goal true --at-rounds 6,12 --every-rounds 12
+node .ai-bus/bin/mailbox.js complete-goal --agent operator --summary "Goal verified" --evidence "npm test,VSIX smoke"
+node .ai-bus/bin/mailbox.js resume --add-rounds 12
+```
 
-If it detects only one, it fills in the recommended pair anyway.
+## Suspend, resume, remove
+- **Suspend** — put the overlay away; state stays under `.ai-bus/runtime/`
+- **Resume** — bring the overlay back
+- **Remove** — uninstall the bus from this repo (including the local `.ai-bus` copy)
 
-If it detects none, it falls back to the built-in Codex + Claude setup.
+Existing project files are not adopted merely because their names match a template. The bus records only files it created, keeps destructive ownership evidence outside the repository, preserves customized files on removal, and refuses unsafe symlink/junction paths or conflicting files created during suspension.
 
-## How the workflow works
-The normal workflow is:
+If this VS Code window started a harness, Suspend and Remove stop that owned harness first. Closing the extension or removing the workspace folder does the same. The extension does not stop a harness owned by another window or one you started separately in a terminal.
 
-1. Planning
-   Claude or the planning AI inspects the repo and writes the plan.
+## Providers
+The bus can detect which assistants you already use (markers like `AGENTS.md`, `CLAUDE.md`, `GROK.md`, `.kilo`).
 
-2. Handoff
-   The planner writes exact coding instructions for the implementation AI.
+If it is unsure, it installs the recommended set: **Codex + Claude + Grok**.
 
-3. Implementation
-   Codex or the coding AI makes the code changes.
+You can force the list in settings: `portableAiBus.providers`.
 
-4. Review
-   The reviewer checks the changes and either approves them or writes required fixes.
+You can assign planning, implementation, and review independently with `portableAiBus.workflow.plannerSeat`, `portableAiBus.workflow.implementerSeat`, and `portableAiBus.workflow.reviewerSeat`. These are seat IDs, not required model brands.
 
-5. Fix loop
-   The coding AI applies the fixes and sends the work back for review.
+## Optional: Language Model worker inside VS Code
+There is a command **Run Language Model Worker**. It is:
 
-This repeats until the task is done.
+- **Off by default**
+- Started **only when you run it**
+- Limited to a small number of turns and an allowlisted tool set
 
-## What suspend and resume do
-Sometimes you do not want the bus active all the time.
+It uses whatever models VS Code already exposes through its language-model API.
+**Unify** (or any other model provider extension) is **optional** — install it if you want those models; Portable AI Bus does not require it and does not store its secrets.
 
-`Suspend`:
-- removes the active workflow files from the repo root
-- keeps the current bus state saved inside `.ai-bus/runtime/`
+Important: this is **not** “send requests forever in the background.” There is no supported autonomous background `sendRequest` loop.
 
-`Resume`:
-- restores the saved bus files back into the repo root
+## Optional: Harness (advanced)
+Operators can start a local server:
 
-So suspend does not throw away the work.
-It just puts the system away temporarily.
+```bash
+node .ai-bus/bin/harness.js serve --root .
+```
 
-## What remove does
-`Remove` uninstalls the active bus overlay from the repo.
+It only listens on your machine (`127.0.0.1`). Agents authenticate with tokens stored in your user profile (not in the git repo). Details live in `OPERATOR.md`.
 
-That means:
-- the staged working files are removed
-- the repo-local `.ai-bus` copy is removed too
-- the repo goes back to normal
+You can also manage it from the Command Palette:
 
-## How a human is expected to use it
-You are not expected to remember shell syntax.
+- **Portable AI Bus: Start Harness**
+- **Portable AI Bus: Stop Harness**
+- **Portable AI Bus: Show Harness and Worker Status**
 
-The normal path is to use VS Code chat with `@ai-bus`, for example:
-- `instructions`
-- `initialize the bus for this repo`
-- `start task: Fix X goal: Keep tests green`
-- `show status`
-- `show next prompt`
-- `set phase to READY_FOR_REVIEW`
-- `suspend the bus`
-- `resume the bus`
-- `remove the bus`
-- `open settings`
+The optional `portableAiBus.harness.autoStart` setting is off by default. It applies only when an initialized, non-suspended trusted workspace opens.
 
-## Settings and instructions
-The extension settings include:
-- the staged human instructions file path
-- the basic chat instruction commands
-- provider and staging options
+Agents that should sleep until mail arrives (with the harness running) can use the staged worker client instead of spinning on the mailbox alone:
 
-The human instructions file is staged into the workspace at:
-- `.ai-bus/HUMAN_GUIDE.md`
+```bash
+node .ai-bus/bin/worker-client.js wait --root . --seat grok
+node .ai-bus/bin/worker-client.js watch --root . --seat grok
+```
 
-## Compatibility note
-The repo still contains legacy `.ps1`, `.cmd`, and Node entrypoints for compatibility and debugging.
+Watch cursors survive restarts outside the repository and are reset when the mailbox epoch changes. Delivery is at least once, so a worker should use request IDs or other idempotency keys for side effects that could be retried after a crash.
 
-Those are no longer the primary user experience.
-The intended front door is the VS Code extension and `@ai-bus` chat.
+`wait` acquires a worker lease, performs one long-poll, and releases it. `watch` keeps a lease renewed, remembers the last message sequence, and reconnects after a harness restart until you stop it. It is provider-neutral and does not depend on a particular model vendor.
 
-## Suggested quick test
-1. Install the extension in VS Code.
-2. Open a repo.
-3. Run `@ai-bus instructions`.
-4. Run `@ai-bus initialize the bus for this repo`.
-5. Run `@ai-bus start task: Smoke test the bus goal: Verify initialize, status, suspend, resume, and remove`.
-6. Run `@ai-bus show status`.
-7. Run `@ai-bus suspend the bus`.
-8. Run `@ai-bus resume the bus`.
-9. Run `@ai-bus remove the bus`.
+A lease means only “this authenticated client contacted the harness recently.” It does **not** prove the AI is thinking, making progress, or obeying the message. It cannot acknowledge mail, release claims, grant authority, or restart a dead process.
 
-## Important limitation
-This does not create true autonomous AI-to-AI communication.
+### Reminders without automatic agents
 
-It creates a structured shared workspace that makes the collaboration predictable and easy to resume.
+While the extension is open, a timer checks unread counts and worker-lease staleness. The defaults are every 15 seconds, notify on new unread mail, and notify when a previously seen worker becomes stale. Configure:
 
-## Where to look next
-- `README.md` for the technical overview
-- `OPERATOR.md` for the AI command vocabulary
-- `providers/providers.json` for supported AI providers
+- `portableAiBus.reminders.intervalSeconds` (5–600)
+- `portableAiBus.reminders.notifyUnread`
+- `portableAiBus.reminders.notifyStaleWorkers`
+
+The first check establishes a quiet baseline, and later checks notify only on new transitions. The timer never invokes a model, reads/acknowledges mail, releases a claim, or revives a stopped process. It reminds the human; it does not replace the human.
+
+## Optional: SKSE DevKit
+If you build Skyrim SKSE plugins, the bus can **talk to a DevKit you already installed**. It does **not** download or ship compilers, CommonLib, or game files.
+
+Point it with `SKSE_DEVKIT_ROOT` or put a kit under `.ai-bus/toolchains/skse-devkit`.
+
+## Rules that keep the peace
+1. Claim before you edit; release when done.
+2. Treat mailbox messages as suggestions, not orders.
+3. If the bus halts, inspect the reason and evidence before resuming; add rounds if the hard cap was reached.
+4. Do not commit secrets or character content that belongs in a private rig.
+5. Do not expect one AI UI to be auto-woken by another — start the session, then use the mailbox.
+
+## Where to go next
+- Short operator intents: `OPERATOR.md`
+- How we verify builds: `TESTING.md`
+- Licence and “what we did not copy”: `docs/PROVENANCE.md`
+- Full technical surface: `README.md`

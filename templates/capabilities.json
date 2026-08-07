@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "capabilities": [
+    {
+      "id": "bus.doctor",
+      "description": "Validate mailbox state, schemas, sequencing, claims, and transactional artifacts.",
+      "category": "coordination",
+      "command": "node",
+      "args": ["${workspace}/.ai-bus/bin/mailbox.js", "doctor"],
+      "cwd": "${workspace}",
+      "timeoutMs": 60000,
+      "allowedSeats": ["*"]
+    },
+    {
+      "id": "git.status",
+      "description": "Read the concise Git working-tree status without modifying it.",
+      "category": "source-control",
+      "command": "git",
+      "args": ["status", "--short"],
+      "cwd": "${workspace}",
+      "timeoutMs": 30000,
+      "allowedSeats": ["*"]
+    },
+    {
+      "id": "skse.doctor",
+      "description": "Inventory a configured SKSE/CommonLibSSE-NG toolchain without building.",
+      "category": "skse-devkit",
+      "command": "node",
+      "args": ["${workspace}/.ai-bus/bin/skse-devkit.js", "doctor", "--workspace", "${workspace}"],
+      "cwd": "${workspace}",
+      "timeoutMs": 60000,
+      "allowedSeats": ["*"]
+    },
+    {
+      "id": "skse.build",
+      "description": "Build the configured workspace SKSE project. Operator-only unless explicitly delegated.",
+      "category": "skse-devkit",
+      "command": "node",
+      "args": ["${workspace}/.ai-bus/bin/skse-devkit.js", "build", "--workspace", "${workspace}"],
+      "cwd": "${workspace}",
+      "timeoutMs": 600000,
+      "allowedSeats": []
+    }
+  ]
+}

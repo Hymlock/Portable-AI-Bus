@@ -1,4 +1,4 @@
-# AI Handoff for Codex
+# AI Handoff
 
 ## Task
 TBD

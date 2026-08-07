@@ -30,10 +30,27 @@
           "destination": "CLAUDE.md"
         }
       ]
+    },
+    {
+      "id": "grok",
+      "displayName": "Grok",
+      "role": "audit-implementation",
+      "markersAny": [
+        "GROK.md",
+        ".kilo",
+        "kilo.json"
+      ],
+      "install": [
+        {
+          "source": "providers/grok/GROK.md",
+          "destination": "GROK.md"
+        }
+      ]
     }
   ],
   "recommendedPair": [
     "codex",
-    "claude"
+    "claude",
+    "grok"
   ]
 }

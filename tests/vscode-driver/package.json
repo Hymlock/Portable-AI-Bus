@@ -1,0 +1,9 @@
+{
+  "name": "portable-ai-bus-vsix-test-driver",
+  "publisher": "local-test",
+  "version": "0.0.0",
+  "engines": {
+    "vscode": "^1.101.0"
+  },
+  "main": "./extension.js"
+}

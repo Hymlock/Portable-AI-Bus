@@ -9,16 +9,26 @@ const HANDOFF_PATH = path.resolve(DOCS_DIR, 'ai-handoff.md');
 const REVIEW_PATH = path.resolve(DOCS_DIR, 'ai-review.md');
 const PROMPT_DIR = path.resolve(ROOT, 'tmp', 'ai-prompts');
 const SUSPEND_MARKER_PATH = path.resolve(ROOT, '.ai-bus', 'runtime', 'suspended.json');
+const WORKFLOW_PATH = path.resolve(ROOT, '.ai-bus', 'workflow.json');
 
 const PHASES = new Set([
   'PLANNING',
-  'READY_FOR_CODEX',
-  'CODEX_IN_PROGRESS',
+  'READY_FOR_IMPLEMENTATION',
+  'IMPLEMENTATION_IN_PROGRESS',
   'READY_FOR_REVIEW',
-  'CLAUDE_REVIEW_IN_PROGRESS',
+  'REVIEW_IN_PROGRESS',
   'READY_FOR_FIXES',
   'DONE'
 ]);
+const LEGACY_PHASES = {
+  READY_FOR_CODEX: 'READY_FOR_IMPLEMENTATION',
+  CODEX_IN_PROGRESS: 'IMPLEMENTATION_IN_PROGRESS',
+  CLAUDE_REVIEW_IN_PROGRESS: 'REVIEW_IN_PROGRESS'
+};
+
+function normalizePhase(value) {
+  return PHASES.has(value) ? value : LEGACY_PHASES[value];
+}
 
 function parseArgs(argv) {
   const args = { _: [] };
@@ -81,25 +91,39 @@ function nowIso() {
 }
 
 function parseStatus(markdown) {
+  const rawPhase = extractSection(markdown, 'Current phase');
   return {
-    phase: extractSection(markdown, 'Current phase'),
+    phase: PHASES.has(rawPhase) ? rawPhase : LEGACY_PHASES[rawPhase] || rawPhase,
     currentTask: extractSection(markdown, 'Current task'),
     lastUpdate: extractSection(markdown, 'Last update'),
     log: extractSection(markdown, 'Log')
   };
 }
 
+function workflowRoles() {
+  const defaults = { planner: 'claude', implementer: 'codex', reviewer: 'claude' };
+  if (!fs.existsSync(WORKFLOW_PATH)) return defaults;
+  const value = JSON.parse(readFile(WORKFLOW_PATH));
+  if (value.schemaVersion !== 1 || !value.roles) throw new Error('invalid .ai-bus/workflow.json');
+  const roles = { ...defaults, ...value.roles };
+  for (const [role, seat] of Object.entries(roles)) {
+    if (typeof seat !== 'string' || !/^[a-zA-Z0-9_.-]{1,100}$/.test(seat)) throw new Error(`invalid ${role} seat in .ai-bus/workflow.json`);
+  }
+  return roles;
+}
+
 function inferNextActor(phase) {
+  const roles = workflowRoles();
   switch (phase) {
     case 'PLANNING':
-      return 'Claude';
-    case 'READY_FOR_CODEX':
+      return roles.planner;
+    case 'READY_FOR_IMPLEMENTATION':
     case 'READY_FOR_FIXES':
-    case 'CODEX_IN_PROGRESS':
-      return 'Codex';
+    case 'IMPLEMENTATION_IN_PROGRESS':
+      return roles.implementer;
     case 'READY_FOR_REVIEW':
-    case 'CLAUDE_REVIEW_IN_PROGRESS':
-      return 'Claude';
+    case 'REVIEW_IN_PROGRESS':
+      return roles.reviewer;
     case 'DONE':
       return 'None';
     default:
@@ -111,10 +135,10 @@ function buildNextInstruction(phase, nextActor) {
   switch (phase) {
     case 'DONE':
       return 'Workflow complete. Start a new task or reset docs/ai-status.md to PLANNING.';
-    case 'CODEX_IN_PROGRESS':
-      return 'Codex is currently implementing. Wait for the phase to move to READY_FOR_REVIEW.';
-    case 'CLAUDE_REVIEW_IN_PROGRESS':
-      return 'Claude is currently reviewing. Wait for the phase to move to READY_FOR_FIXES or DONE.';
+    case 'IMPLEMENTATION_IN_PROGRESS':
+      return `${nextActor} is currently implementing. Wait for the phase to move to READY_FOR_REVIEW.`;
+    case 'REVIEW_IN_PROGRESS':
+      return `${nextActor} is currently reviewing. Wait for the phase to move to READY_FOR_FIXES or DONE.`;
     default:
       return `${nextActor} is up next. Paste the prompt below into ${nextActor}.`;
   }
@@ -124,16 +148,18 @@ function buildPrompt(phase) {
   switch (phase) {
     case 'PLANNING':
       return [
-        'Read CLAUDE.md plus docs/ai-status.md, docs/ai-plan.md, docs/ai-handoff.md, and docs/ai-review.md.',
+        `You are the assigned planning seat: ${workflowRoles().planner}.`,
+        'Read the repository instructions plus docs/ai-status.md, docs/ai-plan.md, docs/ai-handoff.md, and docs/ai-review.md.',
         'For the current user task, inspect the repo and write:',
         '- a brief plan in docs/ai-plan.md',
         '- exact implementation steps in docs/ai-handoff.md',
-        'Then update docs/ai-status.md to READY_FOR_CODEX.',
+        'Then update docs/ai-status.md to READY_FOR_IMPLEMENTATION.',
         'Do not implement code.'
       ].join('\n');
-    case 'READY_FOR_CODEX':
+    case 'READY_FOR_IMPLEMENTATION':
       return [
-        'Read AGENTS.md plus docs/ai-status.md, docs/ai-handoff.md, and docs/ai-review.md.',
+        `You are the assigned implementation seat: ${workflowRoles().implementer}.`,
+        'Read the repository instructions plus docs/ai-status.md, docs/ai-handoff.md, and docs/ai-review.md.',
         'Implement the current task from docs/ai-handoff.md.',
         'Make minimal targeted changes.',
         'Run validation if available.',
@@ -141,7 +167,8 @@ function buildPrompt(phase) {
       ].join('\n');
     case 'READY_FOR_REVIEW':
       return [
-        'Read CLAUDE.md plus docs/ai-status.md, docs/ai-plan.md, docs/ai-handoff.md, and docs/ai-review.md.',
+        `You are the assigned review seat: ${workflowRoles().reviewer}.`,
+        'Read the repository instructions plus docs/ai-status.md, docs/ai-plan.md, docs/ai-handoff.md, and docs/ai-review.md.',
         'Review the current changes against the plan and acceptance criteria.',
         'Write required fixes to docs/ai-review.md.',
         'If acceptable, set docs/ai-status.md to DONE.',
@@ -150,17 +177,18 @@ function buildPrompt(phase) {
       ].join('\n');
     case 'READY_FOR_FIXES':
       return [
-        'Read AGENTS.md plus docs/ai-status.md, docs/ai-handoff.md, and docs/ai-review.md.',
+        `You are the assigned implementation seat: ${workflowRoles().implementer}.`,
+        'Read the repository instructions plus docs/ai-status.md, docs/ai-handoff.md, and docs/ai-review.md.',
         'Apply the required fixes from docs/ai-review.md.',
         'Run validation if available.',
         'Then update docs/ai-status.md to READY_FOR_REVIEW.'
       ].join('\n');
     case 'DONE':
       return 'Workflow complete. Start a new task or reset docs/ai-status.md to PLANNING.';
-    case 'CODEX_IN_PROGRESS':
-      return 'Codex is currently implementing. Wait for docs/ai-status.md to move to READY_FOR_REVIEW.';
-    case 'CLAUDE_REVIEW_IN_PROGRESS':
-      return 'Claude is currently reviewing. Wait for docs/ai-status.md to move to READY_FOR_FIXES or DONE.';
+    case 'IMPLEMENTATION_IN_PROGRESS':
+      return `${workflowRoles().implementer} is currently implementing. Wait for docs/ai-status.md to move to READY_FOR_REVIEW.`;
+    case 'REVIEW_IN_PROGRESS':
+      return `${workflowRoles().reviewer} is currently reviewing. Wait for docs/ai-status.md to move to READY_FOR_FIXES or DONE.`;
     default:
       return `No prompt template for phase ${phase}.`;
   }
@@ -271,17 +299,19 @@ function commandStatus() {
 }
 
 function commandPrompt(args) {
-  const phase = (args.phase || validateStatus().phase).trim();
-  if (!PHASES.has(phase)) {
-    throw new Error(`invalid phase: ${phase}`);
+  const requested = (args.phase || validateStatus().phase).trim();
+  const phase = normalizePhase(requested);
+  if (!phase) {
+    throw new Error(`invalid phase: ${requested}`);
   }
   writePromptArtifacts(phase);
   console.log(buildPrompt(phase));
 }
 
 function commandSetPhase(args) {
-  const phase = (args.phase || '').trim();
-  if (!PHASES.has(phase)) {
+  const requested = (args.phase || '').trim();
+  const phase = normalizePhase(requested);
+  if (!phase) {
     throw new Error(`invalid or missing --phase. Expected one of: ${Array.from(PHASES).join(', ')}`);
   }
 
@@ -369,7 +399,7 @@ function commandInit(args) {
   writeFile(
     HANDOFF_PATH,
     [
-      '# AI Handoff for Codex',
+      '# AI Handoff',
       '',
       '## Task',
       task,
