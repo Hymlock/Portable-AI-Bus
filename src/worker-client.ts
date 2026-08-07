@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { credentialWorkspaceKey } from './workspace-key';
 
 type Endpoint = {
   schemaVersion: 1;
@@ -222,7 +223,7 @@ async function discoverConnection(options: WorkerClientOptions): Promise<Connect
       !validOpaqueId(endpoint.instanceId) || !Array.isArray(endpoint.seats) || !endpoint.seats.includes(options.seat)) {
     throw new Error('Harness endpoint is invalid or does not register this seat.');
   }
-  const workspaceKey = createHash('sha256').update(root).digest('hex').slice(0, 24);
+  const workspaceKey = credentialWorkspaceKey(root);
   const credentialsRoot = options.credentialsDir ?? path.join(os.homedir(), '.portable-ai-bus', 'credentials', workspaceKey);
   const tokenPath = path.join(credentialsRoot, endpoint.instanceId, 'seats', `${options.seat}.token`);
   const token = (await fs.readFile(tokenPath, 'utf8')).trim();
@@ -506,7 +507,7 @@ function clientIdentity(value: string | undefined, seat: string) {
 function workerCursorPath(options: WorkerClientOptions, clientId: string) {
   if (options.cursorPath) return path.resolve(options.cursorPath);
   const root = path.resolve(options.root);
-  const workspaceKey = createHash('sha256').update(root).digest('hex').slice(0, 24);
+  const workspaceKey = credentialWorkspaceKey(root);
   const credentialsRoot = options.credentialsDir ?? path.join(os.homedir(), '.portable-ai-bus', 'credentials', workspaceKey);
   const key = createHash('sha256').update(`${options.seat}\0${clientId}`).digest('hex');
   return path.join(credentialsRoot, 'cursors', `${key}.json`);

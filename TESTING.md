@@ -14,6 +14,30 @@ npm test
 
 Expect a green suite (mailbox, harness, capabilities, skse-devkit, lm-worker as present). If compile fails, do not package.
 
+### Automated VS Code extension-host smoke
+
+On a desktop-capable machine with VS Code installed:
+
+```bash
+npm run test:vscode
+# or unit + extension-host checks together
+npm run test:all
+# run only the source-tree lifecycle smoke
+npm run test:vscode:source
+# package, install, discover, and test the exact shipped VSIX in an isolated profile
+npm run test:vscode:vsix
+# release-oriented unit + installed-artifact checks
+npm run test:release
+```
+
+The source runner uses an isolated temporary two-folder workspace and the installed VS Code executable (`VSCODE_EXECUTABLE_PATH` can override its location). It verifies the staged bundle and authenticated live harness, explicit stop, suspend/resume restoration, workspace-folder removal, and actual extension-host deactivation cleanup. It also checks that the recorded loopback port refuses connections and that the endpoint, lock, and instance credential directory are gone after each stop boundary.
+
+The VSIX runner packages into a temporary directory, installs into a unique empty extensions directory, confirms the precise extension/version inventory and loaded physical path, checks critical shipped assets, then runs the lifecycle smoke through a separate no-op test driver. This prevents a source checkout from shadowing the artifact under test. Packaging invokes `vscode:prepublish`, so a clean clone cannot ship absent or stale `dist/` output.
+
+Both extension-host scripts run beneath a process-tree watchdog (three minutes for source, four minutes for install/package). Before launching Electron, each runner publishes a narrowly scoped cleanup manifest. A timeout terminates the owned Electron/Node descendants, validates and removes only the recorded temporary fixture and workspace credential namespaces, then exits 124.
+
+This is an Electron extension-host test, not a browser-style headless test. Linux CI needs a display such as `xvfb-run`; keep `npm test` as the portable fast gate where desktop execution is unavailable.
+
 ## Extension Development Host
 
 1. Open **this** repository in VS Code.
@@ -30,6 +54,7 @@ Expect a green suite (mailbox, harness, capabilities, skse-devkit, lm-worker as 
    - `.ai-bus/bin/mailbox.js`
    - `.ai-bus/bin/harness.js`
    - `.ai-bus/bin/worker-client.js`
+   - `.ai-bus/bin/workspace-key.js`
    - `.ai-bus/bin/skse-devkit.js`
    - Provider files as selected (`AGENTS.md` / `CLAUDE.md` / `GROK.md`)
    - `docs/ai-status.md`, `ai-plan.md`, `ai-handoff.md`, `ai-review.md`

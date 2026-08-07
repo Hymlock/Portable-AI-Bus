@@ -74,7 +74,7 @@ Or use Command Palette **Start Harness**, **Stop Harness**, and **Show Harness a
 - Listen **`127.0.0.1` only**.
 - Bearer tokens: **operator** + one **seat** per registered mailbox agent.
 - Token files under
-  `~/.portable-ai-bus/credentials/<sha256(workspace)[:24]>/<instanceId>/`
+  `~/.portable-ai-bus/credentials/<workspace-identity-hash>/<instanceId>/`
   (`operator.token`, `seats/<agent>.token`), mode 0600-ish; **removed on clean stop**.
 - Workspace lock file prevents two harnesses on the same root. Dead owners are recovered only after an exclusive recovery election and an exact owner recheck; a live or ambiguous owner fails closed.
 - Runtime audit/endpoint under `.ai-bus/runtime/harness/` (no long-lived secrets in-repo).

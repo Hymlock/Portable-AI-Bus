@@ -464,6 +464,7 @@ export class WorkspaceBus {
       { from: 'dist/capabilities.js', to: path.join(paths.busDir, 'bin', 'capabilities.js') },
       { from: 'dist/harness.js', to: path.join(paths.busDir, 'bin', 'harness.js') },
       { from: 'dist/worker-client.js', to: path.join(paths.busDir, 'bin', 'worker-client.js') },
+      { from: 'dist/workspace-key.js', to: path.join(paths.busDir, 'bin', 'workspace-key.js') },
       { from: 'dist/adapters/skse-devkit.js', to: path.join(paths.busDir, 'bin', 'skse-devkit.js') },
       { from: 'providers', to: path.join(paths.busDir, 'providers') },
       { from: 'templates', to: path.join(paths.busDir, 'templates') },

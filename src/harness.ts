@@ -5,6 +5,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { CapabilityRunner } from './capabilities';
 import { BusHaltedError, ClaimConflictError, MailboxStore } from './mailbox';
+import { credentialWorkspaceKey } from './workspace-key';
 
 type ToolDefinition = {
   name: string;
@@ -113,7 +114,7 @@ export class HarnessServer {
     this.capabilities = new CapabilityRunner(this.workspaceRoot);
     this.runtimeDir = path.join(this.workspaceRoot, '.ai-bus', 'runtime', 'harness');
     this.instanceId = randomUUID();
-    const workspaceKey = createHash('sha256').update(this.workspaceRoot).digest('hex').slice(0, 24);
+    const workspaceKey = credentialWorkspaceKey(this.workspaceRoot);
     const credentialsDir = options.credentialsDir ?? path.join(os.homedir(), '.portable-ai-bus', 'credentials', workspaceKey);
     this.credentialInstanceDir = path.join(credentialsDir, this.instanceId);
     this.tokenPath = path.join(this.credentialInstanceDir, 'operator.token');
