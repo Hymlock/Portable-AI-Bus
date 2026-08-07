@@ -6,7 +6,8 @@ const fs = require('node:fs/promises');
 const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
-const { runTests } = require('@vscode/test-electron');
+const { existsSync } = require('node:fs');
+const { runTests, downloadAndUnzipVSCode } = require('@vscode/test-electron');
 
 async function main() {
   const sourceRoot = path.resolve(__dirname, '..');
@@ -18,7 +19,7 @@ async function main() {
   const userDataDir = path.join(fixtureRoot, 'user-data');
   const extensionsDir = path.join(fixtureRoot, 'extensions');
   const vsixPath = path.join(fixtureRoot, 'portable-ai-bus.vsix');
-  const vscodeExecutablePath = resolveVSCodeExecutable();
+  const vscodeExecutablePath = await resolveVSCodeExecutable();
   let failure;
   let leakedCredentialDirs = [];
 
@@ -119,12 +120,14 @@ async function resolveDirectCliScript(vscodeExecutablePath) {
   throw new Error(`Could not locate VS Code cli.js beneath ${installRoot}.`);
 }
 
-function resolveVSCodeExecutable() {
+// See the note in run-vscode-integration.js: this required a preinstalled editor and had no
+// non-Windows fallback, which made the tier unrunnable on Linux and macOS.
+async function resolveVSCodeExecutable() {
   const executable = process.env.VSCODE_EXECUTABLE_PATH || (process.platform === 'win32'
     ? path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Microsoft VS Code', 'Code.exe')
     : undefined);
-  if (!executable) throw new Error('Set VSCODE_EXECUTABLE_PATH to an installed VS Code executable.');
-  return executable;
+  if (executable && existsSync(executable)) return executable;
+  return downloadAndUnzipVSCode();
 }
 
 function runCommand(command, args, options) {

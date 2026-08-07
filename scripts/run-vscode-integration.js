@@ -3,7 +3,24 @@ const os = require('node:os');
 const path = require('node:path');
 const net = require('node:net');
 const assert = require('node:assert/strict');
-const { runTests } = require('@vscode/test-electron');
+const { existsSync } = require('node:fs');
+const { runTests, downloadAndUnzipVSCode } = require('@vscode/test-electron');
+// `@vscode/test-electron` can download a matching VS Code itself. The scripts previously
+// REQUIRED an already-installed editor and, off Windows, had no fallback at all - so
+// `npm run test:vscode` threw "Set VSCODE_EXECUTABLE_PATH..." on any Linux or macOS machine,
+// including CI. The first dispatch of the VS Code job failed exactly this way.
+//
+// Honouring the env var first keeps the fast path for anyone who already has an editor and
+// does not want a second copy downloaded; falling back to the download makes the tier
+// self-contained everywhere else. Found by the distribution sweep, 2026-08-07.
+async function resolveOrDownloadVSCode() {
+  const explicit = process.env.VSCODE_EXECUTABLE_PATH || (process.platform === 'win32'
+    ? path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Microsoft VS Code', 'Code.exe')
+    : undefined);
+  if (explicit && existsSync(explicit)) return explicit;
+  return downloadAndUnzipVSCode();
+}
+
 
 async function main() {
   const extensionDevelopmentPath = path.resolve(__dirname, '..');
@@ -22,11 +39,7 @@ async function main() {
     await Promise.all([fs.mkdir(first), fs.mkdir(second)]);
     await fs.writeFile(workspace, `${JSON.stringify({ folders: [{ path: first }, { path: second }] }, null, 2)}\n`, 'utf8');
     await publishWatchdogManifest(fixtureRoot, [first, second], extensionDevelopmentPath);
-    const vscodeExecutablePath = process.env.VSCODE_EXECUTABLE_PATH ||
-      (process.platform === 'win32'
-        ? path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Microsoft VS Code', 'Code.exe')
-        : undefined);
-    if (!vscodeExecutablePath) throw new Error('Set VSCODE_EXECUTABLE_PATH to an installed VS Code executable.');
+    const vscodeExecutablePath = await resolveOrDownloadVSCode();
     process.chdir(fixtureRoot);
     changedDirectory = true;
     const code = await runTests({
