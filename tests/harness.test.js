@@ -146,10 +146,14 @@ test('wake responses page unread mail without acknowledging or skipping it', asy
   t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true }); });
   const first = await server.mailbox.send({ from: 'codex', to: 'grok', subject: 'first', body: 'one' });
   const second = await server.mailbox.send({ from: 'codex', to: 'grok', subject: 'second', body: 'two' });
-  const pageOne = await request('/v1/wake?agent=grok&afterSeq=0&timeoutMs=10');
+  // 2000ms, not 10ms. Both messages already exist, so the wake returns as soon as it looks -
+  // the timeout only bounds how long it waits for mail that is already there. At 10ms a loaded
+  // runner timed out BEFORE reading the mailbox and returned an empty page, failing on
+  // windows-latest. Raising it costs nothing in the passing case and removes the race.
+  const pageOne = await request('/v1/wake?agent=grok&afterSeq=0&timeoutMs=2000');
   assert.deepEqual(pageOne.body.messages.map((message) => message.seq), [first.seq]);
   assert.equal(pageOne.body.hasMore, true);
-  const pageTwo = await request(`/v1/wake?agent=grok&afterSeq=${first.seq}&timeoutMs=10`);
+  const pageTwo = await request(`/v1/wake?agent=grok&afterSeq=${first.seq}&timeoutMs=2000`);
   assert.deepEqual(pageTwo.body.messages.map((message) => message.seq), [second.seq]);
   assert.equal(pageTwo.body.hasMore, false);
   assert.equal((await server.mailbox.status()).unread.grok, 2);
