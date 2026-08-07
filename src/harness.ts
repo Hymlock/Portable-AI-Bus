@@ -53,6 +53,8 @@ type HarnessOptions = {
   credentialsDir?: string;
   seatTokens?: Record<string, string>;
   leaseStaleMs?: number;
+  /** Injectable so the capacity-refusal path is testable without opening 256 leases. */
+  maxWorkerLeases?: number;
   leaseSweepMs?: number;
   maxWakeMessages?: number;
   maxWakeResponseBytes?: number;
@@ -86,6 +88,7 @@ export class HarnessServer {
   private readonly maxBodyBytes: number;
   private readonly maxConcurrentRuns: number;
   private readonly leaseStaleMs: number;
+  private readonly maxWorkerLeases: number;
   private readonly leaseSweepMs: number;
   private readonly maxWakeMessages: number;
   private readonly maxWakeResponseBytes: number;
@@ -129,6 +132,7 @@ export class HarnessServer {
     this.maxBodyBytes = boundedInteger(options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES, 1_024, 16 * 1024 * 1024, 'maxBodyBytes');
     this.maxConcurrentRuns = boundedInteger(options.maxConcurrentRuns ?? 2, 1, 32, 'maxConcurrentRuns');
     this.leaseStaleMs = boundedInteger(options.leaseStaleMs ?? DEFAULT_LEASE_STALE_MS, 100, 24 * 60 * 60_000, 'leaseStaleMs');
+    this.maxWorkerLeases = boundedInteger(options.maxWorkerLeases ?? MAX_WORKER_LEASES, 1, 4096, 'maxWorkerLeases');
     this.leaseSweepMs = boundedInteger(options.leaseSweepMs ?? DEFAULT_LEASE_SWEEP_MS, 50, 60 * 60_000, 'leaseSweepMs');
     this.maxWakeMessages = boundedInteger(options.maxWakeMessages ?? DEFAULT_MAX_WAKE_MESSAGES, 1, 1_000, 'maxWakeMessages');
     this.maxWakeResponseBytes = boundedInteger(options.maxWakeResponseBytes ?? DEFAULT_MAX_WAKE_RESPONSE_BYTES, 1_024, 16 * 1024 * 1024, 'maxWakeResponseBytes');
@@ -820,7 +824,7 @@ export class HarnessServer {
       const generation = Math.max(0, ...[...this.leases.values()].filter((lease) => lease.seat === seat).map((lease) => lease.generation)) + 1;
       existing = undefined;
       this.leases.delete(key);
-      if (this.leases.size >= MAX_WORKER_LEASES) {
+      if (this.leases.size >= this.maxWorkerLeases) {
         // Prune only leases that are already STALE. The previous behaviour evicted the
         // oldest-seen lease unconditionally, which under pressure could drop a live one - the
         // victim then looks like a network flake to whoever held it, which is the hardest
@@ -838,7 +842,7 @@ export class HarnessServer {
           throw new HarnessHttpError(
             429,
             'lease_capacity',
-            `Worker lease capacity reached (${MAX_WORKER_LEASES}) and every lease is live. Retry shortly.`,
+            `Worker lease capacity reached (${this.maxWorkerLeases}) and every lease is live. Retry shortly.`,
             true
           );
         }

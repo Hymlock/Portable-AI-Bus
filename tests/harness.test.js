@@ -3,6 +3,7 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
+const { randomUUID } = require('node:crypto');
 const { HarnessServer } = require('../dist/harness.js');
 
 async function setup(agents = [], maxRounds = 20, serverOptions = {}) {
@@ -463,4 +464,54 @@ test('harness enforces separate step and goal completion halt authority', async 
   });
   assert.equal(goal.status, 200);
   assert.equal((await server.mailbox.status()).halted, false);
+});
+
+// Lease capacity. Before 2026-08-07 the harness evicted the OLDEST-SEEN lease at capacity
+// whether or not it was live, so a working seat could lose its lease under pressure and read
+// the loss as a network flake - the hardest fault to diagnose, because nothing recorded that
+// it was deliberate. It now prunes only stale leases and refuses with 429 when all are live.
+// maxWorkerLeases is injectable purely so this is provable without opening 256 leases.
+
+test('lease capacity refuses with 429 rather than evicting a live lease', async (t) => {
+  const { root, server } = await setup(['codex', 'grok'], 20, { maxWorkerLeases: 1, leaseStaleMs: 60_000 });
+  t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
+  const endpoint = JSON.parse(await fs.readFile(path.join(root, '.ai-bus', 'runtime', 'harness', 'endpoint.json'), 'utf8'));
+  const beat = (seat, clientId) => fetch(`http://127.0.0.1:${endpoint.port}/v1/heartbeat`, {
+    method: 'POST',
+    headers: { authorization: `Bearer test-${seat}-token`, 'content-type': 'application/json' },
+    body: JSON.stringify({ clientId, acquisitionId: randomUUID() })
+  });
+
+  const first = await beat('codex', 'worker:codex');
+  assert.equal(first.status, 200);
+
+  // grok's lease cannot be granted without evicting codex's, which is LIVE.
+  const second = await beat('grok', 'worker:grok');
+  assert.equal(second.status, 429);
+  const body = await second.json();
+  assert.equal(body.error.code, 'lease_capacity');
+  assert.equal(body.error.retriable, true);
+
+  // codex must still hold its lease - the whole point is that it was not sacrificed.
+  const status = await fetch(`http://127.0.0.1:${endpoint.port}/v1/status`, {
+    headers: { authorization: 'Bearer test-token' }
+  }).then((response) => response.json());
+  assert.equal(status.workerLeases.seats.find((item) => item.seat === 'codex').state, 'live');
+});
+
+test('lease capacity prunes a stale lease instead of refusing', async (t) => {
+  // Same capacity, but codex's lease is allowed to go stale first. Then evicting it is correct
+  // and grok should be admitted - refusing here would be the opposite failure.
+  const { root, server } = await setup(['codex', 'grok'], 20, { maxWorkerLeases: 1, leaseStaleMs: 150, leaseSweepMs: 50 });
+  t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
+  const endpoint = JSON.parse(await fs.readFile(path.join(root, '.ai-bus', 'runtime', 'harness', 'endpoint.json'), 'utf8'));
+  const beat = (seat, clientId) => fetch(`http://127.0.0.1:${endpoint.port}/v1/heartbeat`, {
+    method: 'POST',
+    headers: { authorization: `Bearer test-${seat}-token`, 'content-type': 'application/json' },
+    body: JSON.stringify({ clientId, acquisitionId: randomUUID() })
+  });
+
+  assert.equal((await beat('codex', 'worker:codex')).status, 200);
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  assert.equal((await beat('grok', 'worker:grok')).status, 200);
 });
