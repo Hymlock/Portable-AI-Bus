@@ -33,7 +33,7 @@ async function setup(agents = [], maxRounds = 20, serverOptions = {}) {
 
 test('harness rejects unauthenticated clients and exposes provider-neutral tools', async (t) => {
   const { root, server, request } = await setup();
-  t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true }); });
+  t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
   const endpoint = JSON.parse(await fs.readFile(path.join(root, '.ai-bus', 'runtime', 'harness', 'endpoint.json'), 'utf8'));
   const denied = await fetch(`http://127.0.0.1:${endpoint.port}/v1/tools`);
   assert.equal(denied.status, 401);
@@ -45,7 +45,7 @@ test('harness rejects unauthenticated clients and exposes provider-neutral tools
 
 test('harness request ids make repeated send requests idempotent', async (t) => {
   const { root, server, request } = await setup(['codex', 'grok']);
-  t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true }); });
+  t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
   const payload = {
     requestId: 'same-request',
     name: 'mailbox_send',
@@ -63,7 +63,7 @@ test('harness request ids make repeated send requests idempotent', async (t) => 
 
 test('concurrent duplicate request ids execute only once', async (t) => {
   const { root, server, request } = await setup(['codex', 'grok']);
-  t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true }); });
+  t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
   const payload = {
     requestId: 'concurrent-same-request',
     name: 'mailbox_send',
@@ -79,7 +79,7 @@ test('concurrent duplicate request ids execute only once', async (t) => {
 
 test('harness wake long-poll returns an addressed message without acknowledging it', async (t) => {
   const { root, server, request } = await setup(['codex', 'grok']);
-  t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true }); });
+  t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
   const waiting = request('/v1/wake?agent=grok&timeoutMs=3000');
   await new Promise((resolve) => setTimeout(resolve, 100));
   await request('/v1/tool', {
@@ -99,7 +99,7 @@ test('harness wake long-poll returns an addressed message without acknowledging 
 
 test('harness stop aborts active long-polls promptly', async (t) => {
   const { root, server, request } = await setup(['codex']);
-  t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true }); });
+  t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
   const waiting = request('/v1/wake?agent=codex&timeoutMs=30000');
   await new Promise((resolve) => setTimeout(resolve, 100));
   const started = Date.now();
@@ -129,13 +129,18 @@ test('harness stop cancels an active capability instead of hanging shutdown', as
 
 test('wake cursor ignores unchanged unread mail and emits only later sequences', async (t) => {
   const { root, server, request } = await setup(['codex', 'grok']);
-  t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true }); });
+  t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
   const first = await server.mailbox.send({ from: 'codex', to: 'grok', subject: 'first', body: 'remains unread' });
-  const unchanged = await request(`/v1/wake?agent=grok&afterSeq=${first.seq}&timeoutMs=100`);
+  // This one INTENTIONALLY expects a timeout - there is no newer mail - so it must stay
+  // short or the test sleeps for real. 300ms is enough headroom for a loaded runner to reach
+  // the poll while still expiring quickly.
+  const unchanged = await request(`/v1/wake?agent=grok&afterSeq=${first.seq}&timeoutMs=300`);
   assert.equal(unchanged.body.wake, 'timeout');
   assert.deepEqual(unchanged.body.messages, []);
   const second = await server.mailbox.send({ from: 'codex', to: 'grok', subject: 'second', body: 'new wake' });
-  const later = await request(`/v1/wake?agent=grok&afterSeq=${first.seq}&timeoutMs=100`);
+  // This one expects a MESSAGE, which already exists, so the timeout only bounds how long it
+  // waits for mail that is already there. Long is free.
+  const later = await request(`/v1/wake?agent=grok&afterSeq=${first.seq}&timeoutMs=2000`);
   assert.equal(later.body.wake, 'message');
   assert.deepEqual(later.body.messages.map((message) => message.seq), [second.seq]);
   assert.equal((await server.mailbox.status()).unread.grok, 2);
@@ -143,7 +148,7 @@ test('wake cursor ignores unchanged unread mail and emits only later sequences',
 
 test('wake responses page unread mail without acknowledging or skipping it', async (t) => {
   const { root, server, request } = await setup(['codex', 'grok'], 20, { maxWakeMessages: 1 });
-  t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true }); });
+  t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
   const first = await server.mailbox.send({ from: 'codex', to: 'grok', subject: 'first', body: 'one' });
   const second = await server.mailbox.send({ from: 'codex', to: 'grok', subject: 'second', body: 'two' });
   // 2000ms, not 10ms. Both messages already exist, so the wake returns as soon as it looks -
@@ -161,7 +166,7 @@ test('wake responses page unread mail without acknowledging or skipping it', asy
 
 test('mailbox inbox tool pages with afterSeq without acknowledging messages', async (t) => {
   const { root, server, request } = await setup(['codex', 'grok']);
-  t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true }); });
+  t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
   const sent = [];
   for (let index = 0; index < 6; index += 1) {
     sent.push(await server.mailbox.send({ from: 'codex', to: 'grok', subject: `message-${index}`, body: 'one' }));
@@ -178,7 +183,7 @@ test('mailbox inbox tool pages with afterSeq without acknowledging messages', as
 
 test('seat credentials cannot impersonate or acknowledge another seat', async (t) => {
   const { root, server, request } = await setup(['codex', 'grok']);
-  t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true }); });
+  t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
   const asCodex = async (pathname, body) => {
     const endpoint = JSON.parse(await fs.readFile(path.join(root, '.ai-bus', 'runtime', 'harness', 'endpoint.json'), 'utf8'));
     const response = await fetch(`http://127.0.0.1:${endpoint.port}${pathname}`, {
@@ -226,7 +231,7 @@ test('request id reuse with different input is rejected and completed requests s
 
   const restarted = new HarnessServer(root, { token: 'new-token', credentialsDir: path.join(root, '.credentials') });
   const endpoint = await restarted.start(0);
-  t.after(async () => { await restarted.stop(); await fs.rm(root, { recursive: true, force: true }); });
+  t.after(async () => { await restarted.stop(); await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
   const response = await fetch(`http://${endpoint.host}:${endpoint.port}/v1/tool`, {
     method: 'POST',
     headers: { authorization: 'Bearer new-token', 'content-type': 'application/json' },
@@ -241,14 +246,14 @@ test('request id reuse with different input is rejected and completed requests s
 test('workspace singleton lock prevents a second server from replacing live credentials', async (t) => {
   const { root, server } = await setup();
   const second = new HarnessServer(root, { token: 'second-token', credentialsDir: path.join(root, '.credentials') });
-  t.after(async () => { await server.stop(); await second.stop(); await fs.rm(root, { recursive: true, force: true }); });
+  t.after(async () => { await server.stop(); await second.stop(); await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
   await assert.rejects(() => second.start(0), /already owns this workspace/);
   assert.equal(await fs.readFile(server.tokenPath, 'utf8'), 'test-token\n');
 });
 
 test('concurrent stale-lock recovery elects exactly one harness owner', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'portable-ai-bus-harness-recovery-'));
-  t.after(async () => { await fs.rm(root, { recursive: true, force: true }); });
+  t.after(async () => { await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
   await fs.mkdir(path.join(root, '.ai-bus', 'runtime', 'harness'), { recursive: true });
   await fs.writeFile(path.join(root, '.ai-bus', 'capabilities.json'), JSON.stringify({ version: 1, capabilities: [] }), 'utf8');
   const seed = new HarnessServer(root, { credentialsDir: path.join(root, '.credentials') });
@@ -279,7 +284,7 @@ test('a stranded harness recovery lock fails closed with an actionable diagnosti
 
 test('halt blocks claim and release mutations', async (t) => {
   const { root, server, request } = await setup(['codex']);
-  t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true }); });
+  t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
   await server.mailbox.claim({ agent: 'codex', paths: ['src/held.ts'] });
   await server.mailbox.halt('test guard');
 
@@ -298,7 +303,7 @@ test('halt blocks claim and release mutations', async (t) => {
 
 test('round cap halts immediately after durably writing the cap message', async (t) => {
   const { root, server, request } = await setup(['codex', 'grok'], 1);
-  t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true }); });
+  t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
   await server.mailbox.send({ from: 'codex', to: 'grok', subject: 'one', body: 'reaches cap' });
   assert.equal((await server.mailbox.status()).halted, true);
   const claim = await request('/v1/tool', {
@@ -321,7 +326,7 @@ test('authenticated heartbeats persist leases and transition to stale without gr
   // which is the right trade for a test that otherwise fails at random and teaches everyone
   // to re-run CI until it goes green.
   const { root, server, request } = await setup(['codex', 'grok'], 20, { leaseStaleMs: 1000, leaseSweepMs: 100 });
-  t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true }); });
+  t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
   const endpoint = JSON.parse(await fs.readFile(path.join(root, '.ai-bus', 'runtime', 'harness', 'endpoint.json'), 'utf8'));
   const heartbeat = await fetch(`http://127.0.0.1:${endpoint.port}/v1/heartbeat`, {
     method: 'POST',
@@ -354,7 +359,7 @@ test('authenticated heartbeats persist leases and transition to stale without gr
 
 test('operator credentials cannot forge worker liveness', async (t) => {
   const { root, server, request } = await setup(['grok']);
-  t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true }); });
+  t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
   const heartbeat = await request('/v1/heartbeat', {
     method: 'POST', body: JSON.stringify({ agent: 'grok', clientId: 'forged' })
   });
@@ -365,7 +370,7 @@ test('operator credentials cannot forge worker liveness', async (t) => {
 
 test('seat lease requests require an explicit process-unique client id and return validation errors', async (t) => {
   const { root, server } = await setup(['grok']);
-  t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true }); });
+  t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
   const endpoint = JSON.parse(await fs.readFile(path.join(root, '.ai-bus', 'runtime', 'harness', 'endpoint.json'), 'utf8'));
   const response = await fetch(`http://127.0.0.1:${endpoint.port}/v1/heartbeat`, {
     method: 'POST', headers: { authorization: 'Bearer test-grok-token', 'content-type': 'application/json' }, body: '{}'
@@ -376,7 +381,7 @@ test('seat lease requests require an explicit process-unique client id and retur
 
 test('concurrent seat heartbeats retain every lease record', async (t) => {
   const { root, server } = await setup(['codex', 'grok']);
-  t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true }); });
+  t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
   const endpoint = JSON.parse(await fs.readFile(path.join(root, '.ai-bus', 'runtime', 'harness', 'endpoint.json'), 'utf8'));
   await Promise.all([
     ['codex', 'test-codex-token'],
@@ -391,7 +396,7 @@ test('concurrent seat heartbeats retain every lease record', async (t) => {
 
 test('one live worker lease per seat and stale generations cannot reclaim authority', async (t) => {
   const { root, server } = await setup(['grok'], 20, { leaseStaleMs: 100, leaseSweepMs: 50 });
-  t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true }); });
+  t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
   const endpoint = JSON.parse(await fs.readFile(path.join(root, '.ai-bus', 'runtime', 'harness', 'endpoint.json'), 'utf8'));
   const beat = (body) => fetch(`http://127.0.0.1:${endpoint.port}/v1/heartbeat`, {
     method: 'POST', headers: { authorization: 'Bearer test-grok-token', 'content-type': 'application/json' }, body: JSON.stringify(body)
@@ -416,7 +421,7 @@ test('one live worker lease per seat and stale generations cannot reclaim author
 
 test('acquisition nonces fence duplicate processes while preserving lost-response retries', async (t) => {
   const { root, server } = await setup(['grok']);
-  t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true }); });
+  t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
   const endpoint = JSON.parse(await fs.readFile(path.join(root, '.ai-bus', 'runtime', 'harness', 'endpoint.json'), 'utf8'));
   const beat = (acquisitionId) => fetch(`http://127.0.0.1:${endpoint.port}/v1/heartbeat`, {
     method: 'POST', headers: { authorization: 'Bearer test-grok-token', 'content-type': 'application/json' },
@@ -435,7 +440,7 @@ test('acquisition nonces fence duplicate processes while preserving lost-respons
 
 test('harness enforces separate step and goal completion halt authority', async (t) => {
   const { root, server, request } = await setup(['codex']);
-  t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true }); });
+  t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
   const configured = await request('/v1/tool', {
     method: 'POST',
     body: JSON.stringify({ requestId: 'halt-policy', name: 'mailbox_configure_halting', input: { onStepCompletion: true, onGoalCompletion: false } })

@@ -25,7 +25,7 @@ test('capability runner uses argv without shell interpretation and writes a rece
       timeoutMs: 5000
     }
   ]);
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   const receipt = await new CapabilityRunner(root).run('literal');
   assert.equal(receipt.status, 'passed');
   assert.equal(receipt.stdout.tail, 'hello; echo INJECTED');
@@ -44,14 +44,14 @@ test('capability output and command metadata redact common secrets', async (t) =
       timeoutMs: 5000
     }
   ]);
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   const receipt = await new CapabilityRunner(root).run('redact');
   assert.equal(receipt.stdout.tail, 'Bearer [REDACTED] password=[REDACTED]');
 });
 
 test('capability working directory cannot escape unless explicitly allowed', async (t) => {
   const root = await workspace([{ id: 'escape', command: process.execPath, args: ['--version'], cwd: '..' }]);
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   await assert.rejects(() => new CapabilityRunner(root).run('escape'), /escapes the workspace/);
 });
 
@@ -61,7 +61,7 @@ test('capability receipts cannot be redirected through a symbolic link', async (
   await fs.mkdir(path.join(root, '.ai-bus', 'runtime'), { recursive: true });
   await fs.symlink(outside, path.join(root, '.ai-bus', 'runtime', 'receipts'), process.platform === 'win32' ? 'junction' : 'dir');
   t.after(async () => {
-    await fs.rm(root, { recursive: true, force: true });
+    await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
     await fs.rm(outside, { recursive: true, force: true });
   });
   await assert.rejects(() => new CapabilityRunner(root).run('safe-receipt'), /symbolic link or junction/);
@@ -72,7 +72,7 @@ test('capability timeout is recorded and returned as failure evidence', async (t
   const root = await workspace([
     { id: 'slow', command: process.execPath, args: ['-e', 'setInterval(() => {}, 1000)'], timeoutMs: 150 }
   ]);
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   const receipt = await new CapabilityRunner(root).run('slow');
   assert.equal(receipt.status, 'timed_out');
   assert.equal(receipt.timedOut, true);
@@ -82,7 +82,7 @@ test('capability cancellation terminates the owned process and records cancellat
   const root = await workspace([
     { id: 'cancel', command: process.execPath, args: ['-e', 'setInterval(() => {}, 1000)'], timeoutMs: 5000 }
   ]);
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   const controller = new AbortController();
   setTimeout(() => controller.abort(), 100);
   const receipt = await new CapabilityRunner(root).run('cancel', { signal: controller.signal });
@@ -98,7 +98,7 @@ test('capability child receives a minimal environment unless names are explicitl
   const root = await workspace([
     { id: 'env', command: process.execPath, args: ['-e', `process.stdout.write(process.env.${secretName} || "absent")`], timeoutMs: 5000 }
   ]);
-  t.after(async () => { delete process.env[secretName]; await fs.rm(root, { recursive: true, force: true }); });
+  t.after(async () => { delete process.env[secretName]; await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
   const receipt = await new CapabilityRunner(root).run('env');
   assert.equal(receipt.stdout.tail, 'absent');
 });
@@ -113,7 +113,7 @@ test('timeout terminates descendants in the owned process tree', async (t) => {
     JSON.stringify({ version: 1, capabilities: [{ id: 'tree', command: process.execPath, args: ['-e', parentCode], timeoutMs: 150 }] }),
     'utf8'
   );
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   const receipt = await new CapabilityRunner(root).run('tree');
   assert.equal(receipt.status, 'timed_out');
   await new Promise((resolve) => setTimeout(resolve, 1100));

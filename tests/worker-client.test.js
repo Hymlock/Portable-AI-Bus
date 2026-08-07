@@ -367,7 +367,7 @@ test('provider-neutral worker client integrates with durable harness mail', asyn
   const server = new HarnessServer(root, { credentialsDir });
   await server.mailbox.ensureInitialized(['sender', 'worker']);
   await server.start(0);
-  t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true }); });
+  t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
 
   const waiting = waitForMailbox({ root, seat: 'worker', timeoutMs: 3000, credentialsDir, clientId: 'integration' });
   await new Promise((resolve) => setTimeout(resolve, 100));
@@ -386,7 +386,7 @@ test('seat credential principal binding handles dotted ids without prefix confus
   const server = new HarnessServer(root, { credentialsDir });
   await server.mailbox.ensureInitialized(['review', 'review.bot']);
   await server.start(0);
-  t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true }); });
+  t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
 
   const dotted = await callSeatTool({ root, seat: 'review.bot', credentialsDir }, 'mailbox_status');
   assert.equal(dotted.instanceId, server.instanceId);
@@ -417,7 +417,7 @@ async function clientFixture(t, instanceId, token) {
     await fs.writeFile(path.join(tokenDir, 'worker.token'), `${nextToken}\n`);
   }
   await rotate(instanceId, token);
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   return { root, credentialsDir, rotate };
 }
 
