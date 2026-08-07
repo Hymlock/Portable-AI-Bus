@@ -6,7 +6,19 @@ const test = require('node:test');
 const { SkseDevkitAdapter } = require('../dist/adapters/skse-devkit.js');
 
 async function makeFakeDevkit(layout = 'real-kit') {
-  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'portable-skse-ws-'));
+  // realpath the temp dir before building anything on it.
+  //
+  // The adapter canonicalises with fs.realpath (skse-devkit.ts resolveSourceDir), so it
+  // returns long-form paths. os.tmpdir() on Windows can return the 8.3 SHORT form: on a
+  // GitHub runner the user is `runneradmin`, whose short name is `RUNNER~1`, and the two
+  // strings are not equal even though they are the same directory. Comparing a raw tmpdir
+  // path against an adapter result therefore failed on CI while passing on any machine whose
+  // username is short enough to escape 8.3 mangling - which is why this never fired locally.
+  //
+  // Found by the windows-latest matrix on its first run, 2026-08-07. The product is correct;
+  // the assertion was.
+  const created = await fs.mkdtemp(path.join(os.tmpdir(), 'portable-skse-ws-'));
+  const workspace = await fs.realpath(created).catch(() => created);
   const root =
     layout === 'workspace-local'
       ? path.join(workspace, '.ai-bus', 'toolchains', 'skse-devkit')
