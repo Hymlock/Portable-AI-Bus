@@ -62,15 +62,25 @@ export type MailboxState = {
    */
   goal: Goal | null;
   /**
-   * Who owes the next action.
+   * Who owes the next DECISION.
    *
-   * A stall is not a transport failure - every stall this project has had happened while both
-   * seats were alive, leased and heartbeating. It is an OWNERSHIP failure: nobody held an open
-   * action, and nothing in the system could say so. `status` showed green throughout.
+   * NOT a work lock, and reading it as one is expensive. Holding the baton does not mean you
+   * are the only seat allowed to act; it means the next judgement call is yours. Every other
+   * seat should be working in parallel the whole time - that is the entire reason there is
+   * more than one.
    *
-   * Sending passes the baton to the recipient: the sender has just acted, the recipient now
-   * owes a response. If the holder goes quiet past a threshold while the goal is unmet and the
-   * bus is not halted, that is a stall with a NAME attached - see `stallCheck`.
+   * Concurrency is controlled by CLAIMS, which are per-path and refuse on overlap. The baton
+   * and the claim answer different questions: "whose call is it?" versus "who is editing
+   * this?". Conflating them serialises two agents into one, at double the wall-clock time,
+   * while each waits politely for a turn it did not need.
+   *
+   * A stall is not a transport failure - every stall on this project happened while both seats
+   * were alive, leased and heartbeating. It is a DECISION-ownership failure: nobody owed the
+   * next call, and nothing could say so. `status` showed green throughout.
+   *
+   * Sending passes the baton to the recipient: the sender has just decided, the recipient now
+   * owes the next one. If the holder goes quiet past a threshold while the goal is unmet and
+   * the bus is not halted, that is a stall with a NAME attached - see `stallCheck`.
    */
   baton: Baton | null;
 };
