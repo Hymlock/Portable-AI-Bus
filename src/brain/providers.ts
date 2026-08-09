@@ -522,6 +522,59 @@ export function codexProvider(options: CodexProviderOptions = {}): ModelProvider
 // ---------------------------------------------------------------------------
 
 /**
+ * Pull the answer out of whatever shape `grok --output-format json` produced.
+ *
+ * Whole-document parse FIRST, then per-line. The first version only scanned lines, and this CLI
+ * pretty-prints ONE object across many of them, so every line failed to parse and the fallback
+ * handed the raw envelope back as though it were the answer:
+ *
+ *   {\n  "text": "pong",\n  "stopReason": "end_turn", ... }
+ *
+ * Nothing downstream can tell that from a model that genuinely replied in JSON. It is the
+ * failure this project keeps paying for: output that looks like success.
+ *
+ * Exported so it can be tested on strings directly. Testing it through a fake executable meant
+ * inventing a binary that accepts the provider's real flags, which tests the fake.
+ */
+export function extractGrokAnswer(stdout: string): { text: string; error?: string } {
+  const trimmed = stdout.trim();
+  if (!trimmed) return { text: '' };
+
+  const fromObject = (value: Record<string, unknown>): { text: string; error?: string } => {
+    if (value.type === 'error' && typeof value.message === 'string') {
+      return { text: '', error: value.message };
+    }
+    for (const key of ['text', 'result', 'response', 'content', 'message']) {
+      const candidate = value[key];
+      if (typeof candidate === 'string' && candidate.trim()) return { text: candidate };
+    }
+    return { text: '' };
+  };
+
+  const start = trimmed.indexOf('{');
+  if (start >= 0) {
+    try {
+      const whole = fromObject(JSON.parse(trimmed.slice(start)) as Record<string, unknown>);
+      if (whole.text || whole.error) return whole;
+    } catch { /* not one document - try JSONL below */ }
+  }
+
+  let text = '';
+  let error: string | undefined;
+  for (const line of trimmed.split(/\r?\n/)) {
+    const brace = line.indexOf('{');
+    if (brace < 0) continue;
+    try {
+      const parsed = fromObject(JSON.parse(line.slice(brace)) as Record<string, unknown>);
+      if (parsed.error) error = parsed.error;
+      if (parsed.text) text = parsed.text;
+    } catch { /* not JSON - fall through */ }
+  }
+  if (!text && !error) text = trimmed;   // plain-text output is still an answer
+  return { text, error };
+}
+
+/**
  * Locate the xAI Grok CLI.
  *
  * The npm package installs a THIN TRAMPOLINE at `%APPDATA%\npm\grok.cmd`, which Node 24 cannot
@@ -589,29 +642,6 @@ export function grokProvider(options: GrokProviderOptions = {}): ModelProvider {
     });
   }
 
-  /** Pull the answer out of whatever shape `--output-format json` produced. */
-  function extract(stdout: string): { text: string; error?: string } {
-    const trimmed = stdout.trim();
-    if (!trimmed) return { text: '' };
-    // Scan lines: the CLI may emit JSONL, and the LAST object carrying text is the answer.
-    let text = '';
-    let error: string | undefined;
-    for (const line of trimmed.split(/\r?\n/)) {
-      const start = line.indexOf('{');
-      if (start < 0) continue;
-      try {
-        const value = JSON.parse(line.slice(start)) as Record<string, unknown>;
-        if (value.type === 'error' && typeof value.message === 'string') error = value.message;
-        for (const key of ['result', 'text', 'response', 'content', 'message']) {
-          const candidate = value[key];
-          if (typeof candidate === 'string' && candidate.trim() && value.type !== 'error') text = candidate;
-        }
-      } catch { /* not JSON - fall back below */ }
-    }
-    if (!text && !error) text = trimmed;   // plain-text output is still an answer
-    return { text, error };
-  }
-
   return {
     kind: 'grok',
 
@@ -631,7 +661,7 @@ export function grokProvider(options: GrokProviderOptions = {}): ModelProvider {
       if (options.model) args.push('--model', options.model);
 
       const { code, stdout, stderr } = await run(args, timeoutMs);
-      const { text, error } = extract(stdout);
+      const { text, error } = extractGrokAnswer(stdout);
 
       if (error || code !== 0 || !text.trim()) {
         // The failure TEXT is returned rather than swallowed: `classifyFailure` reads it to tell
@@ -691,4 +721,7 @@ export function resolveChain(
   const { chainProviders } = require('./chain') as typeof import('./chain');
   return chainProviders(configs.map((config) => resolveProvider(config)), chainOptions);
 }
+
+
+
 

@@ -48,7 +48,12 @@ test('a brain reporting done does NOT end the runner', async () => {
       return { done: true };
     }
   };
-  const summary = await runBrain({ seat: 'claude', brain, bus, maxWakes: 3 });
+  // `thinkWhenIdle` is ON here deliberately. The third wake carries no mail, and idle wakes no
+  // longer reach the brain by default - a seat that thinks about an empty inbox costs a model
+  // call per listen window forever. That optimisation is orthogonal to what this test guards,
+  // so it is switched off rather than allowed to weaken the assertion: the alarm must still
+  // ring on three brain invocations, not on two.
+  const summary = await runBrain({ seat: 'claude', brain, bus, maxWakes: 3, thinkWhenIdle: true });
   assert.equal(summary.stoppedBy, 'maxWakes', 'runner must survive done:true');
   assert.equal(turns, 3, 'brain should have been woken three times despite reporting done');
   assert.equal(sent.length, 3, 'each wake reported without ending the process');

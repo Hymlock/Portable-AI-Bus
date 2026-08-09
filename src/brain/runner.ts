@@ -50,6 +50,13 @@ export type RunnerOptions = {
    * deterministically: no model call, therefore no reply, therefore no next wake.
    */
   ackKinds?: string[];
+  /**
+   * Call the brain on an idle timeout wake — one with no mail at all.
+   *
+   * Off by default. On, every seat pays a model call per listen window forever whether or not
+   * anything is happening, which on Windows also means a console flash per call.
+   */
+  thinkWhenIdle?: boolean;
   log?: (event: string, data?: unknown) => void;
   /** Resolves when the caller wants a graceful stop. */
   stopSignal?: Promise<void>;
@@ -75,6 +82,7 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
     listenSeconds = DEFAULT_LISTEN_SECONDS,
     maxWakes,
     ackKinds = DEFAULT_ACK_KINDS,
+    thinkWhenIdle = false,
     log = () => {},
     stopSignal
   } = options;
@@ -128,6 +136,19 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
           kinds: [...new Set(messages.map((m) => (m as { kind?: unknown }).kind))]
         });
         reason = 'timeout';
+        continue;
+      }
+
+      // An IDLE timeout wake carries no mail and no startup work. Thinking about nothing costs a
+      // full model call - and on Windows each of those spawns the agent CLI, which spawns `git`,
+      // which flashes a console window. Three seats at a 300s listen is a model call every 100
+      // seconds forever, on a bus where nothing is happening.
+      //
+      // `thinkWhenIdle` restores the old behaviour for anyone who wants a seat that acts
+      // unprompted. It is off by default because "no mail" is the overwhelmingly common case and
+      // the cost is paid on every seat, forever.
+      if (reason === 'timeout' && messages.length === 0 && !thinkWhenIdle) {
+        log('wake-idle-skipped', { seat });
         continue;
       }
 
