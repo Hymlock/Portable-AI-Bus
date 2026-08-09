@@ -108,6 +108,10 @@ test('fallThroughOn can narrow what justifies trying the next link', async () =>
 
 test('failure classification covers the shapes providers actually emit', () => {
   assert.equal(classifyFailure('insufficient_quota'), 'quota');
+  // A subscription says this, not "insufficient_quota". Missing it classified a real
+  // exhaustion as a generic error during the first live multi-brain run.
+  assert.equal(classifyFailure("You've hit your session limit · resets 2:50pm"), 'quota');
+  assert.equal(classifyFailure('You have reached your limit'), 'quota');
   assert.equal(classifyFailure('You have run out of credits'), 'quota');
   assert.equal(classifyFailure('429 Too Many Requests'), 'rate-limit');
   assert.equal(classifyFailure('401 Unauthorized'), 'auth');

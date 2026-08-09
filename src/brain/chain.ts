@@ -49,7 +49,12 @@ export type FailureReason =
  */
 export function classifyFailure(detail: string): FailureReason {
   const text = detail.toLowerCase();
-  if (/quota|credit|billing|insufficient_quota|out of tokens|spending limit|usage limit/.test(text)) return 'quota';
+  // "session limit" is what a Claude Code SUBSCRIPTION says when it is spent, as opposed to
+  // the API's "insufficient_quota". Missing it classified a real exhaustion as a generic
+  // error - it still fell through, because falling through is the default, but the log then
+  // said `cli:error` for something that was plainly a quota event. A misleading diagnosis is
+  // its own bug: it sends the next person debugging the wrong thing.
+  if (/quota|credit|billing|insufficient_quota|out of tokens|spending limit|usage limit|session limit|limit .{0,12}reset|reached your limit/.test(text)) return 'quota';
   if (/rate.?limit|429|too many requests|overloaded|slow down/.test(text)) return 'rate-limit';
   if (/unauthor|forbidden|401|403|api key|apikey|not logged in|authentication|credential/.test(text)) return 'auth';
   if (/enoent|not found|not installed|command not found|econnrefused|unreachable/.test(text)) return 'unavailable';
