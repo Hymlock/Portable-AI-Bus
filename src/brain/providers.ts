@@ -1,4 +1,4 @@
-/**
+﻿/**
  * How a brain reaches a model. Three routes, chosen by config, all optional.
  *
  * Verified on this machine 2026-08-09:
@@ -13,7 +13,7 @@
 
 import { spawn } from 'node:child_process';
 
-export type ProviderKind = 'cli' | 'api' | 'oauth' | 'exec' | 'codex';
+export type ProviderKind = 'cli' | 'api' | 'oauth' | 'exec' | 'codex' | 'grok';
 
 export type ModelReply = {
   text: string;
@@ -81,11 +81,62 @@ export function resolveCliCommand(name: string): string {
   return name;
 }
 
+/**
+ * A working directory that is NOT a git repository.
+ *
+ * This is the fix for the window flashes, and it took a window-creation hook to find because
+ * polling never caught it. The captured evidence:
+ *
+ *   CREATE pid=13796 conhost class=ConsoleWindowClass title=C:\Program Files\Git\...\git.exe
+ *   CREATE pid=37952 conhost class=ConsoleWindowClass title=C:\Program Files\Git\...\git.exe
+ *
+ * Two per model call, every call. An agent CLI started inside a repository shells out to `git`
+ * for context. `git` is our GRANDCHILD, so the `windowsHide` we set on the model process never
+ * reaches it: it gets a console of its own, and that console flashes.
+ *
+ * No flag on our side can fix a grandchild we do not spawn. Removing the REASON works: with no
+ * repository at the working directory there is nothing for the CLI to ask git about.
+ *
+ * Safe because a brain reasons about mail, not about files. Anything needing repo context goes
+ * through bus tools and capabilities, which run separately and deliberately.
+ */
+/**
+ * Should a spawned model process be given CREATE_NO_WINDOW?
+ *
+ * Normally yes. But under `bus-console` the whole point is that the brain OWNS a real console
+ * and every descendant inherits it â€” and `windowsHide` defeats exactly that. Node maps it to
+ * CREATE_NO_WINDOW, which means "no console" and beats the inherited handles, so the model
+ * process ends up console-less and the `git` calls IT makes each allocate one. Which is how a
+ * shared-console run still flashed.
+ *
+ * Inheritance is the only mechanism that reaches a grandchild. We do not spawn `git`; the agent
+ * CLIs do, for repo context, and no flag of ours can be applied to a process we never launch.
+ * A console at the top of the tree covers all of them at once.
+ */
+function hideWindows(): boolean {
+  return process.env.PORTABLE_AI_BUS_INHERIT_CONSOLE !== '1';
+}
+
+function nonRepoCwd(): string {
+  const nodeOs = require('node:os') as typeof import('node:os');
+  const nodePath = require('node:path') as typeof import('node:path');
+  const nodeFs = require('node:fs') as typeof import('node:fs');
+  const dir = nodePath.join(nodeOs.tmpdir(), 'portable-ai-bus-brain-cwd');
+  try {
+    nodeFs.mkdirSync(dir, { recursive: true });
+    return dir;
+  } catch {
+    return nodeOs.tmpdir();
+  }
+}
+
 export type CliProviderOptions = {
   /** Executable name or path. `claude` on PATH by default. */
   command?: string;
   /** Extra args inserted before the prompt. */
   extraArgs?: string[];
+  /** Working directory. Defaults to a non-repo scratch dir â€” see `nonRepoCwd`. */
+  cwd?: string;
   log?: (event: string, data?: unknown) => void;
 };
 
@@ -98,10 +149,11 @@ export function cliProvider(options: CliProviderOptions = {}): ModelProvider {
   // explicitly rather than turning the shell on: `shell: true` would make every argument a
   // string the shell re-parses, and prompts contain quotes.
   const command = options.command ?? resolveCliCommand('claude');
+  const cwd = options.cwd ?? nonRepoCwd();
 
   async function run(args: string[], timeoutMs: number): Promise<{ code: number; stdout: string; stderr: string }> {
     return new Promise((resolve) => {
-      const child = spawn(command, args, { shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+      const child = spawn(command, args, { shell: false, cwd, windowsHide: hideWindows(), stdio: ['ignore', 'pipe', 'pipe'] });
       let stdout = '';
       let stderr = '';
       child.stdout.on('data', (c) => { stdout += String(c); });
@@ -165,7 +217,7 @@ export function cliProvider(options: CliProviderOptions = {}): ModelProvider {
 }
 
 // ---------------------------------------------------------------------------
-// api / oauth — both go through the SDK, differing only in how they authenticate
+// api / oauth â€” both go through the SDK, differing only in how they authenticate
 // ---------------------------------------------------------------------------
 
 export type SdkProviderOptions = {
@@ -339,7 +391,7 @@ export function execProvider(options: ExecProviderOptions): ModelProvider {
  *
  * It is usually NOT on PATH: the ChatGPT VS Code extension ships the binary inside its own
  * extension directory, which is where it was found on this machine. Searching PATH alone
- * reports "not installed" for a CLI that is present and logged in — the same class of mistake
+ * reports "not installed" for a CLI that is present and logged in â€” the same class of mistake
  * that made `claude` look missing when only the npm shim was unspawnable.
  */
 export function resolveCodexCommand(explicit?: string): string {
@@ -378,6 +430,8 @@ export type CodexProviderOptions = {
   command?: string;
   /** Passed to `--model`. Omit to use whatever Codex is configured for. */
   model?: string;
+  /** Working directory. Defaults to a non-repo scratch dir â€” see `nonRepoCwd`. */
+  cwd?: string;
   timeoutMs?: number;
   log?: (event: string, data?: unknown) => void;
 };
@@ -386,7 +440,7 @@ export type CodexProviderOptions = {
  * The Codex CLI as a provider, authenticated on ITS OWN ChatGPT subscription.
  *
  * This is the concrete answer to Hymlock's constraint. Every other link in the default chain
- * is Anthropic, so a chain of them shares one wallet AND one concurrency ceiling — the ceiling
+ * is Anthropic, so a chain of them shares one wallet AND one concurrency ceiling â€” the ceiling
  * that produced "you've hit your session limit" while the account sat at 30% usage. A Codex
  * link is the first one that fails independently of the others.
  *
@@ -402,6 +456,7 @@ export type CodexProviderOptions = {
 export function codexProvider(options: CodexProviderOptions = {}): ModelProvider {
   const log = options.log ?? (() => {});
   const command = resolveCodexCommand(options.command);
+  const cwd = options.cwd ?? nonRepoCwd();
   const nodeFs = require('node:fs') as typeof import('node:fs');
   const nodePath = require('node:path') as typeof import('node:path');
   const nodeOs = require('node:os') as typeof import('node:os');
@@ -410,7 +465,7 @@ export function codexProvider(options: CodexProviderOptions = {}): ModelProvider
     return new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
       // stdin is 'ignore' deliberately: `codex exec` reads stdin when it is a pipe and will
       // sit there printing "Reading additional input from stdin..." forever otherwise.
-      const child = spawn(command, args, { shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+      const child = spawn(command, args, { shell: false, cwd, windowsHide: hideWindows(), stdio: ['ignore', 'pipe', 'pipe'] });
       let stdout = '';
       let stderr = '';
       child.stdout.on('data', (c) => { stdout += String(c); });
@@ -463,6 +518,134 @@ export function codexProvider(options: CodexProviderOptions = {}): ModelProvider
 }
 
 // ---------------------------------------------------------------------------
+// grok
+// ---------------------------------------------------------------------------
+
+/**
+ * Locate the xAI Grok CLI.
+ *
+ * The npm package installs a THIN TRAMPOLINE at `%APPDATA%\npm\grok.cmd`, which Node 24 cannot
+ * spawn at all, and which in turn execs the real binary that postinstall unpacks into
+ * `~/.grok/bin`. Go straight to the real binary for the same reason as `claude`: a shim that
+ * cannot be spawned looks exactly like a missing install.
+ */
+export function resolveGrokCommand(explicit?: string): string {
+  const nodePath = require('node:path') as typeof import('node:path');
+  const nodeFs = require('node:fs') as typeof import('node:fs');
+  if (explicit) return explicit;
+  if (process.env.GROK_CLI_PATH) return process.env.GROK_CLI_PATH;
+
+  const exe = process.platform === 'win32' ? 'grok.exe' : 'grok';
+  const home = process.env.GROK_HOME
+    ?? nodePath.join(process.env.USERPROFILE || process.env.HOME || '', '.grok');
+  const candidates = [
+    nodePath.join(home, 'bin', exe),
+    ...(process.env.PATH ?? '').split(nodePath.delimiter).filter(Boolean).map((d) => nodePath.join(d, exe))
+  ];
+  for (const candidate of candidates) {
+    try {
+      if (nodeFs.existsSync(candidate)) return candidate;
+    } catch { /* keep looking */ }
+  }
+  return exe;
+}
+
+export type GrokProviderOptions = {
+  command?: string;
+  model?: string;
+  cwd?: string;
+  timeoutMs?: number;
+  log?: (event: string, data?: unknown) => void;
+};
+
+/**
+ * The xAI Grok CLI as a provider — the third vendor, and the one that makes the bus genuinely
+ * vendor-independent rather than merely two-vendor.
+ *
+ * Authenticated by `grok login` against a SuperGrok / X Premium Plus subscription, so it follows
+ * the same rule as the other two: piggyback the subscription the user already pays for, and
+ * treat an API key as optional. `XAI_API_KEY` works if one is ever set, but is not required.
+ *
+ * `-p/--single` prints one response and exits, and `--output-format json` makes that response
+ * parseable rather than scraped. Unlike Codex there is no free auth check — no `login status`
+ * subcommand exists — so `probe` verifies REACHABILITY only, and being signed out surfaces on
+ * the first real call as an `auth` failure that the chain falls through on.
+ */
+export function grokProvider(options: GrokProviderOptions = {}): ModelProvider {
+  const log = options.log ?? (() => {});
+  const command = resolveGrokCommand(options.command);
+  const cwd = options.cwd ?? nonRepoCwd();
+
+  async function run(args: string[], timeoutMs: number) {
+    return new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
+      const child = spawn(command, args, { shell: false, cwd, windowsHide: hideWindows(), stdio: ['ignore', 'pipe', 'pipe'] });
+      let stdout = '';
+      let stderr = '';
+      child.stdout.on('data', (c) => { stdout += String(c); });
+      child.stderr.on('data', (c) => { stderr += String(c); });
+      const timer = setTimeout(() => child.kill(), timeoutMs);
+      child.on('error', (error) => { clearTimeout(timer); resolve({ code: -1, stdout, stderr: String(error) }); });
+      child.on('close', (code) => { clearTimeout(timer); resolve({ code: code ?? -1, stdout, stderr }); });
+    });
+  }
+
+  /** Pull the answer out of whatever shape `--output-format json` produced. */
+  function extract(stdout: string): { text: string; error?: string } {
+    const trimmed = stdout.trim();
+    if (!trimmed) return { text: '' };
+    // Scan lines: the CLI may emit JSONL, and the LAST object carrying text is the answer.
+    let text = '';
+    let error: string | undefined;
+    for (const line of trimmed.split(/\r?\n/)) {
+      const start = line.indexOf('{');
+      if (start < 0) continue;
+      try {
+        const value = JSON.parse(line.slice(start)) as Record<string, unknown>;
+        if (value.type === 'error' && typeof value.message === 'string') error = value.message;
+        for (const key of ['result', 'text', 'response', 'content', 'message']) {
+          const candidate = value[key];
+          if (typeof candidate === 'string' && candidate.trim() && value.type !== 'error') text = candidate;
+        }
+      } catch { /* not JSON - fall back below */ }
+    }
+    if (!text && !error) text = trimmed;   // plain-text output is still an answer
+    return { text, error };
+  }
+
+  return {
+    kind: 'grok',
+
+    async probe() {
+      // Reachability only. There is no free way to ask "am I signed in", and spending a model
+      // call on every startup to find out is the mistake the codex probe deliberately avoids.
+      const { code, stdout, stderr } = await run(['--version'], 30_000);
+      const detail = `${stdout}${stderr}`.trim().split('\n')[0];
+      return code === 0
+        ? { ok: true, detail: `grok: ${detail || 'reachable'} (sign-in verified on first call)` }
+        : { ok: false, detail: `grok not usable: ${detail || `exit ${code}`}` };
+    },
+
+    async ask(prompt, { systemPrompt = '', timeoutMs = options.timeoutMs ?? 600_000 } = {}) {
+      const args = ['-p', systemPrompt ? `${systemPrompt}\n\n---\n\n${prompt}` : prompt,
+                    '--output-format', 'json'];
+      if (options.model) args.push('--model', options.model);
+
+      const { code, stdout, stderr } = await run(args, timeoutMs);
+      const { text, error } = extract(stdout);
+
+      if (error || code !== 0 || !text.trim()) {
+        // The failure TEXT is returned rather than swallowed: `classifyFailure` reads it to tell
+        // "not signed in" (auth - fall through now) from a rate limit (retry this same link).
+        const detail = (error || stderr || stdout || `grok exited ${code}`).slice(0, 400);
+        log('grok-failed', { code, detail });
+        return { text: detail, isError: true };
+      }
+      return { text: text.trim(), isError: false };
+    }
+  };
+}
+
+// ---------------------------------------------------------------------------
 
 export type ResolveOptions = {
   kind?: ProviderKind;
@@ -470,6 +653,7 @@ export type ResolveOptions = {
   sdk?: SdkProviderOptions;
   exec?: ExecProviderOptions;
   codex?: CodexProviderOptions;
+  grok?: GrokProviderOptions;
 };
 
 /**
@@ -482,6 +666,7 @@ export function resolveProvider(options: ResolveOptions = {}): ModelProvider {
   if (kind === 'cli') return cliProvider(options.cli);
   if (kind === 'api' || kind === 'oauth') return sdkProvider(kind, options.sdk);
   if (kind === 'codex') return codexProvider(options.codex);
+  if (kind === 'grok') return grokProvider(options.grok);
   if (kind === 'exec') {
     if (!options.exec) throw new Error('provider "exec" needs { command, args }');
     return execProvider(options.exec);
@@ -506,3 +691,4 @@ export function resolveChain(
   const { chainProviders } = require('./chain') as typeof import('./chain');
   return chainProviders(configs.map((config) => resolveProvider(config)), chainOptions);
 }
+

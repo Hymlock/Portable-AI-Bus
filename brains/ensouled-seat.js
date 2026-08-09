@@ -57,9 +57,12 @@ const SYSTEM = [
  * queueing behind one provider's limit.
  */
 const CHAINS = {
-  codex: [{ kind: 'codex' }, { kind: 'cli' }],
-  grok: [{ kind: 'codex' }, { kind: 'cli' }],
-  default: [{ kind: 'cli' }, { kind: 'codex' }, { kind: 'oauth' }, { kind: 'api' }]
+  // Each seat LEADS with its own vendor, then falls through to the others. A seat named for a
+  // vendor that is signed out still works - it degrades to a sibling instead of going dark -
+  // and the reply records who actually served it, so "grok answered" is never assumed.
+  codex: [{ kind: 'codex' }, { kind: 'grok' }, { kind: 'cli' }],
+  grok: [{ kind: 'grok' }, { kind: 'codex' }, { kind: 'cli' }],
+  default: [{ kind: 'cli' }, { kind: 'codex' }, { kind: 'grok' }, { kind: 'oauth' }, { kind: 'api' }]
 };
 
 module.exports = ({ seat, log }) => {

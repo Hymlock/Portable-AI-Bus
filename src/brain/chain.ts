@@ -65,7 +65,10 @@ export function classifyFailure(detail: string): FailureReason {
   // provider and moves the baton for nothing.
   if (/rate.?limit|429|too many requests|overloaded|slow down|session limit|too many .{0,20}(session|concurrent|parallel)|limit .{0,12}reset/.test(text)) return 'rate-limit';
   if (/quota|credit|billing|insufficient_quota|out of tokens|spending limit|usage limit|reached your (usage )?limit/.test(text)) return 'quota';
-  if (/unauthor|forbidden|401|403|api key|apikey|not logged in|authentication|credential/.test(text)) return 'auth';
+  // "Not signed in" is the xAI CLI's wording, and it matched none of the patterns below - it
+  // would have classified as a generic `error`, which falls through identically but reports a
+  // useless reason to whoever reads the log.
+  if (/unauthor|forbidden|401|403|api key|apikey|not logged in|not signed in|sign in|authentication|credential/.test(text)) return 'auth';
   if (/enoent|not found|not installed|command not found|econnrefused|unreachable/.test(text)) return 'unavailable';
   return 'error';
 }
