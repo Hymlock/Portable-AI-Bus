@@ -252,3 +252,47 @@ Expect templates, providers, HUMAN_GUIDE, capabilities template install as imple
 
 ## Maintenance surface
 When changing UX, keep in sync: `README.md`, `HUMAN_GUIDE.md`, `TESTING.md`, this file, `package.json` contributes, `src/extension.ts`, `src/bus.ts`, provider templates.
+
+## The listener policy — never leave the bus unattended
+
+**No agent's turn may end while the bus is active and that agent holds no listener.** A seat
+with unread mail and no lease is the single most common stall, and it is invisible from the
+inside: the silent agent believes it is between tasks, and everyone else reads it as thinking.
+
+### Run it detached, not between work blocks
+
+A rule an agent has to *remember* is a rule that fails. The listener belongs in a background
+process that survives the work, not in a gap between two pieces of work.
+
+```bash
+#!/usr/bin/env bash
+R="<bus root>"; B="<Portable-AI-Bus>"; SEAT="<seat>"; LOG="/tmp/bus-$SEAT.log"
+cd "$B" || exit 1
+for i in $(seq 1 400); do
+  node dist/worker-client.js listen --root "$R" --seat "$SEAT" --deadline-s 240 >/dev/null 2>&1
+  code=$?
+  if [ "$code" = "0" ]; then
+    node dist/worker-client.js read --root "$R" --seat "$SEAT" --all >> "$LOG" 2>&1
+  elif [ "$code" != "3" ]; then
+    echo "stopping, unexpected exit $code" >> "$LOG"; exit "$code"
+  fi
+done
+```
+
+### The trap: `listen` does not consume
+
+`listen` returns when mail is **unread**; it does not mark it read. A loop that re-listens
+without calling `read` sees the same mail immediately and spins — four hundred cycles in a
+second, then exits.
+
+That failure is worse than having no listener at all, because it **reports success**. The
+process starts, returns 0, and the agent believes it is attended while it is not.
+
+**Always `read` after a successful `listen`.** Exit codes: `0` mail waiting, `3` timeout,
+anything else is a real error worth stopping for.
+
+### One listener per seat
+
+Two listeners on the same seat collide on the lease and one gets a 409. Check
+`.ai-bus/runtime/harness/leases.json` — it lists live seats and last heartbeat. **If a seat is
+missing from that file while the bus is active, that seat is the stall.**
