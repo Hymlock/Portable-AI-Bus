@@ -296,3 +296,28 @@ anything else is a real error worth stopping for.
 Two listeners on the same seat collide on the lease and one gets a 409. Check
 `.ai-bus/runtime/harness/leases.json` — it lists live seats and last heartbeat. **If a seat is
 missing from that file while the bus is active, that seat is the stall.**
+
+### Echo on receipt
+
+**On receiving mail, send a one-line ack before starting work.** Not a summary — a receipt.
+
+Silence otherwise carries three meanings that are indistinguishable from outside: the agent is
+working, the message never landed, or the agent is down. Every long stall in this project's
+history was one of those being mistaken for another. An echo collapses it to one: **no echo
+means the message did not land or the agent is gone**, and both are actionable at once.
+
+Cost: one message. Replaces: the repeated twenty-minute "is anyone still alive?" exchange.
+
+### Wake-on-exit beats a long attended loop
+
+`listen` is built for wake-on-exit runtimes: it **blocks, then exits the moment mail arrives**,
+so the host wakes the agent. Use it that way.
+
+```bash
+node dist/worker-client.js listen --root "$R" --seat "$SEAT" --deadline-s 3000
+```
+
+A long self-re-arming loop keeps the *seat* attended — the lease stays live, mail is consumed —
+but it never wakes the *agent*, so mail sits in a log until the agent happens to run again. That
+is adequate for liveness and useless for responsiveness. Prefer exit-and-notify per message, and
+re-arm after handling.
