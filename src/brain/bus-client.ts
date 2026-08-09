@@ -81,8 +81,13 @@ export function cliBusClient(options: CliBusOptions): BusClient {
     tools(seat): BrainTools {
       return {
         async send(input) {
-          const args = ['send', '--seat', seat, '--to', input.to, '--kind', input.kind,
-                        '--subject', input.subject, '--body', input.body];
+          // Same reasoning: a model may omit any of these. An empty body is rejected by the
+          // mailbox, so a missing one would fail the send and lose the report entirely.
+          const args = ['send', '--seat', seat,
+                        '--to', String(input?.to ?? '').trim() || 'claude',
+                        '--kind', String(input?.kind ?? 'note').trim() || 'note',
+                        '--subject', String(input?.subject ?? '(no subject)').slice(0, 200),
+                        '--body', String(input?.body ?? '').trim() || '(empty)'];
           if (input.keepBaton) args.push('--keep-baton');
           const { stdout } = await run(args, 30_000);
           return parse(stdout);
@@ -92,13 +97,23 @@ export function cliBusClient(options: CliBusOptions): BusClient {
           return (parse(stdout) as Record<string, unknown>) ?? {};
         },
         async claim(paths, why) {
+          // Arguments here originate in MODEL OUTPUT, so they can be any shape or missing
+          // entirely. `paths.join(...)` on an absent field threw and killed the wake - the
+          // runner survived, but the seat then did no work while still looking attended,
+          // which is the worst of both. Validate at the boundary between the model and the
+          // bus, because that is the only place the shape is still in doubt.
+          const list = Array.isArray(paths) ? paths.filter((p) => typeof p === 'string' && p.trim()) : [];
+          if (list.length === 0) {
+            return { refused: 'claim needs a non-empty paths array' };
+          }
           const { stdout } = await run(
-            ['claim', '--seat', seat, '--paths', paths.join(','), '--why', why], 30_000);
+            ['claim', '--seat', seat, '--paths', list.join(','), '--why', why || 'unstated'], 30_000);
           return parse(stdout);
         },
         async release(paths) {
           const args = ['release', '--seat', seat];
-          if (paths?.length) args.push('--paths', paths.join(','));
+          const list = Array.isArray(paths) ? paths.filter((p) => typeof p === 'string' && p.trim()) : [];
+          if (list.length) args.push('--paths', list.join(','));
           const { stdout } = await run(args, 30_000);
           return parse(stdout);
         },
