@@ -321,3 +321,21 @@ A long self-re-arming loop keeps the *seat* attended — the lease stays live, m
 but it never wakes the *agent*, so mail sits in a log until the agent happens to run again. That
 is adequate for liveness and useless for responsiveness. Prefer exit-and-notify per message, and
 re-arm after handling.
+
+## Running a seat as a brain instead of a chat session
+
+The listener policy above keeps a *seat* attended. It cannot stop a *turn* ending, and if the
+seat is a chat session then reporting and stopping are the same act. `src/brain/` removes that:
+
+```bash
+node dist/brain/cli.js --root "<bus root>" --seat grok --brain ./my-brain.js
+```
+
+The process waits, drains, acts, reports, and **waits again**. `done` means this wake finished,
+never that the agent finished. With a brain running you do not need the listener loop — the
+runner is the listener.
+
+Omit `--brain` for the built-in echo brain, which acknowledges every message and nothing else.
+Useful for proving a seat is attended, and it makes echo-on-receipt automatic.
+
+See `docs/LOOP_ARCHITECTURE.md` for why this exists and what it is still missing (a supervisor).

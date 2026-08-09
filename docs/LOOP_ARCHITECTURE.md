@@ -77,7 +77,60 @@ no chat window. Its limits: it only reaches models exposed through `vscode.lm`, 
 a command rather than run as a daemon, and it exits after `maxTurns` rather than sleeping until
 the next wake.
 
-## Recommendation
+## BUILT 2026-08-09 — `src/brain/`
+
+Hymlock approved the direction, so this is no longer a recommendation. What shipped:
+
+| File | Role |
+|---|---|
+| `brain/contract.ts` | `takeTurn(context) -> {done, capped}`, neutral `BrainTools`, `WakeContext` |
+| `brain/runner.ts` | **the wake loop** — drain, wake, act, loop. Never exits on `done` |
+| `brain/bus-client.ts` | binds the runner to the real harness by driving `worker-client.js` |
+| `brain/cli.ts` | `node dist/brain/cli.js --root R --seat S [--brain M]`, plus a default echo brain |
+
+```bash
+node dist/brain/cli.js --root "<bus root>" --seat grok --brain ./my-brain.js
+```
+
+### The one property everything else serves
+
+`WakeResult.done` means **this wake's work is finished**. It does *not* mean the agent is
+finished, and the runner must never treat it that way. That is stated on the type rather than
+in a comment, because conflating the two IS the chat-session bug.
+
+Proved by sabotage: reintroducing `if (result.done) break;` turns **three tests red**, including
+`a brain reporting done does NOT end the runner`. A regression guard that has never been red is
+decoration.
+
+### Verified live on the real bus
+
+```
+brain-loaded    {brain: echo}
+wake-complete   {reason: startup, done: true}
+claude inbox    from hymlock: "echo #159: brain smoke 2"
+process         STILL ALIVE after echoing
+```
+
+It woke on mail, reported, and kept running — which is the thing a chat session cannot do.
+
+### Other properties, each with a test
+
+- **Drain before listening.** `listen` returns instantly while mail is unread and only holds a
+  lease while genuinely blocked, so a listen-without-drain loop spins, exits, and leaves the
+  seat unattended *while reporting success*. This project hit that twice; the runner now makes
+  it structurally impossible.
+- **A throwing brain does not kill the process.** One bad message must not become a dead seat.
+- **A per-wake budget caps a runaway brain without ending it.**
+- **Graceful stop** on SIGINT/SIGTERM, with `brain.stop()` called.
+- **Echo-on-receipt is the default brain's behaviour**, so a seat is never silent by accident.
+
+### Still owed
+
+A **supervisor**. A crashed process is still a dead seat, and the reachability gap stands: an
+agent that dies is unreachable by any route the bus provides, because the route runs through the
+dead thing. The runner survives *brain* errors; it cannot survive its own process being killed.
+
+## Original recommendation (kept for the reasoning)
 
 **Stop running the three of us as chat sessions.** Run each seat as a brain process:
 
