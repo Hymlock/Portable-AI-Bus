@@ -36,6 +36,34 @@ const allSeats = [...new Set([consoleSeat, ...brainSeats])];
 
 const log = (line) => console.log(line);
 
+/**
+ * Start a long-lived background process with no visible window, which outlives this script.
+ *
+ * `detached: true` + `windowsHide: true` + stdio to a file is the combination that satisfies
+ * both halves, and it is measured rather than assumed — a probe launched sleepers under each
+ * variant, then checked from a SEPARATE shell:
+ *
+ *   detached + windowsHide   no window, survived the launching shell   <- this
+ *   windowsHide alone        no window, DIED with the launching shell (job object)
+ *   Start-Process -Hidden    SURVIVED, but opened a Windows Terminal window every time
+ *
+ * The middle row is why detaching is not optional: the shell that runs this script belongs to
+ * a job object that kills its tree on exit, so a merely-hidden child dies seconds after start
+ * while the log still reads "started".
+ *
+ * The last row is a real dead end, not a tuning problem. A console application started by
+ * `Start-Process -WindowStyle Hidden` still gets a console, and under Windows 11 that console
+ * is handed to Windows Terminal — a separate process whose window the flag cannot reach.
+ * Terminal then keeps the window after the shell exits, so they accumulate.
+ */
+function launchHidden(exe, args, logFile) {
+  fs.mkdirSync(path.dirname(logFile), { recursive: true });
+  const out = fs.openSync(logFile, 'a');
+  const child = spawn(exe, args, { detached: true, windowsHide: true, stdio: ['ignore', out, out] });
+  child.unref();
+  return child.pid ?? null;
+}
+
 // --- 1. harness -----------------------------------------------------------------
 
 function harnessAlive() {
@@ -55,10 +83,11 @@ function harnessAlive() {
 if (harnessAlive()) {
   log('harness      already serving');
 } else {
-  const child = spawn(process.execPath, [path.join(DIST, 'harness.js'), 'serve', '--root', root, '--port', '0'], {
-    detached: true, stdio: 'ignore', windowsHide: true
-  });
-  child.unref();
+  launchHidden(
+    process.execPath,
+    [path.join(DIST, 'harness.js'), 'serve', '--root', root, '--port', '0'],
+    path.join(root, '.ai-bus', 'runtime', 'harness-serve.log')
+  );
   const deadline = Date.now() + 15000;
   while (!harnessAlive() && Date.now() < deadline) {
     spawnSync(process.execPath, ['-e', 'setTimeout(()=>{},300)']);
@@ -106,11 +135,30 @@ if (!holder) {
 
 // --- 4. brains ------------------------------------------------------------------
 
+/**
+ * Is a brain for this seat already running?
+ *
+ * Matched with a regex that accepts EITHER path separator. The first version tested
+ * `-like '*brain/cli*'` against a Windows command line that reads `dist\brain\cli.js`, so it
+ * never matched — every run of this script started ANOTHER brain for a seat that already had
+ * one, silently.
+ *
+ * That single wrong slash produced most of one evening's damage. Duplicate brains fight over
+ * the seat lease: one wins, the loser gets 409 lease_held on every listen, and a failing listen
+ * churns. It is invisible in the log, because each brain's own log looks like a healthy seat.
+ *
+ * Fails CLOSED on any error: an unreadable process list returns "already running", so the
+ * failure mode is a brain that does not start rather than an unbounded pile of them.
+ */
 function brainRunning(seat) {
   if (process.platform !== 'win32') return false;
-  const out = spawnSync('powershell', ['-NoProfile', '-Command',
-    `(Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -like '*brain/cli*--seat ${seat}*' } | Measure-Object).Count`
+  const out = spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command',
+    `(Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -match 'brain[\\\\/]cli\\.js' -and $_.CommandLine -match '--seat ${seat}(\\s|$)' } | Measure-Object).Count`
   ], { encoding: 'utf8', windowsHide: true });
+  if (out.status !== 0) {
+    log(`brain:${seat.padEnd(7)} could not check for a running brain - assuming one exists`);
+    return true;
+  }
   return Number((out.stdout || '0').trim()) > 0;
 }
 
@@ -120,15 +168,12 @@ for (const seat of brainSeats) {
     continue;
   }
   const logFile = path.join(root, '.ai-bus', 'runtime', `brain-${seat}.log`);
-  fs.mkdirSync(path.dirname(logFile), { recursive: true });
-  const out = fs.openSync(logFile, 'a');
-  const child = spawn(process.execPath, [
+  const pid = launchHidden(process.execPath, [
     path.join(DIST, 'brain', 'cli.js'),
     '--root', root, '--seat', seat,
     '--brain', path.join(REPO, 'brains', 'ensouled-seat.js')
-  ], { detached: true, stdio: ['ignore', out, out], windowsHide: true });
-  child.unref();
-  log(`brain:${seat.padEnd(7)} started pid ${child.pid} -> ${logFile}`);
+  ], logFile);
+  log(`brain:${seat.padEnd(7)} started pid ${pid ?? '?'} -> ${logFile}`);
 }
 
 // --- 5. the truth ---------------------------------------------------------------

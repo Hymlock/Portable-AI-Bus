@@ -37,25 +37,35 @@ const SYSTEM = [
 ].join('\n');
 
 /**
- * Chain order is set by what this machine can actually do, verified 2026-08-09:
+ * Chain order per seat, set by what this machine can actually do — verified live 2026-08-09:
  *
- *   cli    the `claude` CLI under the existing subscription. VERIFIED WORKING - costs
- *          nothing beyond what Hymlock already pays.
- *   oauth  the SDK `ant auth login` profile. Codex confirmed the SDK supports these
- *          non-interactively, but no profile exists on this machine yet, so it sits second
- *          and simply fails through until one does.
+ *   cli    the `claude` CLI under the existing subscription. Verified: answers, costs nothing
+ *          beyond what Hymlock already pays.
+ *   codex  the Codex CLI, `Logged in using ChatGPT`. Verified: free probe, ~5s answers, and
+ *          crucially billed to a DIFFERENT vendor.
+ *   oauth  the SDK `ant auth login` profile. Supported non-interactively, but no profile
+ *          exists here yet, so it fails through until one does.
  *   api    ANTHROPIC_API_KEY. Metered, so it is last.
  *
- * Every link failing is not a crash: the runner reports `exhausted`, hands the baton to a
- * seat that still has credit, and keeps listening for when credit returns.
+ * The rule that shapes this: NO CHAIN MAY BE SINGLE-VENDOR. A chain of cli→oauth→api reads
+ * like three fallbacks and is really one — all Anthropic, one wallet, and one shared
+ * concurrency ceiling. That ceiling is what produced "you've hit your session limit" with the
+ * account at 30% usage, and marching down the chain hit the same wall three times. Every chain
+ * below therefore crosses a vendor boundary before it runs out.
+ *
+ * Seats lead with a different vendor from each other on purpose, so two working seats are not
+ * queueing behind one provider's limit.
  */
-const provider = resolveChain([
-  { kind: 'cli' },
-  { kind: 'oauth' },
-  { kind: 'api' }
-]);
+const CHAINS = {
+  codex: [{ kind: 'codex' }, { kind: 'cli' }],
+  grok: [{ kind: 'codex' }, { kind: 'cli' }],
+  default: [{ kind: 'cli' }, { kind: 'codex' }, { kind: 'oauth' }, { kind: 'api' }]
+};
 
 module.exports = ({ seat, log }) => {
+  // Built per seat, not at module load: the chain depends on which seat this is, and a
+  // module-level chain silently gave every seat the same vendor.
+  const provider = resolveChain(CHAINS[seat] ?? CHAINS.default, { log });
   const factory = agentBrainFactory(provider);
   const brain = factory({ seat, log });
   return {

@@ -13,7 +13,7 @@
 
 import { spawn } from 'node:child_process';
 
-export type ProviderKind = 'cli' | 'api' | 'oauth' | 'exec';
+export type ProviderKind = 'cli' | 'api' | 'oauth' | 'exec' | 'codex';
 
 export type ModelReply = {
   text: string;
@@ -331,12 +331,145 @@ export function execProvider(options: ExecProviderOptions): ModelProvider {
 }
 
 // ---------------------------------------------------------------------------
+// codex
+// ---------------------------------------------------------------------------
+
+/**
+ * Locate the Codex CLI.
+ *
+ * It is usually NOT on PATH: the ChatGPT VS Code extension ships the binary inside its own
+ * extension directory, which is where it was found on this machine. Searching PATH alone
+ * reports "not installed" for a CLI that is present and logged in — the same class of mistake
+ * that made `claude` look missing when only the npm shim was unspawnable.
+ */
+export function resolveCodexCommand(explicit?: string): string {
+  const nodePath = require('node:path') as typeof import('node:path');
+  const nodeFs = require('node:fs') as typeof import('node:fs');
+  if (explicit) return explicit;
+  if (process.env.CODEX_CLI_PATH) return process.env.CODEX_CLI_PATH;
+
+  const exe = process.platform === 'win32' ? 'codex.exe' : 'codex';
+  for (const dir of (process.env.PATH ?? '').split(nodePath.delimiter).filter(Boolean)) {
+    try {
+      const candidate = nodePath.join(dir, exe);
+      if (nodeFs.existsSync(candidate)) return candidate;
+    } catch { /* keep looking */ }
+  }
+
+  const home = process.env.USERPROFILE || process.env.HOME;
+  if (home) {
+    const extensions = nodePath.join(home, '.vscode', 'extensions');
+    try {
+      const arch = process.platform === 'win32' ? 'windows-x86_64' : '';
+      const match = nodeFs.readdirSync(extensions)
+        .filter((name) => name.startsWith('openai.chatgpt'))
+        .sort()
+        .reverse();
+      for (const name of match) {
+        const candidate = nodePath.join(extensions, name, 'bin', arch, exe);
+        if (nodeFs.existsSync(candidate)) return candidate;
+      }
+    } catch { /* fall through */ }
+  }
+  return exe;
+}
+
+export type CodexProviderOptions = {
+  command?: string;
+  /** Passed to `--model`. Omit to use whatever Codex is configured for. */
+  model?: string;
+  timeoutMs?: number;
+  log?: (event: string, data?: unknown) => void;
+};
+
+/**
+ * The Codex CLI as a provider, authenticated on ITS OWN ChatGPT subscription.
+ *
+ * This is the concrete answer to Hymlock's constraint. Every other link in the default chain
+ * is Anthropic, so a chain of them shares one wallet AND one concurrency ceiling — the ceiling
+ * that produced "you've hit your session limit" while the account sat at 30% usage. A Codex
+ * link is the first one that fails independently of the others.
+ *
+ * Two details that `execProvider` cannot express, which is why this is not just a template:
+ *
+ *   - The answer comes from `--output-last-message`, not stdout. stdout carries a banner, the
+ *     session id, and a token count; scraping it would make the reply depend on Codex's
+ *     formatting.
+ *   - `probe` asks `login status`, which costs nothing. The generic exec probe runs the command
+ *     with an empty prompt, which for Codex means a real, billed model call just to ask whether
+ *     it is reachable.
+ */
+export function codexProvider(options: CodexProviderOptions = {}): ModelProvider {
+  const log = options.log ?? (() => {});
+  const command = resolveCodexCommand(options.command);
+  const nodeFs = require('node:fs') as typeof import('node:fs');
+  const nodePath = require('node:path') as typeof import('node:path');
+  const nodeOs = require('node:os') as typeof import('node:os');
+
+  async function run(args: string[], timeoutMs: number) {
+    return new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
+      // stdin is 'ignore' deliberately: `codex exec` reads stdin when it is a pipe and will
+      // sit there printing "Reading additional input from stdin..." forever otherwise.
+      const child = spawn(command, args, { shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+      let stdout = '';
+      let stderr = '';
+      child.stdout.on('data', (c) => { stdout += String(c); });
+      child.stderr.on('data', (c) => { stderr += String(c); });
+      const timer = setTimeout(() => child.kill(), timeoutMs);
+      child.on('error', (error) => { clearTimeout(timer); resolve({ code: -1, stdout, stderr: String(error) }); });
+      child.on('close', (code) => { clearTimeout(timer); resolve({ code: code ?? -1, stdout, stderr }); });
+    });
+  }
+
+  return {
+    kind: 'codex',
+
+    async probe() {
+      const { code, stdout, stderr } = await run(['login', 'status'], 30_000);
+      const text = `${stdout}${stderr}`.trim();
+      if (code === 0 && /logged in/i.test(text)) {
+        return { ok: true, detail: `codex: ${text.split('\n')[0]}` };
+      }
+      return { ok: false, detail: `codex not usable: ${text.slice(0, 200) || `exit ${code}`}` };
+    },
+
+    async ask(prompt, { systemPrompt = '', timeoutMs = options.timeoutMs ?? 600_000 } = {}) {
+      const answerFile = nodePath.join(
+        nodeOs.tmpdir(), `codex-answer-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`);
+      const args = ['exec', '--skip-git-repo-check', '--sandbox', 'read-only',
+                    '--output-last-message', answerFile];
+      if (options.model) args.push('--model', options.model);
+      // Codex has no separate system-prompt flag, so it is prepended. Keeping the shape
+      // identical to the other providers is the point: the brain must not know who answered.
+      args.push(systemPrompt ? `${systemPrompt}\n\n---\n\n${prompt}` : prompt);
+
+      const { code, stdout, stderr } = await run(args, timeoutMs);
+      let answer = '';
+      try {
+        answer = nodeFs.readFileSync(answerFile, 'utf8').trim();
+      } catch { /* reported below */ }
+      try { nodeFs.unlinkSync(answerFile); } catch { /* best effort */ }
+
+      if (code !== 0 || !answer) {
+        // The failure TEXT is returned, not swallowed, because `classifyFailure` reads it to
+        // decide between backing off and abandoning this link.
+        const detail = (stderr || stdout || `codex exited ${code}`).slice(0, 400);
+        log('codex-failed', { code, detail });
+        return { text: detail, isError: true };
+      }
+      return { text: answer, isError: false };
+    }
+  };
+}
+
+// ---------------------------------------------------------------------------
 
 export type ResolveOptions = {
   kind?: ProviderKind;
   cli?: CliProviderOptions;
   sdk?: SdkProviderOptions;
   exec?: ExecProviderOptions;
+  codex?: CodexProviderOptions;
 };
 
 /**
@@ -348,11 +481,12 @@ export function resolveProvider(options: ResolveOptions = {}): ModelProvider {
   const kind = options.kind ?? (process.env.PORTABLE_AI_BUS_PROVIDER as ProviderKind | undefined) ?? 'cli';
   if (kind === 'cli') return cliProvider(options.cli);
   if (kind === 'api' || kind === 'oauth') return sdkProvider(kind, options.sdk);
+  if (kind === 'codex') return codexProvider(options.codex);
   if (kind === 'exec') {
     if (!options.exec) throw new Error('provider "exec" needs { command, args }');
     return execProvider(options.exec);
   }
-  throw new Error(`unknown provider "${kind}" - expected cli, api, oauth, or exec`);
+  throw new Error(`unknown provider "${kind}" - expected cli, codex, api, oauth, or exec`);
 }
 
 /**
