@@ -36,6 +36,51 @@ export type ModelProvider = {
 // cli
 // ---------------------------------------------------------------------------
 
+
+/**
+ * Find an executable form of `name` that `spawn(..., { shell: false })` can actually run.
+ *
+ * Returns the bare name when nothing better is found, so the failure surfaces as a normal
+ * probe error rather than an exception here.
+ */
+export function resolveCliCommand(name: string): string {
+  if (process.platform !== 'win32') return name;
+  const nodePath = require('node:path') as typeof import('node:path');
+  const nodeFs = require('node:fs') as typeof import('node:fs');
+
+  // Prefer a REAL executable over the npm shim. Node 24 refuses to spawn a `.cmd` at all
+  // (EINVAL, a deliberate hardening), and `shell: true` is not an acceptable workaround here
+  // because prompts contain quotes the shell would re-parse. npm records the real binary in
+  // the package's `bin`, so go straight to it.
+  const appData = process.env.APPDATA;
+  if (appData) {
+    const packaged = nodePath.join(appData, 'npm', 'node_modules', '@anthropic-ai', 'claude-code', 'bin', `${name}.exe`);
+    try {
+      if (nodeFs.existsSync(packaged)) return packaged;
+    } catch {
+      // fall through to the search below
+    }
+  }
+
+  const roots = [
+    appData ? nodePath.join(appData, 'npm') : '',
+    ...(process.env.PATH ?? '').split(nodePath.delimiter)
+  ].filter(Boolean);
+  for (const root of roots) {
+    // `.exe` first for the same reason: a shim we cannot spawn is worse than no match, because
+    // it looks like a resolution succeeded.
+    for (const extension of ['.exe', '.cmd', '.bat']) {
+      const candidate = nodePath.join(root, name + extension);
+      try {
+        if (nodeFs.existsSync(candidate)) return candidate;
+      } catch {
+        // keep looking
+      }
+    }
+  }
+  return name;
+}
+
 export type CliProviderOptions = {
   /** Executable name or path. `claude` on PATH by default. */
   command?: string;
@@ -45,8 +90,14 @@ export type CliProviderOptions = {
 };
 
 export function cliProvider(options: CliProviderOptions = {}): ModelProvider {
-  const command = options.command ?? 'claude';
   const log = options.log ?? (() => {});
+
+  // On Windows an npm-installed CLI is a `.cmd` shim, and `spawn` with `shell: false` cannot
+  // execute one - it fails with exit -1 and a message that reads like "not installed", which
+  // sent me looking for a missing package that was in fact present. Resolve the shim
+  // explicitly rather than turning the shell on: `shell: true` would make every argument a
+  // string the shell re-parses, and prompts contain quotes.
+  const command = options.command ?? resolveCliCommand('claude');
 
   async function run(args: string[], timeoutMs: number): Promise<{ code: number; stdout: string; stderr: string }> {
     return new Promise((resolve) => {

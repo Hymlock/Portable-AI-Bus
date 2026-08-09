@@ -54,8 +54,19 @@ async function loadBrain(spec: string | undefined, seat: string, root: string): 
     return echoBrain({ seat, root, log }) as Brain;
   }
   const resolved = path.isAbsolute(spec) ? spec : path.resolve(process.cwd(), spec);
-  const module = await import(`file://${resolved.replace(/\\/g, '/')}`);
-  const factory: BrainFactory = module.default ?? module.createBrain;
+  // `require`, not `import()`. This file compiles to CommonJS and TypeScript downlevels a
+  // dynamic import into require - so a file:// URL arrives at require() verbatim and fails
+  // with "Cannot find module 'file://...'". The brain died on startup and the runner's log
+  // was the only evidence, which is exactly why it writes one.
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const loaded = require(resolved) as
+    { default?: BrainFactory; createBrain?: BrainFactory } | BrainFactory;
+  // A brain file may export a factory directly (module.exports = fn), as `default`, or as
+  // `createBrain`. Accepting all three costs three lines and removes a class of "why is my
+  // brain not loading" that the log alone would not explain.
+  const factory = typeof loaded === 'function'
+    ? loaded
+    : (loaded.default ?? loaded.createBrain);
   if (typeof factory !== 'function') {
     throw new Error(`${spec} must export a default BrainFactory or a createBrain function`);
   }
