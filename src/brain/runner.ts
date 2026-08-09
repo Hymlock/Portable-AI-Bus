@@ -20,6 +20,15 @@ export type RunnerOptions = {
   seat: string;
   brain: Brain;
   bus: BusClient;
+  /**
+   * Called when the brain reports that every provider in its chain is spent.
+   *
+   * This is the endgame Hymlock asked about: the orchestrating seat runs out of tokens. The
+   * runner cannot fix that - no provider left means no thinking - but it CAN make the failure
+   * loud and hand the baton to a seat that still has credit, instead of going quiet and
+   * looking like it is working.
+   */
+  onExhausted?: (info: { seat: string; detail: string }) => Promise<void> | void;
   /** Tool calls allowed per wake. Bounds a runaway brain without ending the process. */
   budgetPerWake?: number;
   /** How long a quiet listen blocks before looping. Not a timeout on the agent. */
@@ -118,6 +127,17 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
           // stall we are removing, not a stall we should reintroduce here.
           summary.errors += 1;
           log('wake-error', { seat, error: (error as Error)?.message ?? String(error) });
+        }
+      }
+
+      // A brain signals a spent chain by returning `exhausted`. Distinct from an error on
+      // purpose: an error is a bad wake, exhaustion is a seat that cannot have a good one.
+      if (result.exhausted) {
+        log('chain-exhausted', { seat, note: result.note });
+        try {
+          await options.onExhausted?.({ seat, detail: result.note ?? 'all providers spent' });
+        } catch (error) {
+          log('exhausted-handler-failed', { seat, error: (error as Error)?.message });
         }
       }
 

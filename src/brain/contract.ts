@@ -66,6 +66,12 @@ export type WakeResult = {
   capped?: boolean;
   /** Optional one-line summary for the runner's log. */
   note?: string;
+  /**
+   * Every provider in the chain is spent. NOT the same as an error: an error is a bad wake,
+   * this is a seat that cannot have a good one until credit returns. The runner turns this
+   * into a baton hand-off rather than letting the seat go quietly silent.
+   */
+  exhausted?: boolean;
 };
 
 export type Brain = {

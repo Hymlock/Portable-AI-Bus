@@ -112,3 +112,40 @@ test('a stop signal ends the runner gracefully and calls stop()', async () => {
   assert.equal(summary.stoppedBy, 'signal');
   assert.equal(stopCalled, true, 'brains get a chance to clean up');
 });
+
+test('a spent chain hands the baton off instead of going quiet', async () => {
+  // The endgame Hymlock asked about: the orchestrating seat runs out of tokens. The runner
+  // cannot fix that - no provider left means no thinking - but it must make the failure LOUD
+  // and hand off, rather than going silent and looking like it is working. Silence is the one
+  // outcome we can never distinguish from progress.
+  const { bus } = makeBus({ script: [[msg(1, 'do work')], [msg(2, 'more work')]] });
+  const handoffs = [];
+  const brain = {
+    name: 'broke',
+    async takeTurn() {
+      return { done: true, exhausted: true, note: 'cli: quota, api: quota, exec: unavailable' };
+    }
+  };
+  const summary = await runBrain({
+    seat: 'claude',
+    brain,
+    bus,
+    maxWakes: 2,
+    onExhausted: async (info) => { handoffs.push(info); }
+  });
+
+  assert.equal(handoffs.length, 2, 'every exhausted wake must announce itself');
+  assert.equal(handoffs[0].seat, 'claude');
+  assert.match(handoffs[0].detail, /quota/, 'the handoff must carry WHY, not just that it failed');
+  assert.equal(summary.stoppedBy, 'maxWakes', 'exhaustion must not kill the runner - credit may return');
+});
+
+test('a failing handoff handler does not take the runner with it', async () => {
+  const { bus } = makeBus({ script: [[msg(1, 'go')]] });
+  const brain = { name: 'broke', async takeTurn() { return { done: true, exhausted: true }; } };
+  const summary = await runBrain({
+    seat: 'claude', brain, bus, maxWakes: 1,
+    onExhausted: async () => { throw new Error('mailbox unreachable'); }
+  });
+  assert.equal(summary.stoppedBy, 'maxWakes', 'a broken handoff is not a reason to die');
+});

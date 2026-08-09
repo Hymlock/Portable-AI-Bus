@@ -10,6 +10,7 @@
 import * as path from 'node:path';
 import { Brain, BrainFactory } from './contract';
 import { cliBusClient } from './bus-client';
+import { MailboxStore } from '../mailbox';
 import { runBrain } from './runner';
 
 function option(argv: string[], name: string): string | undefined {
@@ -85,6 +86,36 @@ export async function main(argv: string[]): Promise<number> {
     seat,
     brain,
     bus: cliBusClient({ root, log }),
+    // The endgame: this seat has spent every provider in its chain. It cannot think, so it
+    // must not keep the baton - a holder that cannot act is the stall we spent this project
+    // diagnosing. Hand off to any other registered seat and say why.
+    onExhausted: async ({ detail }) => {
+      const mailbox = new MailboxStore(root);
+      const state = await mailbox.status();
+      const successor = state.agents.find((agent: string) => agent !== seat);
+      if (!successor) {
+        log('exhausted-no-successor', { seat, detail });
+        return;
+      }
+      const result = await mailbox.reassignBaton({
+        to: successor,
+        reason: `${seat} exhausted every provider (${detail})`,
+        force: true
+      });
+      log('baton-handed-off', result);
+      await mailbox.send({
+        from: seat,
+        to: successor,
+        kind: 'handoff',
+        subject: `${seat} is out of providers - baton is yours`,
+        body: `Every provider in my chain is spent: ${detail}
+
+` +
+              'I am still listening and will pick work back up when credit returns. ' +
+              'Taking the baton because a holder that cannot act is a stall.',
+        keepBaton: false
+      });
+    },
     budgetPerWake: integerOption(argv, '--budget', 30),
     listenSeconds: integerOption(argv, '--listen-s', 300),
     log,
