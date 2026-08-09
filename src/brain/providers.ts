@@ -289,8 +289,9 @@ export type ResolveOptions = {
 };
 
 /**
- * Build the configured provider. Defaults to `cli` because it is the only route that adds no
- * cost beyond a subscription the user already holds.
+ * Build ONE provider. Prefer `resolveChain` - a single provider means a seat dies when that
+ * provider is exhausted, which is the failure Hymlock ruled out. Kept because a chain is built
+ * from these.
  */
 export function resolveProvider(options: ResolveOptions = {}): ModelProvider {
   const kind = options.kind ?? (process.env.PORTABLE_AI_BUS_PROVIDER as ProviderKind | undefined) ?? 'cli';
@@ -301,4 +302,22 @@ export function resolveProvider(options: ResolveOptions = {}): ModelProvider {
     return execProvider(options.exec);
   }
   throw new Error(`unknown provider "${kind}" - expected cli, api, oauth, or exec`);
+}
+
+/**
+ * Build an ordered chain from a list of provider configs.
+ *
+ * This is the shape a seat should use. `cli` first because it costs nothing beyond a
+ * subscription already paid for; `api` next when a key exists; `exec` last as the vendor-neutral
+ * escape hatch. A seat backed by all three survives two of them being exhausted.
+ */
+export function resolveChain(
+  configs: ResolveOptions[],
+  chainOptions?: { log?: (event: string, data?: unknown) => void }
+) {
+  if (configs.length === 0) throw new Error('resolveChain needs at least one provider config');
+  // Imported lazily so `providers.ts` stays usable on its own and the two modules do not form
+  // an import cycle.
+  const { chainProviders } = require('./chain') as typeof import('./chain');
+  return chainProviders(configs.map((config) => resolveProvider(config)), chainOptions);
 }

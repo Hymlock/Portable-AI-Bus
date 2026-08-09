@@ -148,3 +148,43 @@ the agent**: a process we own, instead of a chat UI whose turn boundary we canno
 > seat, and today's reachability gap stands: an agent that dies is unreachable by any means the
 > bus provides, because the route to it runs through the dead thing. A supervisor that restarts
 > a dead brain is a separate, smaller piece of work, and worth doing at the same time.
+
+---
+
+## Provider chains — a seat outlives any one vendor's quota
+
+*(Hymlock's constraint: "What I do not want is a required specific model seat such as the Codex
+CLI that only works with Codex, and if we run out of tokens on Codex our bus has stopped.")*
+
+`resolveProvider` let a seat **choose** a provider. That was not enough — a seat still dies when
+its one provider is exhausted. `resolveChain` lets a seat **degrade**:
+
+```ts
+const provider = resolveChain([
+  { kind: 'cli' },                     // subscription, costs nothing extra
+  { kind: 'api' },                     // ANTHROPIC_API_KEY, if present
+  { kind: 'exec', exec: { command: 'other-vendor-cli', args: ['-p', '{prompt}'] } }
+]);
+```
+
+A seat backed by three links survives two of them being spent.
+
+### Two distinctions that carry the design
+
+**`exhausted` is not `isError`.** A bad answer and *no providers left* look identical unless you
+separate them — and if they were the same, a seat with nothing left would look like a seat
+having a bad day, and the baton would never move. `exhausted: true` is the signal that should
+trigger `reassignBaton`.
+
+**An empty answer is a failure.** A silent success and a broken provider are indistinguishable
+downstream, and misreading silence is the mistake this project has made repeatedly.
+
+### Falling through is the default, deliberately
+
+Any classified failure — `quota`, `rate-limit`, `auth`, `unavailable`, or an unrecognised
+`error` — advances to the next link. **Being wrong about the reason costs one extra attempt.
+Being wrong about whether to continue costs the seat.** `fallThroughOn` can narrow it where a
+request would fail identically everywhere.
+
+Nine tests, and the fall-through was **verified by sabotage**: replacing it with `break` turns
+three of them red.
