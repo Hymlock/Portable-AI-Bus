@@ -573,6 +573,63 @@ export class MailboxStore {
    * question a human needs answered - WHY did the holder stop - and would let a broken loop
    * look self-healing.
    */
+  /**
+   * Move the baton off a holder that cannot act.
+   *
+   * Raised by Hymlock 2026-08-09: if the orchestrating seat runs out of tokens, the baton is
+   * stranded and the whole system stops - `stallCheck` DETECTS that and nothing fixed it.
+   * Detection without recovery is a smoke alarm with no fire exit.
+   *
+   * The guard is what makes this failover rather than a coup: the current holder must have
+   * been silent for `staleAfterSeconds` before anyone may take it. An agent cannot seize the
+   * baton from a peer that is actively working, which would be a far worse failure than the
+   * stall - two seats making decisions is how you get contradictory work nobody can untangle.
+   */
+  async reassignBaton(input: {
+    to: string;
+    reason: string;
+    staleAfterSeconds?: number;
+    /** Operator override: skip the staleness guard. For a human who can see the truth. */
+    force?: boolean;
+  }): Promise<{ moved: boolean; from: string | null; to: string; why: string }> {
+    const staleAfter = input.staleAfterSeconds ?? 300;
+    return this.withLock(async () => {
+      const state = await this.loadStateUnsafe();
+      const from = state.baton?.holder ?? null;
+      if (!state.agents.includes(input.to)) {
+        throw new Error(`unknown agent: ${input.to}`);
+      }
+      if (from === input.to) {
+        return { moved: false, from, to: input.to, why: `${input.to} already holds the baton` };
+      }
+      const heldSeconds = state.baton
+        ? (Date.now() - Date.parse(state.baton.since)) / 1000
+        : Number.POSITIVE_INFINITY;
+      if (!input.force && from && heldSeconds < staleAfter) {
+        return {
+          moved: false,
+          from,
+          to: input.to,
+          why: `${from} has held the baton only ${Math.round(heldSeconds)}s (< ${staleAfter}s). ` +
+               'Refusing: taking it from an active holder is a coup, not a failover. Use force ' +
+               'only if you can see that the holder is genuinely unable to act.'
+        };
+      }
+      state.baton = {
+        holder: input.to,
+        since: new Date().toISOString(),
+        reason: `reassigned from ${from ?? '<nobody>'} after ${Math.round(heldSeconds)}s: ${input.reason}`
+      };
+      await this.writeStateUnsafe(state);
+      return {
+        moved: true,
+        from,
+        to: input.to,
+        why: state.baton.reason
+      };
+    });
+  }
+
   async stallCheck(staleAfterSeconds = 300): Promise<{
     stalled: boolean; reason: string; holder: string | null; heldSeconds: number | null;
   }> {
