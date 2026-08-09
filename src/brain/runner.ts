@@ -35,6 +35,21 @@ export type RunnerOptions = {
   listenSeconds?: number;
   /** Stop after N wakes. For tests only — production runs unbounded. */
   maxWakes?: number;
+  /**
+   * Message kinds that are pure courtesy: they inform, and they never need an answer.
+   *
+   * A wake carrying ONLY these does not reach the brain, so it costs no model call. This is not
+   * an optimisation, it is a termination condition. Two brains that each acknowledge every
+   * message they receive will acknowledge each other's acknowledgements forever, and both are
+   * behaving exactly as instructed. Observed live between the codex and grok seats: a relay test
+   * completed correctly, then the receipts alone kept both seats calling the model until they
+   * were killed.
+   *
+   * The prompt already says "acknowledge every message". It cannot also say "except this one" and
+   * be relied on - a model asked to reply will reply. So the loop is cut where it can be cut
+   * deterministically: no model call, therefore no reply, therefore no next wake.
+   */
+  ackKinds?: string[];
   log?: (event: string, data?: unknown) => void;
   /** Resolves when the caller wants a graceful stop. */
   stopSignal?: Promise<void>;
@@ -49,6 +64,7 @@ export type RunnerSummary = {
 
 const DEFAULT_BUDGET = 30;
 const DEFAULT_LISTEN_SECONDS = 300;
+const DEFAULT_ACK_KINDS = ['ack', 'receipt', 'ping'];
 
 export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
   const {
@@ -58,9 +74,12 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
     budgetPerWake = DEFAULT_BUDGET,
     listenSeconds = DEFAULT_LISTEN_SECONDS,
     maxWakes,
+    ackKinds = DEFAULT_ACK_KINDS,
     log = () => {},
     stopSignal
   } = options;
+  const isAck = (message: BrainMessage) =>
+    ackKinds.includes(String((message as { kind?: unknown }).kind ?? '').trim().toLowerCase());
 
   let stopped = false;
   void stopSignal?.then(() => {
@@ -98,6 +117,20 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
       }
 
       summary.wakes += 1;
+
+      // Cut the ack loop here, BEFORE any model call. The messages are still drained and still
+      // counted, so nothing is lost and the log records that they arrived - they simply do not
+      // earn a reply, which is the only property that ends the exchange.
+      if (messages.length > 0 && messages.every(isAck)) {
+        log('wake-acks-only', {
+          seat,
+          messages: messages.length,
+          kinds: [...new Set(messages.map((m) => (m as { kind?: unknown }).kind))]
+        });
+        reason = 'timeout';
+        continue;
+      }
+
       let calls = 0;
       const counted: BrainTools = wrapWithBudget(bus.tools(seat), () => {
         calls += 1;
