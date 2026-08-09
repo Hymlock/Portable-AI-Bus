@@ -49,19 +49,40 @@ export type FailureReason =
  */
 export function classifyFailure(detail: string): FailureReason {
   const text = detail.toLowerCase();
-  // "session limit" is what a Claude Code SUBSCRIPTION says when it is spent, as opposed to
-  // the API's "insufficient_quota". Missing it classified a real exhaustion as a generic
-  // error - it still fell through, because falling through is the default, but the log then
-  // said `cli:error` for something that was plainly a quota event. A misleading diagnosis is
-  // its own bug: it sends the next person debugging the wrong thing.
-  if (/quota|credit|billing|insufficient_quota|out of tokens|spending limit|usage limit|session limit|limit .{0,12}reset|reached your limit/.test(text)) return 'quota';
-  if (/rate.?limit|429|too many requests|overloaded|slow down/.test(text)) return 'rate-limit';
+  // ORDER MATTERS: rate-limit is tested BEFORE quota, because the two demand opposite
+  // responses and the messages overlap.
+  //
+  //   quota      the wallet is empty. Abandon this link for hours.
+  //   rate-limit too many at once. Back off briefly and RETRY THE SAME LINK.
+  //
+  // Learned the expensive way. A live run reported "You've hit your session limit - resets
+  // 2:50pm" and I classified it as quota, so the chain abandoned the provider and handed off
+  // the baton. The account was at 30% session and 51% weekly - nowhere near spent. The real
+  // cause was FOUR SESSIONS IN PARALLEL against one shared limit, which is a concurrency
+  // ceiling that clears in moments.
+  //
+  // Treating a transient throttle as exhaustion is worse than the reverse: it burns a working
+  // provider and moves the baton for nothing.
+  if (/rate.?limit|429|too many requests|overloaded|slow down|session limit|too many .{0,20}(session|concurrent|parallel)|limit .{0,12}reset/.test(text)) return 'rate-limit';
+  if (/quota|credit|billing|insufficient_quota|out of tokens|spending limit|usage limit|reached your (usage )?limit/.test(text)) return 'quota';
   if (/unauthor|forbidden|401|403|api key|apikey|not logged in|authentication|credential/.test(text)) return 'auth';
   if (/enoent|not found|not installed|command not found|econnrefused|unreachable/.test(text)) return 'unavailable';
   return 'error';
 }
 
 export type ChainOptions = {
+  /**
+   * How many times to RETRY THE SAME LINK on a `rate-limit` before moving on.
+   *
+   * A throttle is not exhaustion. Falling through on one immediately abandons a working
+   * provider and, if every link shares an account, marches straight down the chain hitting
+   * the same ceiling - which is exactly what happened on the first live multi-brain run.
+   */
+  rateLimitRetries?: number;
+  /** Base backoff in ms; doubles each retry. */
+  rateLimitBackoffMs?: number;
+  /** Injected in tests so a backoff test does not actually sleep. */
+  sleep?: (ms: number) => Promise<void>;
   /**
    * Reasons that justify trying the next link. Defaults to everything, because a seat that
    * stops on a recoverable failure is the bug this module exists to remove.
@@ -85,6 +106,9 @@ export function chainProviders(links: ModelProvider[], options: ChainOptions = {
   }
   const fallThroughOn = new Set(options.fallThroughOn ?? ALL_REASONS);
   const log = options.log ?? (() => {});
+  const rateLimitRetries = options.rateLimitRetries ?? 2;
+  const backoffMs = options.rateLimitBackoffMs ?? 15_000;
+  const sleep = options.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
 
   async function ask(
     prompt: string,
@@ -94,15 +118,24 @@ export function chainProviders(links: ModelProvider[], options: ChainOptions = {
 
     for (const link of links) {
       let reply: ModelReply;
+      let attempt = 0;
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
       try {
         reply = await link.ask(prompt, askOptions);
       } catch (error) {
         const detail = (error as Error)?.message ?? String(error);
         const reason = classifyFailure(detail);
+        if (reason === 'rate-limit' && attempt < rateLimitRetries) {
+          const wait = backoffMs * 2 ** attempt;
+          attempt += 1;
+          log('rate-limited-retrying', { kind: link.kind, attempt, waitMs: wait });
+          await sleep(wait);
+          continue;
+        }
         attempts.push({ kind: link.kind, ok: false, reason, detail: detail.slice(0, 300) });
         log('link-threw', { kind: link.kind, reason });
-        if (!fallThroughOn.has(reason)) break;
-        continue;
+        break;
       }
 
       if (!reply.isError && reply.text.trim()) {
@@ -115,9 +148,19 @@ export function chainProviders(links: ModelProvider[], options: ChainOptions = {
       // to everything downstream, and silence is what this whole project keeps mis-reading.
       const detail = reply.text || 'provider reported an error';
       const reason = classifyFailure(detail);
+      if (reason === 'rate-limit' && attempt < rateLimitRetries) {
+        const wait = backoffMs * 2 ** attempt;
+        attempt += 1;
+        log('rate-limited-retrying', { kind: link.kind, attempt, waitMs: wait });
+        await sleep(wait);
+        continue;
+      }
       attempts.push({ kind: link.kind, ok: false, reason, detail: detail.slice(0, 300) });
       log('link-failed', { kind: link.kind, reason });
-      if (!fallThroughOn.has(reason)) break;
+      break;
+      }
+      const last = attempts[attempts.length - 1];
+      if (last && !last.ok && last.reason && !fallThroughOn.has(last.reason)) break;
     }
 
     log('chain-exhausted', { attempts: attempts.map((a) => `${a.kind}:${a.reason}`) });

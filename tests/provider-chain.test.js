@@ -108,10 +108,12 @@ test('fallThroughOn can narrow what justifies trying the next link', async () =>
 
 test('failure classification covers the shapes providers actually emit', () => {
   assert.equal(classifyFailure('insufficient_quota'), 'quota');
-  // A subscription says this, not "insufficient_quota". Missing it classified a real
-  // exhaustion as a generic error during the first live multi-brain run.
-  assert.equal(classifyFailure("You've hit your session limit · resets 2:50pm"), 'quota');
-  assert.equal(classifyFailure('You have reached your limit'), 'quota');
+  // A SUBSCRIPTION says "session limit", and it means CONCURRENCY, not an empty wallet -
+  // verified against the account, which was at 30% session and 51% weekly when this fired.
+  // It must classify as rate-limit so the chain retries the same link rather than abandoning
+  // a healthy provider.
+  assert.equal(classifyFailure("You've hit your session limit · resets 2:50pm"), 'rate-limit');
+  assert.equal(classifyFailure('too many concurrent sessions'), 'rate-limit');
   assert.equal(classifyFailure('You have run out of credits'), 'quota');
   assert.equal(classifyFailure('429 Too Many Requests'), 'rate-limit');
   assert.equal(classifyFailure('401 Unauthorized'), 'auth');
@@ -122,4 +124,61 @@ test('failure classification covers the shapes providers actually emit', () => {
 
 test('an empty chain is refused at construction', () => {
   assert.throws(() => chainProviders([]), /at least one link/);
+});
+
+test('a rate limit RETRIES the same link instead of abandoning it', async () => {
+  // The live failure this exists for. A run reported "You've hit your session limit" and the
+  // chain treated it as exhaustion - abandoning a working provider and moving the baton. The
+  // account was at 30% session, 51% weekly. The real cause was four sessions in parallel
+  // against one shared limit: a concurrency ceiling that clears in moments.
+  //
+  // Treating a transient throttle as exhaustion is worse than the reverse: it burns a healthy
+  // provider for nothing.
+  let calls = 0;
+  const flaky = {
+    kind: 'cli',
+    async ask() {
+      calls += 1;
+      if (calls === 1) return { text: "You've hit your session limit", isError: true };
+      return { text: 'served after backoff', isError: false };
+    },
+    async probe() { return { ok: true, detail: '' }; }
+  };
+  const waits = [];
+  const chain = chainProviders([flaky, ok('api', 'fallback never needed')], {
+    rateLimitRetries: 2, rateLimitBackoffMs: 10, sleep: async (ms) => { waits.push(ms); }
+  });
+  const reply = await chain.ask('hello');
+
+  assert.equal(reply.text, 'served after backoff');
+  assert.equal(reply.servedBy, 'cli', 'the SAME link must serve it, not the fallback');
+  assert.equal(calls, 2, 'retried once');
+  assert.deepEqual(waits, [10], 'and waited before retrying');
+});
+
+test('backoff doubles, then falls through once retries are spent', async () => {
+  const waits = [];
+  const chain = chainProviders([
+    fails('cli', '429 too many requests'),
+    ok('api', 'fallback')
+  ], { rateLimitRetries: 3, rateLimitBackoffMs: 100, sleep: async (ms) => { waits.push(ms); } });
+  const reply = await chain.ask('hello');
+
+  assert.deepEqual(waits, [100, 200, 400], 'exponential, not flat');
+  assert.equal(reply.servedBy, 'api', 'only after exhausting retries does it move on');
+});
+
+test('a quota failure does NOT retry - the wallet will not refill in 15 seconds', async () => {
+  let calls = 0;
+  const broke = {
+    kind: 'cli',
+    async ask() { calls += 1; return { text: 'insufficient_quota', isError: true }; },
+    async probe() { return { ok: true, detail: '' }; }
+  };
+  const chain = chainProviders([broke, ok('api', 'fallback')], {
+    rateLimitRetries: 3, sleep: async () => {}
+  });
+  const reply = await chain.ask('hello');
+  assert.equal(calls, 1, 'quota is not retryable; retrying wastes time on a certainty');
+  assert.equal(reply.servedBy, 'api');
 });
