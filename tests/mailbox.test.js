@@ -49,6 +49,36 @@ test('Unicode messages round-trip and batch read marks every selected message', 
   assert.equal((await store.inbox('codex')).length, 0);
 });
 
+test('a non-repository mailbox does not spawn git merely to report status', async () => {
+  const fakeBin = await fs.mkdtemp(path.join(os.tmpdir(), 'portable-ai-bus-fake-git-'));
+  const marker = path.join(fakeBin, 'invoked.txt');
+  const hook = path.join(fakeBin, 'hook.cjs');
+  const fakeGit = path.join(fakeBin, process.platform === 'win32' ? 'git.exe' : 'git');
+  const originalPath = process.env.PATH;
+  const originalNodeOptions = process.env.NODE_OPTIONS;
+  try {
+    await fs.copyFile(process.execPath, fakeGit);
+    if (process.platform !== 'win32') await fs.chmod(fakeGit, 0o755);
+    await fs.writeFile(
+      hook,
+      `require('node:fs').appendFileSync(${JSON.stringify(marker)}, 'git spawned\\n');`,
+      'utf8'
+    );
+    process.env.PATH = fakeBin;
+    process.env.NODE_OPTIONS = `--require=${hook}`;
+
+    await store.status();
+
+    await assert.rejects(fs.access(marker), { code: 'ENOENT' });
+  } finally {
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+    if (originalNodeOptions === undefined) delete process.env.NODE_OPTIONS;
+    else process.env.NODE_OPTIONS = originalNodeOptions;
+    await removeTree(fakeBin);
+  }
+});
+
 test('claims accumulate and an exact scoped release preserves remaining ownership', async () => {
   await store.claim({ agent: 'codex', paths: ['src/mailbox.ts'], why: 'runtime' });
   const held = await store.claim({ agent: 'codex', paths: ['tests/'], why: 'regressions' });

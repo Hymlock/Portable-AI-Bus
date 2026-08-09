@@ -90,7 +90,9 @@ if (harnessAlive()) {
   );
   const deadline = Date.now() + 15000;
   while (!harnessAlive() && Date.now() < deadline) {
-    spawnSync(process.execPath, ['-e', 'setTimeout(()=>{},300)']);
+    // This is synchronous startup code, but sleeping must not mean spawning up to fifty Node
+    // console processes. Those short-lived children were a separate source of Windows flashes.
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 300);
   }
   log(harnessAlive() ? 'harness      started' : 'harness      FAILED to start');
 }

@@ -995,10 +995,21 @@ export class MailboxStore {
   }
 
   private async gitStamp(): Promise<CommitStamp | undefined> {
+    // Most mailbox roots are runtime directories, not source checkouts. Spawning Git anyway
+    // was not merely wasted work on Windows: every status/send created two short-lived console
+    // processes, and mailbox/extension polling turned those into visible flashes. Check for Git
+    // metadata in-process before launching anything. Walking upward preserves support for a bus
+    // rooted in a subdirectory of a repository, including worktrees where `.git` is a file.
+    let candidate = path.resolve(this.paths.root);
+    while (!(await this.exists(path.join(candidate, '.git')))) {
+      const parent = path.dirname(candidate);
+      if (parent === candidate) return undefined;
+      candidate = parent;
+    }
     try {
       const [{ stdout: sha }, { stdout: dirty }] = await Promise.all([
-        execFileAsync('git', ['-C', this.paths.root, 'rev-parse', 'HEAD']),
-        execFileAsync('git', ['-C', this.paths.root, 'status', '--porcelain'])
+        execFileAsync('git', ['-C', this.paths.root, 'rev-parse', 'HEAD'], { windowsHide: true }),
+        execFileAsync('git', ['-C', this.paths.root, 'status', '--porcelain'], { windowsHide: true })
       ]);
       return { sha: sha.trim(), dirty: Boolean(dirty.trim()) };
     } catch {
