@@ -188,8 +188,12 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
           log('provider-exhausted', { seat, attempts: chain.attempts });
           const plan = receiptPlan(seat, messages);
           await executePlan(tools, plan);
-          // note carries the exhaustion signal for reassignBaton operators/tests.
-          return { done: true, note: `chain-exhausted:servedBy=none:attempts=${chain.attempts.length}` };
+          // exhausted:true is the runner signal for onExhausted → reassignBaton (5af3b1c).
+          return {
+            done: true,
+            exhausted: true,
+            note: `chain-exhausted:attempts=${chain.attempts.map((a) => `${a.kind}:${a.reason}`).join(',')}`
+          };
         }
 
         if (reply.isError || !reply.text.trim()) {
