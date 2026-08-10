@@ -33,6 +33,8 @@ Canonical phases are `PLANNING`, `READY_FOR_IMPLEMENTATION`, `IMPLEMENTATION_IN_
 
 ## Mailbox operations
 
+**Precondition:** Paths under `.ai-bus/bin/` are created by `initialize`. They do not exist in a fresh clone — `node .ai-bus/bin/...` fails with `MODULE_NOT_FOUND` until then. From a clone (or before initialize), run the repo copies: `node dist/mailbox.js`, `node dist/worker-client.js`, and other `dist/*.js` as needed.
+
 Staged binary: `.ai-bus/bin/mailbox.js` (from `dist/mailbox.js`).
 
 This is a trusted operator/local-recovery interface: its actor flags are not authenticated. Provider processes should use the seat client below.
