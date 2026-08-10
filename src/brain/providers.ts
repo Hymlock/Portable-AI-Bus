@@ -486,7 +486,16 @@ export function codexProvider(options: CodexProviderOptions = {}): ModelProvider
     async ask(prompt, { systemPrompt = '', timeoutMs = options.timeoutMs ?? 600_000 } = {}) {
       const answerFile = nodePath.join(
         nodeOs.tmpdir(), `codex-answer-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`);
-      const args = ['exec', '--skip-git-repo-check', '--sandbox', 'read-only',
+      // `workspace-write`, not `read-only`. Seats are designed to have full functionality in
+      // their workdir - Hymlock, 2026-08-10: *"We've always designed them to have full
+      // functionality and access."* Pinning this to read-only made codex the only crippled seat
+      // of the three, and it failed in a way that looked like the MODEL misbehaving: it reached
+      // for `capability shell`, then `workspace_runner`, then `read_write_test`, burning paid
+      // rounds hunting for a door I had locked.
+      //
+      // `--sandbox` still bounds it to the workspace rather than the whole machine, which is the
+      // level the design calls for: agents that can do the work, inside the tree they were given.
+      const args = ['exec', '--skip-git-repo-check', '--sandbox', 'workspace-write',
                     '--output-last-message', answerFile];
       if (options.model) args.push('--model', options.model);
       // Codex has no separate system-prompt flag, so it is prepended. Keeping the shape
@@ -647,8 +656,17 @@ export function grokProvider(options: GrokProviderOptions = {}): ModelProvider {
     },
 
     async ask(prompt, { systemPrompt = '', timeoutMs = options.timeoutMs ?? 600_000, responseSchema } = {}) {
+      // `--always-approve` because there is no TTY here to approve anything. Without it the CLI
+      // plans a tool call, cannot get consent, and ABORTS the whole reply -
+      // `{"text":"","stopReason":"cancelled"}` - which reads downstream as a broken model rather
+      // than a withheld permission. Measured: identical prompts returned `cancelled` with tools
+      // pending and `end_turn` without them.
+      //
+      // This grants unattended tool execution, and that is the design: seats have full
+      // functionality in their workdir. The boundary that keeps it safe is the WORKDIR plus git,
+      // not a prompt telling a capable agent it is powerless.
       const args = ['-p', systemPrompt ? `${systemPrompt}\n\n---\n\n${prompt}` : prompt,
-                    '--output-format', 'json'];
+                    '--output-format', 'json', '--always-approve'];
       // Constrain decoding when the caller says what shape it needs. This is the whole reason
       // the grok seat can be trusted with structured work: the CLI enforces the schema, so
       // "reply with only JSON" stops being a request the model may decline.
