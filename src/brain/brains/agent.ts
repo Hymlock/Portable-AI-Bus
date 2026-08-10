@@ -134,7 +134,15 @@ export function parsePlan(text: string): { plan: AgentPlan; malformed: boolean }
   try {
     const raw = JSON.parse(trimmed.slice(start, end + 1)) as Partial<AgentPlan>;
     const rawActions = Array.isArray(raw.actions) ? raw.actions : [];
-    const actions = rawActions.filter(isAction);
+    // Normalise BEFORE filtering, and keep the normalised objects. `isAction` is a type guard,
+    // so filtering alone would return the originals - validation would accept `reason` and
+    // execution would then read `why` as undefined. That is a worse failure than the one being
+    // fixed: an action that passes every check and silently does nothing.
+    const actions = rawActions
+      .map((action) => (action && typeof action === 'object'
+        ? normalizeAction(action as Record<string, unknown>)
+        : action))
+      .filter(isAction);
     return {
       plan: {
         actions,
@@ -148,9 +156,39 @@ export function parsePlan(text: string): { plan: AgentPlan; malformed: boolean }
   }
 }
 
+/**
+ * Accept the synonyms models actually reach for, before validating.
+ *
+ * The prompt specifies `why`, and the codex seat wrote `reason` anyway — a sensible claim on
+ * `src/bus.ts`, dropped by the validator, plan marked malformed, and the seat looped through
+ * NINE repair rounds producing nothing. Every round was a paid model call.
+ *
+ * Strictness at this boundary buys nothing: the field means the same thing whichever word the
+ * model picked, and refusing it does not teach the model, it just burns the wake. Normalise the
+ * near-misses; keep the validator strict about everything that carries real meaning.
+ */
+function normalizeAction(value: Record<string, unknown>): Record<string, unknown> {
+  const action = { ...value };
+  const alias = (from: string, to: string) => {
+    if (action[to] === undefined && typeof action[from] === 'string') action[to] = action[from];
+  };
+  alias('reason', 'why');       // claim
+  alias('rationale', 'why');
+  alias('recipient', 'to');     // send
+  alias('message', 'body');
+  alias('title', 'subject');
+  alias('capability', 'id');    // capability
+  alias('name', 'id');
+  // A single path where a list is required is the other common near-miss.
+  if (Array.isArray(action.paths) === false && typeof action.path === 'string') {
+    action.paths = [action.path];
+  }
+  return action;
+}
+
 function isAction(value: unknown): value is BrainAction {
   if (!value || typeof value !== 'object') return false;
-  const action = value as Record<string, unknown>;
+  const action = normalizeAction(value as Record<string, unknown>);
   const strings = (items: unknown) => Array.isArray(items) && items.length > 0 &&
     items.every((item) => typeof item === 'string' && item.trim().length > 0);
   switch (action.type) {
