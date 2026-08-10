@@ -50,6 +50,31 @@ const once = process.argv.includes('--once');
 
 const runtime = path.join(root, '.ai-bus', 'runtime');
 
+/** Courtesy kinds, matching the runner's `ackKinds` and the brain's `RECEIPT_KINDS`. */
+const RECEIPT_KINDS = new Set(['ack', 'receipt', 'ping']);
+
+/**
+ * When did anything last happen on this bus?
+ *
+ * Taken from the newest durable message rather than from a counter this process has been
+ * watching. The first version remembered the round across ticks and compared — which meant a
+ * freshly started watcher measured "quiet since I started looking" and was blind to a park that
+ * began hours before it. Evidence on disk has no such blind spot: a bus where nobody has sent
+ * anything for an hour is quiet whether or not anyone was watching.
+ */
+function lastActivityMinutes() {
+  try {
+    const inbox = path.join(runtime, 'mailbox', 'inbox');
+    const files = fs.readdirSync(inbox).filter((name) => name.endsWith('.json')).sort();
+    const newest = files[files.length - 1];
+    if (!newest) return null;
+    const at = fs.statSync(path.join(inbox, newest)).mtimeMs;
+    return Math.round((Date.now() - at) / 60000);
+  } catch {
+    return null;
+  }
+}
+
 /** Seats with a live brain process, by name. Windows-only detection; empty elsewhere. */
 function liveBrains() {
   if (process.platform !== 'win32') return [];
@@ -78,15 +103,25 @@ function busState() {
     // MailboxStore.status(); reading a nonexistent `state.unread` made every tick claim
     // `unread:none`, including when dozens of messages were waiting.
     const counts = new Map();
+    const substantive = new Map();
     const inbox = path.join(runtime, 'mailbox', 'inbox');
     for (const file of fs.readdirSync(inbox).filter((name) => name.endsWith('.json')).sort()) {
       const message = JSON.parse(fs.readFileSync(path.join(inbox, file), 'utf8'));
       if (message.read !== true && typeof message.to === 'string') {
         counts.set(message.to, (counts.get(message.to) ?? 0) + 1);
+        // Receipts are courtesy traffic and should not compete for a human's attention. A live
+        // count of 49 hid the fact that only 13 needed anyone: 36 were acks. A number that is
+        // always large is a number nobody reads.
+        if (!RECEIPT_KINDS.has(String(message.kind ?? '').toLowerCase())) {
+          substantive.set(message.to, (substantive.get(message.to) ?? 0) + 1);
+        }
       }
     }
     const unread = [...counts].sort(([left], [right]) => left.localeCompare(right))
-      .map(([who, n]) => `${who}:${n}`);
+      .map(([who, n]) => {
+        const real = substantive.get(who) ?? 0;
+        return real === n ? `${who}:${n}` : `${who}:${n}(${real} need you)`;
+      });
     const heldSeconds = state.baton?.since
       ? Math.round((Date.now() - Date.parse(state.baton.since)) / 1000)
       : null;
@@ -123,10 +158,24 @@ function tick() {
     bus.unread.length ? `unread:${bus.unread.join(' ')}` : 'unread:none'
   ];
   if (bus.halted) parts.push('HALTED');
-  // A baton held for a long time by a seat with no brain is the shape of a stall, so name it
-  // rather than making the reader compute it from the numbers.
-  if (bus.heldSeconds !== null && bus.heldSeconds > 900 && !brains.includes(bus.baton)) {
-    parts.push(`STALL? ${bus.baton} holds the baton with no live brain`);
+
+  const quietMinutes = lastActivityMinutes();
+
+  // Two different stalls, and the first version only caught one of them.
+  //
+  //   dead    the baton sits with a seat that has no live brain
+  //   parked  the baton sits with a LIVE seat that is idle-skipping every wake
+  //
+  // The second is what actually happened: codex finished an iteration, reported it, and simply
+  // never released the baton. Its brain was alive and healthy and logging `wake-idle-skipped`
+  // every five minutes, so a liveness-only check called that fine for nearly three hours. The
+  // round counter is the tell - nothing is happening if nothing is being sequenced.
+  if (bus.heldSeconds !== null && bus.heldSeconds > 900) {
+    if (!brains.includes(bus.baton)) {
+      parts.push(`STALL? ${bus.baton} holds the baton with no live brain`);
+    } else if (quietMinutes !== null && quietMinutes >= 15) {
+      parts.push(`PARKED? ${bus.baton} holds the baton; no bus traffic for ${quietMinutes}m`);
+    }
   }
   console.log(parts.join('  '));
 }
