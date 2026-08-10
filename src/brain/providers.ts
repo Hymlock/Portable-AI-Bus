@@ -612,16 +612,21 @@ export function extractGrokAnswer(stdout: string): { text: string; error?: strin
     }
   }
   if (best) {
-    // Unwrap repeatedly. Observed live: the answer arrives inside an envelope that is itself
-    // inside an envelope, so a single unwrap returns another envelope - which then fails to
-    // parse as a plan and is logged as "malformed output" from a model that complied.
-    // Bounded, because an unbounded unwrap on hostile input is a hang.
+    // Unwrap repeatedly. Observed live: the answer can pass through several JSON-producing
+    // layers (CLI, ConPTY transport, structured-output wrapper). Three layers was not enough:
+    // the live Grok seat still handed an outer `{ "text": "..." }` envelope to `parsePlan`
+    // and burned repair calls on a plan that had already complied. Detect a plan by its parsed
+    // top-level shape rather than by searching the raw string for `"actions"`; that substring
+    // can itself appear escaped inside another envelope. Bounded, because an unbounded unwrap
+    // on hostile input is a hang.
     let text = best.text;
-    for (let depth = 0; depth < 3; depth += 1) {
+    for (let depth = 0; depth < 12; depth += 1) {
       const inner = text.trim();
-      if (!inner.startsWith('{') || inner.includes('"actions"')) break;
+      if (!inner.startsWith('{')) break;
       try {
-        const parsed = fromObject(JSON.parse(inner) as Record<string, unknown>);
+        const value = JSON.parse(inner) as Record<string, unknown>;
+        if (Array.isArray(value.actions) && typeof value.done === 'boolean') break;
+        const parsed = fromObject(value);
         if (parsed.error) return parsed;
         if (!parsed.text || parsed.text === text) break;
         text = parsed.text;
@@ -810,7 +815,6 @@ export function resolveChain(
   const { chainProviders } = require('./chain') as typeof import('./chain');
   return chainProviders(configs.map((config) => resolveProvider(config)), chainOptions);
 }
-
 
 
 

@@ -107,6 +107,19 @@ test('a doubly-wrapped answer is unwrapped to the plan', () => {
   assert.deepEqual(JSON.parse(extractGrokAnswer(plan).text), JSON.parse(plan));
 });
 
+test('a deeply wrapped structured reply reaches the plan instead of spending repair calls', () => {
+  // Live 2026-08-10 failure: after three unwrappings the Grok brain still received a pretty
+  // printed { text: "{\"actions\":...}" } envelope. The old raw substring check was not a
+  // reliable plan boundary because an escaped plan may appear inside another envelope.
+  const plan = '{"actions":[{"type":"send","to":"codex","kind":"report","subject":"x","body":"y"}],"done":true}';
+  let wrapped = plan;
+  for (let depth = 0; depth < 7; depth += 1) {
+    wrapped = JSON.stringify({ text: wrapped, stopReason: 'end_turn' }, null, 2);
+  }
+
+  assert.deepEqual(JSON.parse(extractGrokAnswer(wrapped).text), JSON.parse(plan));
+});
+
 test('an error object anywhere in the stream wins over a later answer', () => {
   // "Not signed in" must never be masked by a trailing object, or the chain keeps a dead link.
   const stream = [
@@ -141,4 +154,3 @@ test('the parser handles the other shapes the CLI can emit', () => {
   assert.equal(failed.text, '');
   assert.equal(failed.error, 'Not signed in.');
 });
-
