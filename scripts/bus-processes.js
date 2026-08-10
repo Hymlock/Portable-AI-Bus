@@ -71,15 +71,30 @@ function bootstrapCoordinationRoot(repo, root) {
   const busDir = path.join(root, '.ai-bus');
   const created = [];
   fs.mkdirSync(path.join(busDir, 'bin'), { recursive: true });
+  const capabilitySource = path.join(repo, 'templates', 'capabilities.json');
+  const capabilityDestination = path.join(busDir, 'capabilities.json');
   const sources = [
-    [path.join(repo, 'templates', 'capabilities.json'), path.join(busDir, 'capabilities.json')],
+    [capabilitySource, capabilityDestination],
     [path.join(repo, 'dist', 'mailbox.js'), path.join(busDir, 'bin', 'mailbox.js')],
     [path.join(repo, 'dist', 'capabilities.js'), path.join(busDir, 'bin', 'capabilities.js')],
     [path.join(repo, 'dist', 'adapters', 'skse-devkit.js'), path.join(busDir, 'bin', 'skse-devkit.js')]
   ];
   for (const [source, destination] of sources) {
-    if (fs.existsSync(destination)) continue;
     if (!fs.existsSync(source)) throw new Error(`Cannot bootstrap coordination root; missing distribution asset: ${source}`);
+    if (fs.existsSync(destination)) {
+      // Upgrade only the exact previously shipped default. Arbitrary/operator capability files
+      // remain untouched; equality with the generated legacy default is the ownership proof.
+      if (destination === capabilityDestination) {
+        const currentDefault = fs.readFileSync(source, 'utf8');
+        const legacyDefault = currentDefault.replace(/\$\{bus\}\/\.ai-bus\/bin/g, '${workspace}/.ai-bus/bin')
+          .replace(', "--root", "${bus}"', '');
+        if (fs.readFileSync(destination, 'utf8') === legacyDefault) {
+          fs.copyFileSync(source, destination);
+          created.push(destination);
+        }
+      }
+      continue;
+    }
     fs.mkdirSync(path.dirname(destination), { recursive: true });
     fs.copyFileSync(source, destination, fs.constants.COPYFILE_EXCL);
     created.push(destination);

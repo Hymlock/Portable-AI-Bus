@@ -238,7 +238,9 @@ export class CapabilityRunner {
   }
 
   private expand(value: string): string {
-    return value.replace(/\$\{workspace\}/g, this.workspaceRoot);
+    return value
+      .replace(/\$\{workspace\}/g, this.workspaceRoot)
+      .replace(/\$\{bus\}/g, this.configRoot);
   }
 
   private async resolveWorkingDirectory(value: string, definitionRequestsOutside: boolean): Promise<string> {
@@ -275,15 +277,21 @@ export class CapabilityRunner {
   }
 
   private portablePath(value: string): string {
+    const normalized = path.isAbsolute(value) ? path.normalize(value) : value;
     const root = this.workspaceRoot.replace(/[\\/]+$/, '');
     const compare = (item: string) => process.platform === 'win32' ? item.toLowerCase() : item;
-    if (compare(value) === compare(root)) {
+    if (compare(normalized) === compare(root)) {
       return '${workspace}';
     }
-    if (compare(value).startsWith(`${compare(root)}${path.sep}`)) {
-      return `\${workspace\}/${value.slice(root.length + 1).replace(/\\/g, '/')}`;
+    if (compare(normalized).startsWith(`${compare(root)}${path.sep}`)) {
+      return `\${workspace\}/${normalized.slice(root.length + 1).replace(/\\/g, '/')}`;
     }
-    return redactText(value);
+    const bus = this.configRoot.replace(/[\\/]+$/, '');
+    if (compare(normalized) === compare(bus)) return '${bus}';
+    if (compare(normalized).startsWith(`${compare(bus)}${path.sep}`)) {
+      return `\${bus\}/${normalized.slice(bus.length + 1).replace(/\\/g, '/')}`;
+    }
+    return redactText(normalized);
   }
 }
 

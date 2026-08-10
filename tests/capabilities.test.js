@@ -44,6 +44,12 @@ test('central config and receipts can be separated from the capability worktree'
     timeoutMs: 5000
   }]);
   const workdir = await fs.mkdtemp(path.join(os.tmpdir(), 'portable-ai-bus-workdir-'));
+  const script = path.join(coordinationRoot, 'where.cjs');
+  await fs.writeFile(script, 'process.stdout.write(process.cwd())', 'utf8');
+  await fs.writeFile(path.join(coordinationRoot, '.ai-bus', 'capabilities.json'), JSON.stringify({
+    version: 1,
+    capabilities: [{ id: 'where', command: process.execPath, args: ['${bus}/where.cjs'], cwd: '${workspace}', timeoutMs: 5000 }]
+  }), 'utf8');
   t.after(async () => {
     await fs.rm(coordinationRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
     await fs.rm(workdir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
@@ -52,6 +58,7 @@ test('central config and receipts can be separated from the capability worktree'
   const runner = new CapabilityRunner(workdir, { configRoot: coordinationRoot });
   const receipt = await runner.run('where');
   assert.equal(path.resolve(receipt.stdout.tail), path.resolve(workdir));
+  assert.equal(receipt.command.args[0], '${bus}/where.cjs');
   await fs.access(path.join(coordinationRoot, '.ai-bus', 'runtime', 'receipts', 'latest.json'));
   await assert.rejects(fs.access(path.join(workdir, '.ai-bus', 'runtime', 'receipts', 'latest.json')));
 });
@@ -156,8 +163,9 @@ test('shipped capability template exposes a fixed safe Dev Kit workflow to every
     assert.ok(capability, `missing ${id}`);
     assert.deepEqual(capability.allowedSeats, ['*']);
     assert.equal(capability.command, 'node');
-    assert.ok(capability.args.includes('${workspace}/.ai-bus/bin/skse-devkit.js'));
+    assert.ok(capability.args.includes('${bus}/.ai-bus/bin/skse-devkit.js'));
   }
+  assert.deepEqual(byId.get('bus.doctor').args.slice(-2), ['--root', '${bus}']);
   for (const id of ['skse.doctor', 'skse.configure', 'skse.build', 'skse.test']) {
     assert.ok(byId.get(id).inheritEnv.includes('SKSE_DEVKIT_ROOT'));
     assert.ok(byId.get(id).inheritEnv.includes('VCPKG_ROOT'));

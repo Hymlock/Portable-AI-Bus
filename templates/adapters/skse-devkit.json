@@ -35,7 +35,7 @@
     {
       "id": "skse.doctor",
       "command": "node",
-      "args": ["${workspace}/.ai-bus/bin/skse-devkit.js", "doctor", "--workspace", "${workspace}"],
+      "args": ["${bus}/.ai-bus/bin/skse-devkit.js", "doctor", "--workspace", "${workspace}"],
       "cwd": "${workspace}",
       "timeoutMs": 60000,
       "inheritEnv": ["SKSE_DEVKIT_ROOT", "VCPKG_ROOT", "VCPKG_DEFAULT_TRIPLET", "VSINSTALLDIR", "VCINSTALLDIR", "VCToolsInstallDir", "VCToolsVersion", "VisualStudioVersion", "WindowsSdkDir", "WindowsSDKVersion", "UniversalCRTSdkDir", "UCRTVersion", "VSCMD_ARG_TGT_ARCH", "VSCMD_VER", "INCLUDE", "LIB", "LIBPATH", "EXTERNAL_INCLUDE", "CXX", "CC", "CMAKE_RC_COMPILER", "CMAKE_MT"],
@@ -44,7 +44,7 @@
     {
       "id": "skse.configure",
       "command": "node",
-      "args": ["${workspace}/.ai-bus/bin/skse-devkit.js", "configure", "--workspace", "${workspace}"],
+      "args": ["${bus}/.ai-bus/bin/skse-devkit.js", "configure", "--workspace", "${workspace}"],
       "cwd": "${workspace}",
       "timeoutMs": 600000,
       "inheritEnv": ["SKSE_DEVKIT_ROOT", "VCPKG_ROOT", "VCPKG_DEFAULT_TRIPLET", "VSINSTALLDIR", "VCINSTALLDIR", "VCToolsInstallDir", "VCToolsVersion", "VisualStudioVersion", "WindowsSdkDir", "WindowsSDKVersion", "UniversalCRTSdkDir", "UCRTVersion", "VSCMD_ARG_TGT_ARCH", "VSCMD_VER", "INCLUDE", "LIB", "LIBPATH", "EXTERNAL_INCLUDE", "CXX", "CC", "CMAKE_RC_COMPILER", "CMAKE_MT"],
@@ -53,7 +53,7 @@
     {
       "id": "skse.build",
       "command": "node",
-      "args": ["${workspace}/.ai-bus/bin/skse-devkit.js", "build", "--workspace", "${workspace}"],
+      "args": ["${bus}/.ai-bus/bin/skse-devkit.js", "build", "--workspace", "${workspace}"],
       "cwd": "${workspace}",
       "timeoutMs": 600000,
       "inheritEnv": ["SKSE_DEVKIT_ROOT", "VCPKG_ROOT", "VCPKG_DEFAULT_TRIPLET", "VSINSTALLDIR", "VCINSTALLDIR", "VCToolsInstallDir", "VCToolsVersion", "VisualStudioVersion", "WindowsSdkDir", "WindowsSDKVersion", "UniversalCRTSdkDir", "UCRTVersion", "VSCMD_ARG_TGT_ARCH", "VSCMD_VER", "INCLUDE", "LIB", "LIBPATH", "EXTERNAL_INCLUDE", "CXX", "CC", "CMAKE_RC_COMPILER", "CMAKE_MT"],
@@ -62,7 +62,7 @@
     {
       "id": "skse.test",
       "command": "node",
-      "args": ["${workspace}/.ai-bus/bin/skse-devkit.js", "test", "--workspace", "${workspace}"],
+      "args": ["${bus}/.ai-bus/bin/skse-devkit.js", "test", "--workspace", "${workspace}"],
       "cwd": "${workspace}",
       "timeoutMs": 600000,
       "inheritEnv": ["SKSE_DEVKIT_ROOT", "VCPKG_ROOT", "VCPKG_DEFAULT_TRIPLET", "VSINSTALLDIR", "VCINSTALLDIR", "VCToolsInstallDir", "VCToolsVersion", "VisualStudioVersion", "WindowsSdkDir", "WindowsSDKVersion", "UniversalCRTSdkDir", "UCRTVersion", "VSCMD_ARG_TGT_ARCH", "VSCMD_VER", "INCLUDE", "LIB", "LIBPATH", "EXTERNAL_INCLUDE", "CXX", "CC", "CMAKE_RC_COMPILER", "CMAKE_MT"],
@@ -71,7 +71,7 @@
     {
       "id": "skse.validate-artifacts",
       "command": "node",
-      "args": ["${workspace}/.ai-bus/bin/skse-devkit.js", "validate-artifacts", "--workspace", "${workspace}"],
+      "args": ["${bus}/.ai-bus/bin/skse-devkit.js", "validate-artifacts", "--workspace", "${workspace}"],
       "cwd": "${workspace}",
       "timeoutMs": 60000,
       "inheritEnv": ["SKSE_DEVKIT_ROOT"],
@@ -80,7 +80,7 @@
     {
       "id": "skse.search.plugin-entrypoint",
       "command": "node",
-      "args": ["${workspace}/.ai-bus/bin/skse-devkit.js", "search", "--workspace", "${workspace}", "--query", "SKSEPlugin_Load"],
+      "args": ["${bus}/.ai-bus/bin/skse-devkit.js", "search", "--workspace", "${workspace}", "--query", "SKSEPlugin_Load"],
       "cwd": "${workspace}",
       "timeoutMs": 60000,
       "inheritEnv": ["SKSE_DEVKIT_ROOT"],
