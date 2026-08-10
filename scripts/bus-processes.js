@@ -88,7 +88,8 @@ function bootstrapCoordinationRoot(repo, root) {
         const currentDefault = fs.readFileSync(source, 'utf8');
         const legacyDefault = currentDefault.replace(/\$\{bus\}\/\.ai-bus\/bin/g, '${workspace}/.ai-bus/bin')
           .replace(', "--root", "${bus}"', '');
-        if (fs.readFileSync(destination, 'utf8') === legacyDefault) {
+        const normalizeNewlines = (value) => value.replace(/\r\n/g, '\n');
+        if (normalizeNewlines(fs.readFileSync(destination, 'utf8')) === normalizeNewlines(legacyDefault)) {
           fs.copyFileSync(source, destination);
           created.push(destination);
         }

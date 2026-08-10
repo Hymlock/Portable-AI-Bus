@@ -76,7 +76,7 @@ test('coordination bootstrap upgrades only the exact legacy default capability t
   const current = await fsp.readFile(path.join(repo, 'templates', 'capabilities.json'), 'utf8');
   const legacy = current.replace(/\$\{bus\}\/\.ai-bus\/bin/g, '${workspace}/.ai-bus/bin')
     .replace(', "--root", "${bus}"', '');
-  await fsp.writeFile(path.join(root, '.ai-bus', 'capabilities.json'), legacy);
+  await fsp.writeFile(path.join(root, '.ai-bus', 'capabilities.json'), legacy.replace(/\r?\n/g, '\r\n'));
   t.after(() => fsp.rm(fixture, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   bootstrapCoordinationRoot(repo, root);
   assert.equal(await fsp.readFile(path.join(root, '.ai-bus', 'capabilities.json'), 'utf8'), current);
