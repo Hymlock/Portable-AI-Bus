@@ -154,6 +154,35 @@ Each brain logs its chain at startup, and every reply records **which link serve
 Read them at `<bus root>/.ai-bus/runtime/brain-<seat>.log`. If a seat you expect to be on its
 own vendor logs `servedBy=cli`, it is falling through — and billing someone else's wallet.
 
+## Keeping the pilot chat awake
+
+Brains solved half the stall. A brain is a process: it wakes on mail, acts, and keeps going. The
+**pilot** — the chat window a human drives — is still a chat session, and a chat session's turn
+ends when it finishes speaking. It cannot wake itself, so work stops between your messages even
+while every seat is healthy.
+
+`bus-tick` is the other half. It prints one line per interval, forever:
+
+```
+node scripts/bus-tick.js --root "<bus root>" --interval-s 240
+tick 10:51:43  brains:claude,codex,grok,worker  baton:hymlock(44s)  round:497/550  unread:none
+```
+
+The line is the wake signal. A host that can watch a subprocess's stdout and re-enter the model
+on each line gets a pilot that resumes without you typing. **The bus emits the beat; the host
+decides how to listen** — in Claude Code, run it as a Monitor; elsewhere, use whatever
+background-task or watch facility surfaces stdout.
+
+Each tick carries state worth waking for, so a beat that arrives when nothing has changed is
+cheap to dismiss: which seats have live brains, who holds the baton and for how long, unread
+counts, and an explicit `STALL?` when the baton has sat for 15 minutes with **no live brain on
+that seat**. It reads the mailbox from disk rather than over HTTP, so it keeps beating when the
+harness dies — the moment a pilot most needs waking is the one where a status call would hang.
+
+**What it does not do.** It does not make a chat immortal. When the host session ends, the
+listener ends with it. This buys continuity *across responses*, not *across sessions* — claiming
+otherwise would repeat this project's oldest mistake of reading a heartbeat as proof of life.
+
 ## Providers
 
 Configured in `providers/providers.json` (staged into `.ai-bus/providers/`):
