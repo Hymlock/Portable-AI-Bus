@@ -250,6 +250,10 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
 
       /** Set when a round ended in `done` with nothing sent; carried into the next prompt. */
       let unreportedTask = false;
+      const wasAsked = messages.some((m) => String(m.kind ?? '').toLowerCase() === 'task');
+      const reportsTask = (plan: AgentPlan) => plan.actions.some(
+        (action) => action.type === 'send' && !RECEIPT_KINDS.has(String(action.kind ?? 'note').toLowerCase())
+      );
 
       for (let round = 0; round < maxRounds; round += 1) {
         const base = buildWakePrompt(seat, messages);
@@ -329,6 +333,12 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
               const second = parsePlan(repair.text);
               if (!second.malformed) {
                 await executePlan(tools, second.plan);
+                if (second.plan.done !== false && wasAsked && !reportsTask(second.plan)) {
+                  log('done-without-report', { seat, round, phase: 'malformed-repair' });
+                  unreportedTask = true;
+                  lastNote = durableNote('repaired plan omitted task report - continuing');
+                  continue;
+                }
                 return {
                   done: second.plan.done !== false,
                   note: durableNote('repaired')
@@ -368,7 +378,15 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
                   const stillFailing = await executePlan(tools, corrected.plan);
                   if (stillFailing.length === 0) {
                     lastNote = durableNote(corrected.plan.note ?? 'recovered after refused action');
-                    if (corrected.plan.done !== false) return { done: true, note: lastNote };
+                    if (corrected.plan.done !== false) {
+                      if (wasAsked && !reportsTask(corrected.plan)) {
+                        log('done-without-report', { seat, round, phase: 'action-repair' });
+                        unreportedTask = true;
+                        lastNote = durableNote('corrected plan omitted task report - continuing');
+                        continue;
+                      }
+                      return { done: true, note: lastNote };
+                    }
                   }
                 }
               }
@@ -388,14 +406,11 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
         // multi-step audit and reported done, having sent nothing. The prompt asked them not to.
         // Asking is not a mechanism. This is: an unanswered task keeps the wake open, and the
         // model is told precisely what is missing.
-        const wasAsked = messages.some((m) => String(m.kind ?? '').toLowerCase() === 'task');
         // A RECEIPT IS NOT A REPORT. The first version of this rule asked only for "a send", and
         // the seats promptly satisfied it with acknowledgements - eight acks and zero findings
         // against a claim-by-claim audit. An ack says "I heard you"; the task asked for verdicts.
         // Courtesy kinds are therefore excluded from what counts as answering.
-        const reported = plan.actions.some(
-          (a) => a.type === 'send' && !RECEIPT_KINDS.has(String(a.kind ?? 'note').toLowerCase())
-        );
+        const reported = reportsTask(plan);
         if (plan.done !== false && wasAsked && !reported) {
           log('done-without-report', { seat, round });
           if (round + 1 < maxRounds) {

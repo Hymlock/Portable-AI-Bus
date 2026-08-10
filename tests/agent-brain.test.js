@@ -247,3 +247,26 @@ test('repair-call throw still sends a receipt instead of escaping the wake', asy
   assert.match(result.note, /provider-threw/);
   assert.equal(sent.length, 1);
 });
+
+test('a repaired refused action cannot finish a task with only an acknowledgement', async () => {
+  const replies = [
+    { actions: [{ type: 'capability' }], done: true },
+    { actions: [{ type: 'send', to: 'claude', kind: 'ack', subject: 'heard', body: 'working' }], done: true },
+    { actions: [{ type: 'send', to: 'claude', kind: 'report', subject: 'result', body: 'actual finding' }], done: true }
+  ];
+  let calls = 0;
+  const provider = {
+    kind: 'codex',
+    async ask() { return { text: JSON.stringify(replies[calls++]), isError: false }; },
+    async probe() { return { ok: true, detail: 'ok' }; }
+  };
+  const { api, sent } = tools();
+  const brain = createAgentBrain({ seat: 'worker', provider, maxRounds: 3 });
+  const result = await brain.takeTurn({
+    seat: 'worker', reason: 'mail', messages: [{ ...msg(23), kind: 'task' }], tools: api, budget: 10, log: () => {}
+  });
+  assert.equal(result.done, true);
+  assert.equal(calls, 3);
+  assert.deepEqual(sent.map((item) => item.kind), ['ack', 'report']);
+  assert.equal(sent[1].body, 'actual finding');
+});
