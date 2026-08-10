@@ -101,6 +101,15 @@ function isAction(value: unknown): value is BrainAction {
     type === 'capability' || type === 'done';
 }
 
+/**
+ * Message kinds that are pure courtesy. Sending one does not answer a task.
+ *
+ * Kept in step with the runner's `ackKinds`, which drops wakes carrying only these — the two
+ * rules are the same idea seen from opposite ends: a receipt neither earns a reply nor counts
+ * as one.
+ */
+const RECEIPT_KINDS = new Set(['ack', 'receipt', 'ping']);
+
 /** What went wrong while carrying out a plan, in the model's own terms. */
 export type PlanFailure = { action: string; detail: string };
 
@@ -245,9 +254,10 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
       for (let round = 0; round < maxRounds; round += 1) {
         const base = buildWakePrompt(seat, messages);
         const correction = unreportedTask
-          ? 'You marked the work done but sent NOTHING. A task is not finished until you have ' +
-            'sent your findings to the seat that asked. Either send a report now, or set ' +
-            '"done":false and keep working. Do not claim done again without a send action.\n\n'
+          ? 'You marked the work done without answering the task. An acknowledgement is NOT an ' +
+            'answer - it says you heard the request, not what you found. Send your actual ' +
+            'findings to the seat that asked, using a kind such as "report" or "finding" ' +
+            '(never "ack"), or set "done":false and keep working.\n\n'
           : '';
         const prompt = `${correction}${rosterLine ? `${rosterLine}\n\n` : ''}${base}`;
         let reply: ModelReply | ChainReply;
@@ -379,7 +389,13 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
         // Asking is not a mechanism. This is: an unanswered task keeps the wake open, and the
         // model is told precisely what is missing.
         const wasAsked = messages.some((m) => String(m.kind ?? '').toLowerCase() === 'task');
-        const reported = plan.actions.some((a) => a.type === 'send');
+        // A RECEIPT IS NOT A REPORT. The first version of this rule asked only for "a send", and
+        // the seats promptly satisfied it with acknowledgements - eight acks and zero findings
+        // against a claim-by-claim audit. An ack says "I heard you"; the task asked for verdicts.
+        // Courtesy kinds are therefore excluded from what counts as answering.
+        const reported = plan.actions.some(
+          (a) => a.type === 'send' && !RECEIPT_KINDS.has(String(a.kind ?? 'note').toLowerCase())
+        );
         if (plan.done !== false && wasAsked && !reported) {
           log('done-without-report', { seat, round });
           if (round + 1 < maxRounds) {

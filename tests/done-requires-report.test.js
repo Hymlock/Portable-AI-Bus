@@ -54,6 +54,32 @@ test('a seat cannot mark a TASK done without sending anything', async () => {
   assert.equal(result.done, true, 'and once it HAS reported, done is honoured');
 });
 
+test('an ACK does not count as answering a task', async () => {
+  // The loophole the seats found within minutes. The rule first asked only for "a send", so
+  // eight acknowledgements arrived against a claim-by-claim audit and not one finding. An ack
+  // says "I heard you"; the task asked for verdicts.
+  const sent = [];
+  const provider = scriptedProvider([
+    JSON.stringify({
+      actions: [{ type: 'send', to: 'hymlock', kind: 'ack', subject: 'ACK: audit', body: 'received' }],
+      done: true, note: 'acknowledged'
+    }),
+    JSON.stringify({
+      actions: [{ type: 'send', to: 'hymlock', kind: 'report', subject: 'findings', body: 'two false claims' }],
+      done: true, note: 'reported'
+    })
+  ]);
+
+  const brain = createAgentBrain({ seat: 'grok', provider, maxRounds: 5 });
+  const result = await brain.takeTurn({
+    seat: 'grok', reason: 'mail', messages: taskMail, tools: stubTools(sent), budget: 30, log: () => {}
+  });
+
+  assert.equal(result.done, true);
+  assert.equal(sent.length, 2, 'the ack still goes out - echo on receipt is still the rule');
+  assert.equal(sent[1].kind, 'report', 'but the wake only closes on a real answer');
+});
+
 test('an unanswered task keeps the wake open when rounds run out', async () => {
   const sent = [];
   const provider = scriptedProvider([JSON.stringify({ actions: [], done: true, note: 'nothing to do' })]);
