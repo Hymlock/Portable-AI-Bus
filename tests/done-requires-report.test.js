@@ -80,6 +80,28 @@ test('an ACK does not count as answering a task', async () => {
   assert.equal(sent[1].kind, 'report', 'but the wake only closes on a real answer');
 });
 
+test('continuation rounds suppress duplicate acknowledgements for the same task', async () => {
+  const sent = [];
+  const ack = JSON.stringify({
+    actions: [{ type: 'send', to: 'hymlock', kind: 'ack', subject: 'ACK: audit', body: 'received' }],
+    done: true
+  });
+  const provider = scriptedProvider([
+    ack,
+    ack,
+    JSON.stringify({
+      actions: [{ type: 'send', to: 'hymlock', kind: 'report', subject: 'result', body: 'finished' }],
+      done: true
+    })
+  ]);
+  const brain = createAgentBrain({ seat: 'grok', provider, maxRounds: 4 });
+  const result = await brain.takeTurn({
+    seat: 'grok', reason: 'mail', messages: taskMail, tools: stubTools(sent), budget: 30, log: () => {}
+  });
+  assert.equal(result.done, true);
+  assert.deepEqual(sent.map((item) => item.kind), ['ack', 'report']);
+});
+
 test('an unanswered task keeps the wake open when rounds run out', async () => {
   const sent = [];
   const provider = scriptedProvider([JSON.stringify({ actions: [], done: true, note: 'nothing to do' })]);

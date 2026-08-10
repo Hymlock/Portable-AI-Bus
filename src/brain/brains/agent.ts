@@ -45,7 +45,7 @@ const DEFAULT_SYSTEM = [
   'release={"type":"release","paths":["relative/path"]};',
   'capability={"type":"capability","id":"bus.doctor","timeoutMs":60000};',
   'done={"type":"done","note":"text"}. Never omit required fields.',
-  'Always acknowledge each incoming message with a short receipt send before other work.',
+  'Acknowledge each incoming message at most once with a short receipt before other work; never repeat an acknowledgement on a repair or continuation round.',
   'Do not name vendors, CLI tools, or API keys. Stay model-agnostic.'
 ].join(' ');
 
@@ -274,16 +274,34 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
 
       /** Set when a round ended in `done` with nothing sent; carried into the next prompt. */
       let unreportedTask = false;
+      let receiptSent = false;
       const wasAsked = messages.some((m) => String(m.kind ?? '').toLowerCase() === 'task');
       const reportsTask = (plan: AgentPlan) => plan.actions.some(
         (action) => action.type === 'send' && !RECEIPT_KINDS.has(String(action.kind ?? 'note').toLowerCase())
       );
+      const executeTrackedPlan = async (plan: AgentPlan) => {
+        const actions = receiptSent
+          ? plan.actions.filter((action) => !(
+              action.type === 'send' && RECEIPT_KINDS.has(String(action.kind ?? 'note').toLowerCase())
+            ))
+          : plan.actions;
+        const filtered = actions === plan.actions ? plan : { ...plan, actions };
+        const attemptedReceipt = actions.some((action) =>
+          action.type === 'send' && RECEIPT_KINDS.has(String(action.kind ?? 'note').toLowerCase())
+        );
+        const failures = await executePlan(tools, filtered);
+        if (attemptedReceipt && !failures.some((failure) => failure.action.startsWith('send to '))) {
+          receiptSent = true;
+        }
+        return failures;
+      };
 
       for (let round = 0; round < maxRounds; round += 1) {
         const base = buildWakePrompt(seat, messages);
         const correction = unreportedTask
           ? 'You marked the work done without answering the task. An acknowledgement is NOT an ' +
-            'answer - it says you heard the request, not what you found. Send your actual ' +
+            'answer - it says you heard the request, not what you found. An acknowledgement ' +
+            'already landed; DO NOT send another one. Perform the requested work and send your actual ' +
             'findings to the seat that asked, using a kind such as "report" or "finding" ' +
             '(never "ack"), or set "done":false and keep working.\n\n'
           : '';
@@ -295,7 +313,7 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
           const detail = (error as Error)?.message ?? String(error);
           log('provider-threw', { seat, detail: detail.slice(0, 200) });
           const plan = receiptPlan(seat, messages);
-          await executePlan(tools, plan);
+          await executeTrackedPlan(plan);
           return { done: true, note: `provider-threw:${detail.slice(0, 80)}` };
         }
 
@@ -305,7 +323,7 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
         if (chain.exhausted === true) {
           log('provider-exhausted', { seat, attempts: chain.attempts });
           const plan = receiptPlan(seat, messages);
-          await executePlan(tools, plan);
+          await executeTrackedPlan(plan);
           // exhausted:true is the runner signal for onExhausted → reassignBaton (5af3b1c).
           return {
             done: true,
@@ -321,7 +339,7 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
         if (reply.isError || !reply.text.trim()) {
           log('provider-error-reply', { seat, text: reply.text.slice(0, 120) });
           const plan = receiptPlan(seat, messages);
-          await executePlan(tools, plan);
+          await executeTrackedPlan(plan);
           return { done: true, note: 'provider-error-reply' };
         }
 
@@ -341,7 +359,7 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
               const detail = (error as Error)?.message ?? String(error);
               log('provider-threw', { seat, phase: 'repair', detail: detail.slice(0, 200) });
               const fallback = receiptPlan(seat, messages);
-              await executePlan(tools, fallback);
+              await executeTrackedPlan(fallback);
               return { done: true, note: `provider-threw:${detail.slice(0, 80)}` };
             }
             const repairChain = repair as ChainReply;
@@ -350,13 +368,13 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
             if (repairChain.exhausted === true) {
               log('provider-exhausted', { seat, phase: 'repair', attempts: repairChain.attempts });
               const fallback = receiptPlan(seat, messages);
-              await executePlan(tools, fallback);
+              await executeTrackedPlan(fallback);
               return { done: true, exhausted: true, note: exhaustionNote(repairChain) };
             }
             if (!repair.isError && repair.text.trim()) {
               const second = parsePlan(repair.text);
               if (!second.malformed) {
-                await executePlan(tools, second.plan);
+                await executeTrackedPlan(second.plan);
                 if (second.plan.done !== false && wasAsked && !reportsTask(second.plan)) {
                   log('done-without-report', { seat, round, phase: 'malformed-repair' });
                   unreportedTask = true;
@@ -371,11 +389,11 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
             }
           }
           const fallback = receiptPlan(seat, messages);
-          await executePlan(tools, fallback);
+          await executeTrackedPlan(fallback);
           return { done: true, note: 'malformed-output' };
         }
 
-        const failures = await executePlan(tools, plan);
+        const failures = await executeTrackedPlan(plan);
         // Provider identity is orchestration evidence, not model prose. Always retain it even
         // when the model supplies a friendly note of its own.
         lastNote = durableNote(plan.note);
@@ -399,7 +417,7 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
               if (!retry.isError && retry.text.trim()) {
                 const corrected = parsePlan(retry.text);
                 if (!corrected.malformed) {
-                  const stillFailing = await executePlan(tools, corrected.plan);
+                  const stillFailing = await executeTrackedPlan(corrected.plan);
                   if (stillFailing.length === 0) {
                     lastNote = durableNote(corrected.plan.note ?? 'recovered after refused action');
                     if (corrected.plan.done !== false) {
