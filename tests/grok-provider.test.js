@@ -120,6 +120,31 @@ test('a deeply wrapped structured reply reaches the plan instead of spending rep
   assert.deepEqual(JSON.parse(extractGrokAnswer(wrapped).text), JSON.parse(plan));
 });
 
+test('ConPTY visual wraps inside a long Grok JSON string are reversed', () => {
+  // Captured live: the outer envelope's `text` value was long enough for ConPTY to insert raw
+  // CRLF pairs inside the quoted JSON. JSON.parse must reject that stream until those terminal
+  // presentation breaks—not model-authored escaped newlines—are removed.
+  const plan = JSON.stringify({
+    actions: [{ type: 'send', to: 'codex', kind: 'report', subject: 'probe', body: 'X'.repeat(500) }],
+    done: true
+  });
+  const encodedPlan = JSON.stringify(plan);
+  let visuallyWrapped = '';
+  for (let index = 0; index < encodedPlan.length; index += 67) {
+    visuallyWrapped += encodedPlan.slice(index, index + 67);
+    if (index + 67 < encodedPlan.length) visuallyWrapped += '\r\n';
+  }
+  const stream = [
+    '2026-08-10T23:24:00Z WARN auto worktree gc failed',
+    '{',
+    `  "text": ${visuallyWrapped},`,
+    '  "stopReason": "end_turn"',
+    '}'
+  ].join('\r\n');
+
+  assert.deepEqual(JSON.parse(extractGrokAnswer(stream).text), JSON.parse(plan));
+});
+
 test('an error object anywhere in the stream wins over a later answer', () => {
   // "Not signed in" must never be masked by a trailing object, or the chain keeps a dead link.
   const stream = [
