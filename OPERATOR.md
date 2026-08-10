@@ -332,6 +332,11 @@ seat is a chat session then reporting and stopping are the same act. `src/brain/
 node .ai-bus/scripts/bus-up.js --root . --console grok
 ```
 
+The provider worktree defaults to `--root`. When the coordination mailbox is stored elsewhere,
+pass `--workdir <repository>` to `bus-up` (or `bus-console`) so model-backed brains launch in
+the actual checkout. The two roots are intentionally separate: mailbox durability does not
+imply repository context.
+
 The process waits, drains, acts, reports, and **waits again**. `done` means this wake finished,
 never that the agent finished. With a brain running you do not need the listener loop — the
 runner is the listener.

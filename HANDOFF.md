@@ -7,9 +7,11 @@ working tree is clean. Read this top to bottom before starting anything.
 > removal preserves operator-owned `.ai-bus/toolchains/`, and provider-chain overrides now
 > require two distinct vendors rather than two spellings for one vendor. The same reliability
 > patch also retries transient Windows atomic-renames, prevents delayed acknowledgements from
-> stealing a newer baton, and packages/tests `bus-tick` for the pilot chat. Next open defect:
-> detached brains need an explicit worktree separate from the coordination root; without it,
-> they can acknowledge repository tasks but launch their provider in a non-repository temp dir.
+> stealing a newer baton, and packages/tests `bus-tick` for the pilot chat. The follow-up adds
+> `--workdir` to `bus-up`, `bus-console`, and the brain CLI, separating the repository seen by
+> model providers from the durable coordination root. This was required for the project's
+> central `Projects/ai-bus` topology; without it, agents could acknowledge repository tasks but
+> launched their provider in a non-repository directory.
 
 ## Two open defects. Fix these before new work.
 
@@ -51,8 +53,9 @@ per-file bill of materials and licence allowlist exist.
 
 ## What shipped today
 
-`bus-tick.js` — a heartbeat for the **pilot** chat, the half that still falls asleep. Brains are
-processes and keep going; the human's chat window ends its turn when it stops speaking. The tick
+`bus-tick.js` — a heartbeat emitter for the human-facing **chat operator session**, the half that
+still falls asleep. It does not schedule autonomous brains. Brain processes keep going; the
+operator's chat window ends its turn when it stops speaking. The tick
 prints one state line per interval; a host that watches stdout re-enters the model on each line.
 Reads the mailbox from **disk**, so it keeps beating when the harness dies.
 

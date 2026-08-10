@@ -93,6 +93,10 @@ Hymlock approved the direction, so this is no longer a recommendation. What ship
 node .ai-bus/scripts/bus-up.js --root . --console grok
 ```
 
+`--root` locates coordination state; provider processes use it as their worktree unless
+`--workdir <repository>` is supplied. This matters for a shared/central Bus: a brain can receive
+mail from one root while its model inspects and edits a different checkout.
+
 ### The one property everything else serves
 
 `WakeResult.done` means **this wake's work is finished**. It does *not* mean the agent is

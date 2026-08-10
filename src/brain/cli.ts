@@ -7,6 +7,7 @@
  * report, which is the whole reason this exists (`docs/LOOP_ARCHITECTURE.md`).
  */
 
+import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { Brain, BrainFactory } from './contract';
 import { cliBusClient } from './bus-client';
@@ -110,10 +111,15 @@ export const echoBrain: BrainFactory = ({ seat }) => ({
   }
 });
 
-async function loadBrain(spec: string | undefined, seat: string, root: string): Promise<Brain> {
+export async function loadBrain(
+  spec: string | undefined,
+  seat: string,
+  root: string,
+  workdir: string
+): Promise<Brain> {
   const log = (event: string, data?: unknown) => console.log(JSON.stringify({ event, ...(data as object) }));
   if (!spec || spec === 'echo') {
-    return echoBrain({ seat, root, log }) as Brain;
+    return echoBrain({ seat, root, workdir, log }) as Brain;
   }
   const resolved = path.isAbsolute(spec) ? spec : path.resolve(process.cwd(), spec);
   // `require`, not `import()`. This file compiles to CommonJS and TypeScript downlevels a
@@ -132,22 +138,29 @@ async function loadBrain(spec: string | undefined, seat: string, root: string): 
   if (typeof factory !== 'function') {
     throw new Error(`${spec} must export a default BrainFactory or a createBrain function`);
   }
-  return factory({ seat, root, log });
+  return factory({ seat, root, workdir, log });
 }
 
 export async function main(argv: string[]): Promise<number> {
   const root = option(argv, '--root');
   const seat = option(argv, '--seat');
   if (!root || !seat) {
-    console.error('usage: brain --root PATH --seat AGENT [--brain MODULE] [--budget N] [--listen-s N]');
+    console.error('usage: brain --root PATH --seat AGENT [--workdir REPO] [--brain MODULE] [--budget N] [--listen-s N]');
     return 2;
+  }
+
+  const resolvedRoot = path.resolve(root);
+  const workdir = path.resolve(option(argv, '--workdir') ?? resolvedRoot);
+  const workdirStat = await fs.stat(workdir).catch(() => undefined);
+  if (!workdirStat?.isDirectory()) {
+    throw new Error(`--workdir must name an existing directory: ${workdir}`);
   }
 
   const log = (event: string, data?: unknown) =>
     console.log(JSON.stringify({ ts: new Date().toISOString(), seat, event, ...(data as object) }));
 
-  const brain = await loadBrain(option(argv, '--brain'), seat, root);
-  log('brain-loaded', { brain: brain.name });
+  const brain = await loadBrain(option(argv, '--brain'), seat, resolvedRoot, workdir);
+  log('brain-loaded', { brain: brain.name, workdir });
 
   const stopSignal = new Promise<void>((resolve) => {
     const stop = () => resolve();
@@ -155,12 +168,12 @@ export async function main(argv: string[]): Promise<number> {
     process.once('SIGTERM', stop);
   });
 
-  const onExhausted = createExhaustionHandler({ seat, root, log });
+  const onExhausted = createExhaustionHandler({ seat, root: resolvedRoot, log });
 
   const summary = await runBrain({
     seat,
     brain,
-    bus: cliBusClient({ root, log }),
+    bus: cliBusClient({ root: resolvedRoot, log }),
     // The endgame: this seat has spent every provider in its chain. It cannot think, so it
     // must not keep the baton - a holder that cannot act is the stall we spent this project
     // diagnosing. Hand off to any other registered seat and say why.

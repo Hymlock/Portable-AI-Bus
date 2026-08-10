@@ -2,7 +2,7 @@
 /**
  * Run every brain as a child of ONE console window.
  *
- *   node scripts/bus-console.js --root "<bus root>" --brains codex,worker
+ *   node scripts/bus-console.js --root "<bus root>" [--workdir "<repo>"] --brains codex,worker
  *
  * Why this exists, after a long evening of the alternative:
  *
@@ -38,6 +38,7 @@ function option(name, fallback) {
 
 const defaultRoot = path.basename(REPO) === '.ai-bus' ? path.dirname(REPO) : process.cwd();
 const root = path.resolve(option('--root', defaultRoot));
+const workdir = path.resolve(option('--workdir', root));
 const seats = option('--brains', 'claude,codex,grok').split(',').map((s) => s.trim()).filter(Boolean);
 const brainFile = path.resolve(option('--brain', path.join(REPO, 'brains', 'agent-seat.js')));
 
@@ -75,7 +76,7 @@ for (const seat of seats) {
   // inheritance is unbroken from this window down to git.
   const child = spawn(process.execPath, [
     path.join(DIST, 'brain', 'cli.js'),
-    '--root', root, '--seat', seat, '--brain', brainFile
+    '--root', root, '--workdir', workdir, '--seat', seat, '--brain', brainFile
   ], { stdio: 'inherit', env: { ...process.env, PORTABLE_AI_BUS_INHERIT_CONSOLE: '1' } });
 
   children.push({ seat, child });

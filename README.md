@@ -96,6 +96,10 @@ initiating seat; all three provider-neutral brains start by default:
 node .ai-bus/scripts/bus-up.js --root . --console codex
 ```
 
+`--root` is where the durable mailbox lives. Providers work in that same directory by default.
+If one shared Bus coordinates a different repository, name it explicitly so model CLIs can
+inspect and edit the intended tree: `--root ../ai-bus --workdir .`.
+
 On Windows, `node .ai-bus/scripts/bus-console.js --root .` keeps all brains under one visible
 console for the strongest no-flash guarantee. Brains continue after each wake. Clarification is
 an open dependency, never goal completion. A provider credit failure falls through to another
@@ -154,10 +158,10 @@ Each brain logs its chain at startup, and every reply records **which link serve
 Read them at `<bus root>/.ai-bus/runtime/brain-<seat>.log`. If a seat you expect to be on its
 own vendor logs `servedBy=cli`, it is falling through — and billing someone else's wallet.
 
-## Keeping the pilot chat awake
+## Keeping the chat operator session awake
 
 Brains solved half the stall. A brain is a process: it wakes on mail, acts, and keeps going. The
-**pilot** — the chat window a human drives — is still a chat session, and a chat session's turn
+**chat operator** (the pilot) — the human-facing Codex, Claude, or Grok window — is still a chat session, and its turn
 ends when it finishes speaking. It cannot wake itself, so work stops between your messages even
 while every seat is healthy.
 
@@ -168,8 +172,9 @@ node scripts/bus-tick.js --root "<bus root>" --interval-s 240
 tick 10:51:43  brains:claude,codex,grok,worker  baton:hymlock(44s)  round:497/550  unread:none
 ```
 
-The line is the wake signal. A host that can watch a subprocess's stdout and re-enter the model
-on each line gets a pilot that resumes without you typing. **The bus emits the beat; the host
+The line is the wake signal. A host that can watch a subprocess's stdout and re-enter that chat
+operator on each line gets a session that resumes without you typing. This does not tick or
+schedule the autonomous brains. **The bus emits the beat; the host
 decides how to listen** — in Claude Code, run it as a Monitor; elsewhere, use whatever
 background-task or watch facility surfaces stdout.
 

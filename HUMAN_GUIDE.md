@@ -38,6 +38,10 @@ Change `--console` to the initiating provider. All three brains start by default
 leads with its own vendor. Authenticate at least two provider CLIs first; `docs/AUTH.md`
 explains the no-API-key routes.
 
+Normally the Bus and repository share a root. For a central mailbox that coordinates another
+checkout, keep the two paths explicit: `--root "<bus root>" --workdir "<repository>"`. Without
+`--workdir`, detached model CLIs deliberately use the Bus root and cannot inspect another repo.
+
 ## Running from a clone, without the extension
 
 The commands above assume an **initialized** workspace — `initialize` is what creates
@@ -47,7 +51,7 @@ the repo copies instead:
 
 ```bash
 npm install && npm run compile
-node scripts/bus-up.js   --root "<bus root>" --console claude --brains claude,codex,grok
+node scripts/bus-up.js   --root "<bus root>" --workdir "<repository>" --console claude --brains claude,codex,grok
 node dist/worker-client.js status --seat claude --root "<bus root>"
 node dist/mailbox.js status --root "<bus root>"
 ```
@@ -55,9 +59,10 @@ node dist/mailbox.js status --root "<bus root>"
 Nothing here needs VS Code. This is the mode the project itself was developed in for days
 before anyone noticed the documentation described only the staged layout.
 
-## Keeping your own chat awake
+## Keeping the chat operator session awake
 
-Brains keep going by themselves. The chat window **you** drive does not — it is a chat session,
+Brains keep going by themselves. The human-facing Codex, Claude, or Grok chat window **you**
+drive does not — it is the chat operator session,
 and its turn ends when it stops speaking, so work pauses between your messages even while every
 seat is healthy.
 
@@ -66,8 +71,9 @@ node scripts/bus-tick.js --root "<bus root>" --interval-s 240
 tick 10:51:43  brains:claude,codex,grok,worker  baton:hymlock(44s)  round:497/550  unread:none
 ```
 
-Each line is a wake signal. Run it under whatever background-watch facility your assistant
-offers, and it resumes on each tick without you typing. It does not make a chat immortal: when
+Each line is a wake signal for that chat operator, not a scheduler for autonomous brains. Run it
+under whatever background-watch facility your assistant offers, and the operator resumes on each
+tick without you typing. It does not make a chat immortal: when
 the session ends, so does the listener.
 
 ## The files you will see

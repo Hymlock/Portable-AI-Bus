@@ -26,7 +26,7 @@ const DEFAULT_CHAINS = {
   default: ['codex', 'grok', 'cli', 'oauth', 'api']
 };
 
-function providerConfigs(env = process.env, seat = 'default') {
+function providerConfigs(env = process.env, seat = 'default', workdir) {
   const requested = (env.PORTABLE_AI_BUS_PROVIDER_CHAIN || '')
     .split(',').map((value) => value.trim().toLowerCase()).filter(Boolean);
   const kinds = requested.length > 0 ? requested : (DEFAULT_CHAINS[seat] || DEFAULT_CHAINS.default);
@@ -41,7 +41,13 @@ function providerConfigs(env = process.env, seat = 'default') {
       `${kinds.join(',')} resolves only to ${[...vendors].join(',')}.`
     );
   }
-  return kinds.map((kind) => ({ kind }));
+  return kinds.map((kind) => {
+    if (!workdir) return { kind };
+    if (kind === 'cli') return { kind, cli: { cwd: workdir } };
+    if (kind === 'codex') return { kind, codex: { cwd: workdir } };
+    if (kind === 'grok') return { kind, grok: { cwd: workdir } };
+    return { kind };
+  });
 }
 
 const SYSTEM = [
@@ -57,8 +63,8 @@ const SYSTEM = [
   'Do not declare a goal complete unless its explicit completion requirements were verified.'
 ].join('\n');
 
-module.exports = ({ seat, log }) => {
-  const provider = resolveChain(providerConfigs(process.env, seat), { log });
+module.exports = ({ seat, root, workdir = root, log }) => {
+  const provider = resolveChain(providerConfigs(process.env, seat, workdir), { log });
   const brain = createAgentBrain({ seat, provider, log, systemPrompt: SYSTEM });
   return {
     ...brain,

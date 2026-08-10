@@ -85,6 +85,9 @@ export type Brain = {
 
 export type BrainFactory = (options: {
   seat: string;
+  /** Durable mailbox/harness root. May be separate from the repository being worked on. */
   root: string;
+  /** Repository directory in which model-backed providers inspect and edit files. */
+  workdir: string;
   log: (event: string, data?: unknown) => void;
 }) => Brain | Promise<Brain>;

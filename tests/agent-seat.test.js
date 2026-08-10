@@ -33,3 +33,14 @@ test('an override with two vendor families remains valid', () => {
     [{ kind: 'oauth' }, { kind: 'codex' }]
   );
 });
+
+test('model-backed providers receive the explicit repository workdir', () => {
+  assert.deepEqual(
+    providerConfigs({ PORTABLE_AI_BUS_PROVIDER_CHAIN: 'grok,codex,oauth' }, 'grok', 'C:\\repo'),
+    [
+      { kind: 'grok', grok: { cwd: 'C:\\repo' } },
+      { kind: 'codex', codex: { cwd: 'C:\\repo' } },
+      { kind: 'oauth' }
+    ]
+  );
+});

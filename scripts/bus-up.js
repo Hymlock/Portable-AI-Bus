@@ -2,7 +2,7 @@
 /**
  * `bus-up` — one command that brings the whole bus into a working state.
  *
- *   node scripts/bus-up.js --root "<bus root>" [--console <seat>] [--brains a,b,c]
+ *   node scripts/bus-up.js --root "<bus root>" [--workdir "<repo>"] [--console <seat>] [--brains a,b,c]
  *
  * What it does, in order, and each step is idempotent so it is safe to re-run:
  *
@@ -33,6 +33,7 @@ function option(name, fallback) {
 
 const defaultRoot = path.basename(REPO) === '.ai-bus' ? path.dirname(REPO) : process.cwd();
 const root = path.resolve(option('--root', defaultRoot));
+const workdir = path.resolve(option('--workdir', root));
 const consoleSeat = option('--console', 'codex');
 const brainSeats = option('--brains', 'claude,codex,grok').split(',').map((s) => s.trim()).filter(Boolean);
 const brainFile = path.resolve(option('--brain', path.join(REPO, 'brains', 'agent-seat.js')));
@@ -112,6 +113,7 @@ function mailbox(args) {
 
 mailbox(['init', '--agents', allSeats.join(','), '--max-rounds', '550']);
 log(`seats        ${allSeats.join(', ')}`);
+log(`workdir      ${workdir}`);
 
 const statusRaw = mailbox(['status', '--json']);
 let state = {};
@@ -176,7 +178,7 @@ for (const seat of brainSeats) {
   const logFile = path.join(root, '.ai-bus', 'runtime', `brain-${seat}.log`);
   const pid = launchHidden(process.execPath, [
     path.join(DIST, 'brain', 'cli.js'),
-    '--root', root, '--seat', seat,
+    '--root', root, '--workdir', workdir, '--seat', seat,
     '--brain', brainFile
   ], logFile);
   log(`brain:${seat.padEnd(7)} started pid ${pid ?? '?'} -> ${logFile}`);

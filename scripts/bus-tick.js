@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 /**
- * A heartbeat for the seat a HUMAN is sitting in.
+ * A heartbeat emitter for a human-facing chat operator session.
  *
  *   node scripts/bus-tick.js --root "<bus root>" [--seat claude] [--interval-s 240]
  *
  * ## Why this exists
  *
  * Brains solved half the stall. A brain is a process, so it wakes on mail, acts, and keeps
- * going. The PILOT — the chat window a human drives — is still a chat session, and a chat
- * session's turn ends when it finishes speaking. It cannot wake itself.
+ * going. The CHAT OPERATOR — the human-facing Codex, Claude, or Grok session — is still a chat
+ * session, and its turn ends when it finishes speaking. It cannot wake itself.
  *
  * Hymlock, 2026-08-10, on watching a heartbeat re-invoke the pilot chat: *"Oh my God we could
  * have done that the whole time?!"* Yes — and the reason it was missed is that every previous
@@ -17,8 +17,9 @@
  * ## What this does, and what it cannot do
  *
  * It prints one line per interval, forever. That is all. The line is the wake signal: a host
- * that can watch a subprocess's stdout and re-enter the model on each line gets a pilot that
- * resumes without the human typing. The bus emits the beat; the host decides how to listen.
+ * that can watch a subprocess's stdout and re-enter the named chat operator on each line gets
+ * an operator that resumes without the human typing. The bus emits the beat; the host decides
+ * how to listen. It does not tick or schedule autonomous brain processes.
  *
  *   Claude Code   Monitor with this as its command
  *   others        any background-task or watch facility that surfaces stdout
