@@ -73,10 +73,24 @@ function bootstrapCoordinationRoot(repo, root) {
   fs.mkdirSync(path.join(busDir, 'bin'), { recursive: true });
   const capabilitySource = path.join(repo, 'templates', 'capabilities.json');
   const capabilityDestination = path.join(busDir, 'capabilities.json');
+  // The core coordination binaries, and they must travel TOGETHER. `harness.js` requires
+  // ./capabilities, ./mailbox and ./workspace-key; `worker-client.js` requires ./workspace-key.
+  // Staging a partial set leaves imports that resolve to nothing, which is how a bootstrapped
+  // root ended up with a working `mailbox.js` while every documented `worker-client.js` and
+  // `harness.js` command failed with MODULE_NOT_FOUND.
+  //
+  // Deliberately NOT staged here, and this stays a lightweight bootstrap rather than drifting
+  // into full `stageBundle()` parity: `bin/` legacy utilities; `dist/brain`, `brains/` and the
+  // dependency trees, because source-checkout `bus-up` runs brains from the REPO and copying
+  // them would drag native modules along; `scripts/`, already being executed from source; and
+  // providers, templates, docs and guides, which are installation assets rather than runtime.
   const sources = [
     [capabilitySource, capabilityDestination],
     [path.join(repo, 'dist', 'mailbox.js'), path.join(busDir, 'bin', 'mailbox.js')],
     [path.join(repo, 'dist', 'capabilities.js'), path.join(busDir, 'bin', 'capabilities.js')],
+    [path.join(repo, 'dist', 'harness.js'), path.join(busDir, 'bin', 'harness.js')],
+    [path.join(repo, 'dist', 'worker-client.js'), path.join(busDir, 'bin', 'worker-client.js')],
+    [path.join(repo, 'dist', 'workspace-key.js'), path.join(busDir, 'bin', 'workspace-key.js')],
     [path.join(repo, 'dist', 'adapters', 'skse-devkit.js'), path.join(busDir, 'bin', 'skse-devkit.js')]
   ];
   for (const [source, destination] of sources) {

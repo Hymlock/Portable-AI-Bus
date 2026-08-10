@@ -57,11 +57,33 @@ test('coordination bootstrap installs missing config and bins without overwritin
   await fsp.writeFile(path.join(repo, 'templates', 'capabilities.json'), '{"version":1,"capabilities":[]}');
   await fsp.writeFile(path.join(repo, 'dist', 'mailbox.js'), 'mailbox');
   await fsp.writeFile(path.join(repo, 'dist', 'capabilities.js'), 'capabilities');
+  await fsp.writeFile(path.join(repo, 'dist', 'harness.js'), 'harness');
+  await fsp.writeFile(path.join(repo, 'dist', 'worker-client.js'), 'worker-client');
+  await fsp.writeFile(path.join(repo, 'dist', 'workspace-key.js'), 'workspace-key');
   await fsp.writeFile(path.join(repo, 'dist', 'adapters', 'skse-devkit.js'), 'adapter');
   t.after(() => fsp.rm(fixture, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
 
+  // Assert the exact SET, not a count. `created.length === 4` passed while `harness.js`,
+  // `worker-client.js` and `workspace-key.js` were missing, so every documented
+  // `.ai-bus/bin/worker-client.js` command failed with MODULE_NOT_FOUND in a bootstrapped root
+  // while the docs and the test both looked satisfied. A count cannot notice a wrong mapping.
   const created = bootstrapCoordinationRoot(repo, root);
-  assert.equal(created.length, 4);
+  const relative = created.map((p) => path.relative(root, p).split(path.sep).join('/')).sort();
+  assert.deepEqual(relative, [
+    '.ai-bus/bin/capabilities.js',
+    '.ai-bus/bin/harness.js',
+    '.ai-bus/bin/mailbox.js',
+    '.ai-bus/bin/skse-devkit.js',
+    '.ai-bus/bin/worker-client.js',
+    '.ai-bus/bin/workspace-key.js',
+    '.ai-bus/capabilities.json'
+  ]);
+  // Contents too: a count-preserving wrong mapping would otherwise pass.
+  for (const [file, expected] of [['harness.js', 'harness'], ['worker-client.js', 'worker-client'],
+                                  ['workspace-key.js', 'workspace-key']]) {
+    assert.equal(fs.readFileSync(path.join(root, '.ai-bus', 'bin', file), 'utf8'), expected,
+      `${file} staged from the wrong source`);
+  }
   const config = path.join(root, '.ai-bus', 'capabilities.json');
   await fsp.writeFile(config, 'operator-owned');
   assert.deepEqual(bootstrapCoordinationRoot(repo, root), []);
