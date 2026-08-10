@@ -46,6 +46,14 @@ const DEFAULT_SYSTEM = [
   'capability={"type":"capability","id":"bus.doctor","timeoutMs":60000};',
   'done={"type":"done","note":"text"}. Never omit required fields.',
   'Acknowledge each incoming message at most once with a short receipt before other work; never repeat an acknowledgement on a repair or continuation round.',
+  // Without this line an agentic CLI reaches for a shell it does not have and ABORTS the whole
+  // reply. Measured: the same inspection task, changing only the system prompt -
+  //   plain    6s  stopReason=cancelled  {"actions":[{"type":"capability","name":"shell"...}]}
+  //   this    19s  stopReason=end_turn   {"actions":[{"type":"send","to":"hymlock"...}]}
+  // The grok seat spent two days producing nothing because of it. Vendor-neutral by design: it
+  // describes what a SEAT is, not what any product can do.
+  'You cannot run shell commands or inspect the machine yourself. Your only actions are the bus actions above; `capability` runs an allowlisted runner and is the sole route to executing anything.',
+  'If a task needs information you do not have, send a report saying exactly what is missing. Never invent an action type, and never claim work you did not do.',
   'Do not name vendors, CLI tools, or API keys. Stay model-agnostic.'
 ].join(' ');
 
