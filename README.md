@@ -1,8 +1,42 @@
 # Portable AI Bus
 
-**v0.2** — MIT. A Visual Studio Code extension that stages a reusable `.ai-bus` bundle into a workspace, coordinates multi-agent work through a durable **mailbox**, and optionally exposes a **loopback harness** (authenticated tool/capability plane) plus adapters (including SKSE DevKit discovery).
+**v0.2** — MIT. A multi-agent bus that coordinates work through a durable **mailbox**, runs
+agents as long-lived **brains** backed by an ordered chain of model providers, and exposes a
+**loopback harness** (authenticated tool/capability plane) plus adapters (including SKSE DevKit
+discovery).
 
-This is **not** a live AI-to-AI chat network and **not** an unattended auto-pilot. Humans and already-running agent sessions move work forward.
+> **The bus itself runs on Node, not on VS Code.** The mailbox, harness, brains and worker
+> client are plain Node processes with no `vscode` import — clone the repo, run
+> `node scripts/bus-up.js`, and the bus works with no editor running. The VS Code extension is
+> an **optional front-end** that stages a `.ai-bus` bundle and adds palette commands, settings
+> and reminders.
+>
+> **But a seat still needs a gateway to a model, and that is usually a vendor's plugin.** The
+> bus does not talk to model APIs itself; it drives an authenticated vendor CLI. Where that CLI
+> comes from differs per vendor, and it is not always npm:
+>
+> | Gateway | Where the binary comes from |
+> |---|---|
+> | `codex` | **the ChatGPT VS Code extension** — `…/openai.chatgpt-*/bin/<platform>/codex.exe`. Never on `PATH` |
+> | `cli` (Claude) | npm `@anthropic-ai/claude-code`, **or** the Claude Code extension's bundled binary |
+> | `grok` | npm `@xai-official/grok`, unpacked to `~/.grok/bin` — no editor involved |
+>
+> So the honest prerequisite is: **at least one signed-in model gateway**, which in Codex's case
+> means having that extension installed. Grok is the one route that is fully editor-free today.
+>
+> The packaging currently states this backwards: `package.json` declares `main:
+> dist/extension.js` and **no `bin` entry**, so there is no first-class CLI install even though
+> the CLI is what does the work. Tracked as a distribution defect — see the `worker` seat's
+> audit finding that the VSIX omits the runnable brain wrapper.
+
+Work is moved forward by **brains**: long-lived processes that own a seat, wake on mail, call a
+model, act through bus tools, and keep going across turns until the work is done. A brain
+outlives the shell that started it, so an agent no longer stops merely because a chat turn
+ended — that equivalence between *reporting* and *stopping* was the original problem this
+project exists to remove.
+
+This is still **not** a live AI-to-AI chat network. Seats exchange durable mail; they do not
+hold conversations. Humans set goals, arbitrate, and stop things — see `docs/LOOP_ARCHITECTURE.md`.
 
 ## What you get
 
