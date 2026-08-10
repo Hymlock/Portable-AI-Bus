@@ -11,7 +11,7 @@
  * user already pays for. The others exist so a seat is never blocked on one vendor's tooling.
  */
 
-import { spawn } from 'node:child_process';
+import { processAvailable, runProcess } from './process-host';
 
 export type ProviderKind = 'cli' | 'api' | 'oauth' | 'exec' | 'codex' | 'grok';
 
@@ -152,38 +152,21 @@ export function cliProvider(options: CliProviderOptions = {}): ModelProvider {
   const cwd = options.cwd ?? nonRepoCwd();
 
   async function run(args: string[], timeoutMs: number): Promise<{ code: number; stdout: string; stderr: string }> {
-    return new Promise((resolve) => {
-      const child = spawn(command, args, { shell: false, cwd, windowsHide: hideWindows(), stdio: ['ignore', 'pipe', 'pipe'] });
-      let stdout = '';
-      let stderr = '';
-      child.stdout.on('data', (c) => { stdout += String(c); });
-      child.stderr.on('data', (c) => { stderr += String(c); });
-      const timer = setTimeout(() => child.kill(), timeoutMs);
-      child.on('error', (error) => {
-        clearTimeout(timer);
-        resolve({ code: -1, stdout, stderr: String(error) });
-      });
-      child.on('close', (code) => {
-        clearTimeout(timer);
-        resolve({ code: code ?? -1, stdout, stderr });
-      });
-    });
+    return runProcess(command, args, { cwd, timeoutMs, windowsHide: hideWindows() });
   }
 
   return {
     kind: 'cli',
 
     async probe() {
-      const { code, stdout, stderr } = await run(['--version'], 20_000);
-      if (code !== 0) {
+      if (!processAvailable(command, process.env, cwd)) {
         return {
           ok: false,
-          detail: `\`${command} --version\` exited ${code}. Install with ` +
-                  '`npm i -g @anthropic-ai/claude-code`, or configure a different provider. ' +
-                  (stderr.trim().slice(0, 200) || '')
+          detail: `\`${command}\` was not found. Install with ` +
+                  '`npm i -g @anthropic-ai/claude-code`, or configure a different provider.'
         };
       }
-      return { ok: true, detail: stdout.trim().split('\n')[0] };
+      return { ok: true, detail: 'claude reachable (authentication verified on first call)' };
     },
 
     async ask(prompt, { systemPrompt, sessionId, model, timeoutMs = 300_000 } = {}) {
@@ -340,16 +323,7 @@ export function execProvider(options: ExecProviderOptions): ModelProvider {
   }
 
   async function run(args: string[], timeoutMs: number) {
-    return new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
-      const child = spawn(options.command, args, { shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
-      let stdout = '';
-      let stderr = '';
-      child.stdout.on('data', (c) => { stdout += String(c); });
-      child.stderr.on('data', (c) => { stderr += String(c); });
-      const timer = setTimeout(() => child.kill(), timeoutMs);
-      child.on('error', (error) => { clearTimeout(timer); resolve({ code: -1, stdout, stderr: String(error) }); });
-      child.on('close', (code) => { clearTimeout(timer); resolve({ code: code ?? -1, stdout, stderr }); });
-    });
+    return runProcess(options.command, args, { timeoutMs, windowsHide: true });
   }
 
   return {
@@ -462,30 +436,18 @@ export function codexProvider(options: CodexProviderOptions = {}): ModelProvider
   const nodeOs = require('node:os') as typeof import('node:os');
 
   async function run(args: string[], timeoutMs: number) {
-    return new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
-      // stdin is 'ignore' deliberately: `codex exec` reads stdin when it is a pipe and will
-      // sit there printing "Reading additional input from stdin..." forever otherwise.
-      const child = spawn(command, args, { shell: false, cwd, windowsHide: hideWindows(), stdio: ['ignore', 'pipe', 'pipe'] });
-      let stdout = '';
-      let stderr = '';
-      child.stdout.on('data', (c) => { stdout += String(c); });
-      child.stderr.on('data', (c) => { stderr += String(c); });
-      const timer = setTimeout(() => child.kill(), timeoutMs);
-      child.on('error', (error) => { clearTimeout(timer); resolve({ code: -1, stdout, stderr: String(error) }); });
-      child.on('close', (code) => { clearTimeout(timer); resolve({ code: code ?? -1, stdout, stderr }); });
-    });
+    // The process host never writes stdin. `codex exec` would otherwise wait for additional
+    // piped input forever.
+    return runProcess(command, args, { cwd, timeoutMs, windowsHide: hideWindows() });
   }
 
   return {
     kind: 'codex',
 
     async probe() {
-      const { code, stdout, stderr } = await run(['login', 'status'], 30_000);
-      const text = `${stdout}${stderr}`.trim();
-      if (code === 0 && /logged in/i.test(text)) {
-        return { ok: true, detail: `codex: ${text.split('\n')[0]}` };
-      }
-      return { ok: false, detail: `codex not usable: ${text.slice(0, 200) || `exit ${code}`}` };
+      return processAvailable(command, process.env, cwd)
+        ? { ok: true, detail: 'codex reachable (authentication verified on first call)' }
+        : { ok: false, detail: `codex not usable: command not found (${command})` };
     },
 
     async ask(prompt, { systemPrompt = '', timeoutMs = options.timeoutMs ?? 600_000 } = {}) {
@@ -630,16 +592,7 @@ export function grokProvider(options: GrokProviderOptions = {}): ModelProvider {
   const cwd = options.cwd ?? nonRepoCwd();
 
   async function run(args: string[], timeoutMs: number) {
-    return new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
-      const child = spawn(command, args, { shell: false, cwd, windowsHide: hideWindows(), stdio: ['ignore', 'pipe', 'pipe'] });
-      let stdout = '';
-      let stderr = '';
-      child.stdout.on('data', (c) => { stdout += String(c); });
-      child.stderr.on('data', (c) => { stderr += String(c); });
-      const timer = setTimeout(() => child.kill(), timeoutMs);
-      child.on('error', (error) => { clearTimeout(timer); resolve({ code: -1, stdout, stderr: String(error) }); });
-      child.on('close', (code) => { clearTimeout(timer); resolve({ code: code ?? -1, stdout, stderr }); });
-    });
+    return runProcess(command, args, { cwd, timeoutMs, windowsHide: hideWindows() });
   }
 
   return {
@@ -648,11 +601,9 @@ export function grokProvider(options: GrokProviderOptions = {}): ModelProvider {
     async probe() {
       // Reachability only. There is no free way to ask "am I signed in", and spending a model
       // call on every startup to find out is the mistake the codex probe deliberately avoids.
-      const { code, stdout, stderr } = await run(['--version'], 30_000);
-      const detail = `${stdout}${stderr}`.trim().split('\n')[0];
-      return code === 0
-        ? { ok: true, detail: `grok: ${detail || 'reachable'} (sign-in verified on first call)` }
-        : { ok: false, detail: `grok not usable: ${detail || `exit ${code}`}` };
+      return processAvailable(command, process.env, cwd)
+        ? { ok: true, detail: 'grok reachable (authentication verified on first call)' }
+        : { ok: false, detail: `grok not usable: command not found (${command})` };
     },
 
     async ask(prompt, { systemPrompt = '', timeoutMs = options.timeoutMs ?? 600_000 } = {}) {

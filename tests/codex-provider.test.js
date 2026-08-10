@@ -74,7 +74,9 @@ test('codex probe does not spend a model call', async () => {
   const calls = [];
   const provider = resolveProvider({
     kind: 'codex',
-    codex: { command: process.platform === 'win32' ? 'cmd.exe' : 'true' }
+    // `cmd.exe` stays attached to ConPTY while its console-list helper probes descendants;
+    // `where.exe` is a short-lived console binary and still exercises the provider shape.
+    codex: { command: process.platform === 'win32' ? 'where.exe' : 'true' }
   });
   // Not asserting on the result - the binary is a stand-in. Asserting on the SHAPE: probe must
   // resolve rather than hang or throw when the command is not really Codex.

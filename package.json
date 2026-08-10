@@ -333,8 +333,19 @@
         "portableAiBus.languageModelWorker.allowedTools": {
           "type": "array",
           "uniqueItems": true,
-          "items": { "type": "string" },
-          "default": ["mailbox_status", "mailbox_inbox", "mailbox_read", "mailbox_send", "mailbox_claim", "mailbox_release", "capability_list", "capability_run"],
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "mailbox_status",
+            "mailbox_inbox",
+            "mailbox_read",
+            "mailbox_send",
+            "mailbox_claim",
+            "mailbox_release",
+            "capability_list",
+            "capability_run"
+          ],
           "markdownDescription": "Private bus tools exposed to the worker. Capability execution remains separately constrained by each capability's allowedSeats grant."
         },
         "portableAiBus.harness.port": {
@@ -389,5 +400,8 @@
     "@vscode/test-electron": "^3.1.0",
     "@vscode/vsce": "^3.6.2",
     "typescript": "^5.8.3"
+  },
+  "dependencies": {
+    "node-pty": "^1.1.0"
   }
 }
