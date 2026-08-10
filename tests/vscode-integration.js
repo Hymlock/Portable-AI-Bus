@@ -36,8 +36,13 @@ async function run() {
   await vscode.commands.executeCommand('portableAiBus.initializeWorkspace');
   for (const relative of [
     '.ai-bus/bin/mailbox.js', '.ai-bus/bin/harness.js', '.ai-bus/bin/worker-client.js',
-    '.ai-bus/bin/workspace-key.js',
-    '.ai-bus/HUMAN_GUIDE.md', '.ai-bus/OPERATOR.md', '.ai-bus/TESTING.md'
+    '.ai-bus/bin/workspace-key.js', '.ai-bus/bin/brain/cli.js',
+    '.ai-bus/bin/brain/process-host.js', '.ai-bus/brains/agent-seat.js',
+    '.ai-bus/scripts/bus-up.js', '.ai-bus/scripts/bus-console.js',
+    '.ai-bus/node_modules/node-pty/package.json',
+    '.ai-bus/node_modules/@anthropic-ai/sdk/package.json',
+    '.ai-bus/HUMAN_GUIDE.md', '.ai-bus/OPERATOR.md', '.ai-bus/TESTING.md',
+    '.ai-bus/docs/AUTH.md', '.ai-bus/docs/DISTRIBUTION.md'
   ]) {
     await fs.access(path.join(first, relative));
   }
@@ -51,10 +56,14 @@ async function run() {
   const nodeExecutable = process.env.PAB_NODE_EXECUTABLE;
   assert.ok(nodeExecutable, 'PAB_NODE_EXECUTABLE is required.');
   await execFileAsync(nodeExecutable, [
-    '-e', 'require(process.argv[1]); require(process.argv[2]); require(process.argv[3]);',
+    '-e', 'for (const file of process.argv.slice(1)) require(file);',
     path.join(first, '.ai-bus', 'bin', 'harness.js'),
     path.join(first, '.ai-bus', 'bin', 'worker-client.js'),
-    path.join(first, '.ai-bus', 'bin', 'skse-devkit.js')
+    path.join(first, '.ai-bus', 'bin', 'skse-devkit.js'),
+    path.join(first, '.ai-bus', 'bin', 'brain', 'cli.js'),
+    path.join(first, '.ai-bus', 'brains', 'agent-seat.js'),
+    path.join(first, '.ai-bus', 'node_modules', 'node-pty'),
+    path.join(first, '.ai-bus', 'node_modules', '@anthropic-ai', 'sdk')
   ], { windowsHide: true });
   await execFileAsync(nodeExecutable, [path.join(first, '.ai-bus', 'bin', 'ai_bus.js'), 'validate'], { cwd: first, windowsHide: true });
   await execFileAsync(nodeExecutable, [path.join(first, '.ai-bus', 'bin', 'validate_ai_bus.js')], { cwd: first, windowsHide: true });
@@ -188,7 +197,11 @@ async function assertInstalledExtension() {
   assert.notEqual(normalizePath(extension.extensionPath), normalizePath(sourceRoot), 'installed smoke must not load the source checkout');
   for (const relative of [
     'dist/extension.js', 'dist/harness.js', 'dist/mailbox.js', 'dist/worker-client.js',
-    'dist/workspace-key.js', 'bin/validate_ai_bus.js', 'providers/providers.json',
+    'dist/workspace-key.js', 'dist/brain/cli.js', 'dist/brain/process-host.js',
+    'brains/agent-seat.js', 'scripts/bus-up.js', 'scripts/bus-console.js',
+    'node_modules/node-pty/package.json', 'node_modules/@anthropic-ai/sdk/package.json',
+    'bin/validate_ai_bus.js', 'providers/providers.json',
+    'docs/AUTH.md', 'docs/DISTRIBUTION.md',
     'templates/capabilities.json', 'templates/providers/claude/CLAUDE.md',
     'templates/providers/codex/AGENTS.md', 'templates/providers/grok/GROK.md'
   ]) {

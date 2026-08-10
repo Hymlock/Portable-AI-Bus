@@ -15,6 +15,24 @@ This is **not** a live AI-to-AI chat network and **not** an unattended auto-pilo
 | **SKSE adapter** | Discover/build/test against an **external** SKSE DevKit (not bundled) |
 | **LM worker** | Optional, **explicit** VS Code Language Model session (bounded turns) |
 
+## Prerequisites and installation
+
+- VS Code 1.101 or newer and a trusted workspace.
+- Node.js 20 or newer on `PATH`; staged CLIs run with `node`.
+- At least two authenticated provider CLIs for resilient brains. API keys are optional, never
+  required. See `docs/AUTH.md`.
+
+Install with **Extensions: Install from VSIX...** or:
+
+```bash
+code --install-extension portable-ai-bus-0.2.0.vsix
+```
+
+Installing a newer VSIX with `--force` updates it. Stop brains/harnesses first and reinitialize
+afterward so staged code is refreshed. Remove the workspace Bus before uninstalling the extension
+if its staged files should also be removed. Full lifecycle instructions are in
+`docs/DISTRIBUTION.md`.
+
 ## Quick start (human)
 
 ```bash
@@ -29,6 +47,19 @@ npm test
 4. Confirm `.ai-bus/`, provider files (`AGENTS.md` / `CLAUDE.md` / `GROK.md` as selected), workflow docs, and staged CLIs under `.ai-bus/bin/`.
 
 Primary UX: **Command Palette** (`Portable AI Bus: …`) and **`@ai-bus`**. Terminal CLIs are for agents and operators.
+
+Any of the three provider sessions can initiate the same system. Change only `--console` to the
+initiating seat; all three provider-neutral brains start by default:
+
+```bash
+node .ai-bus/scripts/bus-up.js --root . --console codex
+```
+
+On Windows, `node .ai-bus/scripts/bus-console.js --root .` keeps all brains under one visible
+console for the strongest no-flash guarantee. Brains continue after each wake. Clarification is
+an open dependency, never goal completion. A provider credit failure falls through to another
+vendor; whole-chain exhaustion hands off the baton. A dead process still requires `bus-up` to be
+restarted because v0.2 does not install a service supervisor.
 
 Initialization preserves pre-existing repository files. Only files actually created by the bus enter its ownership ledger; user-modified managed files are preserved on reinitialize and remove. Destructive lifecycle operations require an HMAC-checked ownership ledger outside the repository, reject junction/symlink escapes, serialize through a cross-process workspace lock, and recover interrupted install or suspend state. The in-repo manifest is descriptive, not destructive authority.
 
@@ -133,7 +164,9 @@ Allowlist: workspace `.ai-bus/capabilities.json` (templated from `templates/capa
 
 - Spawn with **`shell: false`**, scrubbed environment, cwd jail, timeouts, process-tree kill, capped redacted receipts under `.ai-bus/runtime/receipts/`.
 - `allowedSeats`: empty = seats denied (operator may still run depending on harness policy); `"*"` or explicit seat ids to grant.
-- Default template includes `bus.doctor`, `git.status`, `skse.doctor` (seats `*`), and `skse.build` (**no seats** — operator-only unless you edit grants).
+- Default template grants every registered seat `bus.doctor`, `git.status`, and the complete
+  Dev Kit workflow: `skse.doctor`, `skse.configure`, `skse.build`, `skse.test`,
+  `skse.validate-artifacts`, and the bounded `skse.search.plugin-entrypoint`.
 
 ```bash
 node .ai-bus/bin/capabilities.js list --root <workspace>
@@ -144,7 +177,7 @@ node .ai-bus/bin/capabilities.js run --id bus.doctor --root <workspace>
 
 ## SKSE DevKit adapter
 
-**Not bundled.** Discovers an external kit:
+**Not embedded in the VSIX.** Discovers an external kit:
 
 1. `--root` / adapter options
 2. env `SKSE_DEVKIT_ROOT`
@@ -158,7 +191,9 @@ node .ai-bus/bin/skse-devkit.js configure --workspace . --root <SKSEDevKit> [--s
 node .ai-bus/bin/skse-devkit.js build|test|search|validate-artifacts ...
 ```
 
-Does not vendor CommonLib, SKSE, Skyrim, or compilers.
+The VSIX does not vendor CommonLib, SKSE, Skyrim, or compilers. The offline distribution builder
+can copy an operator-supplied Dev Kit beside the VSIX with per-file hashes. It does not grant
+redistribution rights or fill in missing MSVC, Windows SDK, game assets, or licenses.
 
 ## Optional VS Code Language Model worker
 
@@ -224,10 +259,20 @@ docs/ai-*.md
 ```bash
 npm run compile
 npm test                 # compile + node --test tests/*.test.js
-npx @vscode/vsce package --no-dependencies
+npm run package
 ```
 
 Install the generated `.vsix` into a normal VS Code window for a non-F5 smoke test. Set a real Marketplace `publisher` before publish.
+
+Build or inspect a VSIX + Dev Kit release directory without committing the multi-gigabyte payload:
+
+```bash
+npm run distribution -- --devkit-root "C:\path\to\SKSEDevKit" --out "C:\release\Portable-AI-Bus" --dry-run
+npm run distribution -- --devkit-root "C:\path\to\SKSEDevKit" --out "C:\release\Portable-AI-Bus"
+```
+
+The real build writes `manifest.json` with SHA-256 and byte size for every copied file. Dry-run
+inventories only and writes nothing. See `docs/DISTRIBUTION.md`.
 
 ## Docs map
 
@@ -237,10 +282,12 @@ Install the generated `.vsix` into a normal VS Code window for a non-F5 smoke te
 | `OPERATOR.md` | Intents, harness ops, recovery |
 | `TESTING.md` | Verification checklist |
 | `docs/PROVENANCE.md` | Licence / design lineage / non-bundling rules |
+| `docs/AUTH.md` | Provider login and no-API-key routes |
+| `docs/DISTRIBUTION.md` | VSIX + Dev Kit build, install, update, recovery, uninstall |
 
 ## What this project deliberately does **not** do
 
-- Bundle game engines, Mantella, SKSE binaries, CommonLib sources, or LLM weights
+- Embed game engines, Mantella, SKSE binaries, CommonLib sources, or LLM weights in the VSIX or Git
 - Copy GPL multiplayer mod sources into the MIT surface
 - Silently inject prompts into Kilo/Codex/Claude UIs
 - Treat a heartbeat as evidence of goal progress or automatically restart a stopped worker

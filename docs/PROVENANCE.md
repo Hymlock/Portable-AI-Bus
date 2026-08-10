@@ -19,7 +19,7 @@ This also avoids carrying Star Slug repository-level **CC-BY-NC-ND** terms, or a
 |-----------|------|----------|
 | **VS Code Extension API** (Microsoft) | Extension host, chat participant, `vscode.lm` consumer contracts | Uses published API typings only |
 | **vscode-unify-chat-provider** (MIT) | Evidence that third-party providers can expose models via `vscode.lm` | **No** dependency; Unify is **optional** at runtime if the user installs it |
-| **SKSE DevKit / CommonLibSSE-NG** installations | Discovered by `src/adapters/skse-devkit.ts` | **Not** vendored; adapter only |
+| **SKSE DevKit / CommonLibSSE-NG** installations | Discovered by `src/adapters/skse-devkit.ts` | Not embedded in VSIX; optional separately licensed release payload |
 | **Node.js** | Runtime for CLIs and tests | Dev/engine requirement |
 
 ## What the package is allowed to ship
@@ -30,8 +30,8 @@ This also avoids carrying Star Slug repository-level **CC-BY-NC-ND** terms, or a
 ## What the package must not ship
 
 - Mantella / Skyrim / SKSE plugin binaries or assets
-- CommonLibSSE-NG source trees or vcpkg package caches
-- Compiler toolchains (MSVC, CMake, Ninja)
+- Unlicensed CommonLibSSE-NG source trees or vcpkg package caches
+- Compiler toolchains without explicit redistribution rights and required notices
 - LLM weights or provider API keys
 - GPL multiplayer mod sources (e.g. Skyrim Together / TiltedEvolution) — clean-room rule for any future native actuation code living elsewhere (Ensouled)
 - Copied Star Slug or Continuum Wars source files
@@ -41,6 +41,14 @@ This also avoids carrying Star Slug repository-level **CC-BY-NC-ND** terms, or a
 - **SKSE adapter** resolves `SKSE_DEVKIT_ROOT` or `.ai-bus/toolchains/skse-devkit` and runs fixed-argv tools found there.
 - **LM worker** selects models already registered with VS Code; credentials stay with the model provider extension.
 - **Harness tokens** live under the user profile credentials directory, not the git worktree.
+
+## Optional offline Dev Kit payload
+
+`scripts/build-distribution.js` may copy an operator-supplied Dev Kit beside the VSIX and hash it.
+That payload is not part of the MIT extension and does not inherit this repository's license.
+The distributor is responsible for component redistribution terms, notices, export/size
+constraints, and verifying that required MSVC/Windows SDK components are actually present. Never
+commit the generated payload or represent the integrity manifest as a license audit.
 
 ## Language Model worker boundary
 

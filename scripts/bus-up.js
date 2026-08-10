@@ -22,16 +22,20 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const REPO = path.resolve(__dirname, '..');
-const DIST = path.join(REPO, 'dist');
+const DIST = fs.existsSync(path.join(REPO, 'dist', 'harness.js'))
+  ? path.join(REPO, 'dist')
+  : path.join(REPO, 'bin');
 
 function option(name, fallback) {
   const index = process.argv.indexOf(name);
   return index >= 0 && index + 1 < process.argv.length ? process.argv[index + 1] : fallback;
 }
 
-const root = option('--root', path.resolve(REPO, '..', 'ai-bus'));
-const consoleSeat = option('--console', 'claude');
-const brainSeats = option('--brains', '').split(',').map((s) => s.trim()).filter(Boolean);
+const defaultRoot = path.basename(REPO) === '.ai-bus' ? path.dirname(REPO) : process.cwd();
+const root = path.resolve(option('--root', defaultRoot));
+const consoleSeat = option('--console', 'codex');
+const brainSeats = option('--brains', 'claude,codex,grok').split(',').map((s) => s.trim()).filter(Boolean);
+const brainFile = path.resolve(option('--brain', path.join(REPO, 'brains', 'agent-seat.js')));
 const allSeats = [...new Set([consoleSeat, ...brainSeats])];
 
 const log = (line) => console.log(line);
@@ -173,10 +177,12 @@ for (const seat of brainSeats) {
   const pid = launchHidden(process.execPath, [
     path.join(DIST, 'brain', 'cli.js'),
     '--root', root, '--seat', seat,
-    '--brain', path.join(REPO, 'brains', 'ensouled-seat.js')
+    '--brain', brainFile
   ], logFile);
   log(`brain:${seat.padEnd(7)} started pid ${pid ?? '?'} -> ${logFile}`);
 }
+
+log('policy       brains remain active after each wake; clarification keeps the goal open');
 
 // --- 5. the truth ---------------------------------------------------------------
 

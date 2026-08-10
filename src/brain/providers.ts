@@ -220,7 +220,7 @@ export type AnthropicLike = {
       max_tokens: number;
       system?: string;
       messages: { role: 'user' | 'assistant'; content: string }[];
-    }): Promise<{ content: { type: string; text?: string }[] }>;
+    }, options?: { signal?: AbortSignal }): Promise<{ content: { type: string; text?: string }[] }>;
   };
 };
 
@@ -267,24 +267,37 @@ export function sdkProvider(kind: 'api' | 'oauth', options: SdkProviderOptions =
       }
     },
 
-    async ask(prompt, { systemPrompt, timeoutMs } = {}) {
-      void timeoutMs;
+    async ask(prompt, { systemPrompt, timeoutMs = 300_000 } = {}) {
+      const controller = new AbortController();
+      let timer: NodeJS.Timeout | undefined;
       try {
         const anthropic = await client();
-        const reply = await anthropic.messages.create({
+        const request = anthropic.messages.create({
           model,
           max_tokens: maxTokens,
           ...(systemPrompt ? { system: systemPrompt } : {}),
           messages: [{ role: 'user', content: prompt }]
+        }, { signal: controller.signal });
+        const timeout = new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => {
+            reject(new Error(`Provider request timed out after ${timeoutMs} ms.`));
+            controller.abort();
+          }, timeoutMs);
         });
+        const reply = await Promise.race([request, timeout]);
         const text = reply.content
           .filter((block) => block.type === 'text')
           .map((block) => block.text ?? '')
           .join('');
         return { text, isError: false };
       } catch (error) {
-        log('sdk-error', { message: (error as Error).message });
-        return { text: '', isError: true };
+        const detail = error instanceof Error ? error.message : String(error);
+        log('sdk-error', { message: detail });
+        // The chain classifies this text (quota/auth/timeout/etc.) to decide what to do next.
+        // Swallowing it as an empty error made every SDK failure look identical.
+        return { text: detail, isError: true };
+      } finally {
+        if (timer) clearTimeout(timer);
       }
     }
   };

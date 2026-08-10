@@ -201,8 +201,9 @@ Template defaults (`templates/capabilities.json`):
 |----|-------|-------|
 | `bus.doctor` | `*` | Mailbox doctor |
 | `git.status` | `*` | Read-only git |
-| `skse.doctor` | `*` | Inventory external kit |
-| `skse.build` | _(none)_ | Operator-only unless you grant seats |
+| `skse.doctor` | `*` | Inventory configured kit |
+| `skse.configure` / `skse.build` / `skse.test` | `*` | Fixed-argv native workflow |
+| `skse.validate-artifacts` / `skse.search.plugin-entrypoint` | `*` | Validate output / bounded source search |
 
 Receipts: `.ai-bus/runtime/receipts/<runId>.json` (+ `latest.json` best-effort under concurrency).
 
@@ -328,14 +329,25 @@ The listener policy above keeps a *seat* attended. It cannot stop a *turn* endin
 seat is a chat session then reporting and stopping are the same act. `src/brain/` removes that:
 
 ```bash
-node dist/brain/cli.js --root "<bus root>" --seat grok --brain ./my-brain.js
+node .ai-bus/scripts/bus-up.js --root . --console grok
 ```
 
 The process waits, drains, acts, reports, and **waits again**. `done` means this wake finished,
 never that the agent finished. With a brain running you do not need the listener loop — the
 runner is the listener.
 
-Omit `--brain` for the built-in echo brain, which acknowledges every message and nothing else.
-Useful for proving a seat is attended, and it makes echo-on-receipt automatic.
+The packaged default is `.ai-bus/brains/agent-seat.js`. It builds a provider-neutral brain with
+a cross-vendor chain; use `PORTABLE_AI_BUS_PROVIDER_CHAIN` to change order. `--console` may be
+claude, codex, grok, or another registered seat. `bus-console.js` starts the same brains under one
+visible Windows console. Omit `--brain` only when invoking `bin/brain/cli.js` directly to get the
+receipt-only echo brain.
+
+`done` means one wake ended, not that the goal completed. A clarification question is an open
+dependency and must not trigger goal completion. Provider failure advances through the chain;
+whole-chain exhaustion reassigns the baton. Process death is different: v0.2 has no service
+supervisor, so run `bus-up` again and inspect `runtime/brain-<seat>.log`.
 
 See `docs/LOOP_ARCHITECTURE.md` for why this exists and what it is still missing (a supervisor).
+
+Provider authentication and full install/update/uninstall steps are in `docs/AUTH.md` and
+`docs/DISTRIBUTION.md`.

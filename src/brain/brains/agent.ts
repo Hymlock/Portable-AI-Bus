@@ -166,7 +166,17 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
       let sessionId: string | undefined;
       let lastNote = '';
       let servedBy: string | undefined;
-      let exhausted = false;
+
+      const exhaustionNote = (reply: ChainReply) =>
+        `chain-exhausted:attempts=${(reply.attempts ?? [])
+          .map((a: { kind: string; reason?: string }) => `${a.kind}:${a.reason ?? 'error'}`)
+          .join(',') || 'unreported'}`;
+      const durableNote = (note?: string) => {
+        const base = note?.trim() || 'ok';
+        return servedBy && !base.includes(`servedBy=${servedBy}`)
+          ? `${base};servedBy=${servedBy}`
+          : base;
+      };
 
       for (let round = 0; round < maxRounds; round += 1) {
         const prompt = buildWakePrompt(seat, messages);
@@ -183,8 +193,8 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
 
         const chain = reply as ChainReply;
         if (typeof chain.servedBy === 'string') servedBy = chain.servedBy;
+        else if (!reply.isError && reply.text.trim()) servedBy = provider.kind;
         if (chain.exhausted === true) {
-          exhausted = true;
           log('provider-exhausted', { seat, attempts: chain.attempts });
           const plan = receiptPlan(seat, messages);
           await executePlan(tools, plan);
@@ -192,7 +202,11 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
           return {
             done: true,
             exhausted: true,
-            note: `chain-exhausted:attempts=${chain.attempts.map((a) => `${a.kind}:${a.reason}`).join(',')}`
+            // `attempts` is only present when the provider IS a chain. A bare provider
+            // reports exhaustion without it, and reading .map on undefined killed the
+            // wake - which the runner survived, but the seat then did no work while
+            // looking attended. Degrade to a plain note instead.
+            note: exhaustionNote(chain)
           };
         }
 
@@ -209,17 +223,35 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
           log('malformed-plan', { seat, snippet: reply.text.slice(0, 120) });
           // One retry with a repair prompt; if still bad, receipt-only.
           if (round + 1 < maxRounds) {
-            const repair = await provider.ask(
-              'Your previous reply was not valid JSON. Reply again with ONLY the JSON plan object.',
-              { systemPrompt, sessionId }
-            );
+            let repair: ModelReply | ChainReply;
+            try {
+              repair = await provider.ask(
+                'Your previous reply was not valid JSON. Reply again with ONLY the JSON plan object.',
+                { systemPrompt, sessionId }
+              );
+            } catch (error) {
+              const detail = (error as Error)?.message ?? String(error);
+              log('provider-threw', { seat, phase: 'repair', detail: detail.slice(0, 200) });
+              const fallback = receiptPlan(seat, messages);
+              await executePlan(tools, fallback);
+              return { done: true, note: `provider-threw:${detail.slice(0, 80)}` };
+            }
+            const repairChain = repair as ChainReply;
+            if (typeof repairChain.servedBy === 'string') servedBy = repairChain.servedBy;
+            else if (!repair.isError && repair.text.trim()) servedBy = provider.kind;
+            if (repairChain.exhausted === true) {
+              log('provider-exhausted', { seat, phase: 'repair', attempts: repairChain.attempts });
+              const fallback = receiptPlan(seat, messages);
+              await executePlan(tools, fallback);
+              return { done: true, exhausted: true, note: exhaustionNote(repairChain) };
+            }
             if (!repair.isError && repair.text.trim()) {
               const second = parsePlan(repair.text);
               if (!second.malformed) {
                 await executePlan(tools, second.plan);
                 return {
                   done: second.plan.done !== false,
-                  note: `repaired${servedBy ? `;servedBy=${servedBy}` : ''}`
+                  note: durableNote('repaired')
                 };
               }
             }
@@ -230,7 +262,9 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
         }
 
         await executePlan(tools, plan);
-        lastNote = plan.note ?? (servedBy ? `servedBy=${servedBy}` : 'ok');
+        // Provider identity is orchestration evidence, not model prose. Always retain it even
+        // when the model supplies a friendly note of its own.
+        lastNote = durableNote(plan.note);
         if (plan.done !== false) {
           return { done: true, note: lastNote };
         }

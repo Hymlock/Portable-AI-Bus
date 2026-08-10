@@ -2,8 +2,11 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
+const { execFile } = require('node:child_process');
+const { promisify } = require('node:util');
 const test = require('node:test');
 const { SkseDevkitAdapter } = require('../dist/adapters/skse-devkit.js');
+const execFileAsync = promisify(execFile);
 
 async function makeFakeDevkit(layout = 'real-kit') {
   // realpath the temp dir before building anything on it.
@@ -26,6 +29,14 @@ async function makeFakeDevkit(layout = 'real-kit') {
 
   await fs.mkdir(path.join(root, 'tools', 'cmake', 'bin'), { recursive: true });
   await fs.mkdir(path.join(root, 'tools', 'vcpkg', 'scripts', 'buildsystems'), { recursive: true });
+  await fs.mkdir(path.join(root, 'tools', 'msvc', 'bin'), { recursive: true });
+  await fs.mkdir(path.join(root, 'tools', 'windows-sdk', 'bin'), { recursive: true });
+  await fs.mkdir(path.join(root, 'tools', 'windows-sdk', 'bin', '10.0.fake', 'x64'), { recursive: true });
+  await fs.mkdir(path.join(root, 'tools', 'windows-sdk', 'Include', '10.0.fake', 'um'), { recursive: true });
+  await fs.mkdir(path.join(root, 'tools', 'windows-sdk', 'Include', '10.0.fake', 'shared'), { recursive: true });
+  await fs.mkdir(path.join(root, 'tools', 'windows-sdk', 'Include', '10.0.fake', 'ucrt'), { recursive: true });
+  await fs.mkdir(path.join(root, 'tools', 'windows-sdk', 'Lib', '10.0.fake', 'um', 'x64'), { recursive: true });
+  await fs.mkdir(path.join(root, 'tools', 'windows-sdk', 'Lib', '10.0.fake', 'ucrt', 'x64'), { recursive: true });
   await fs.mkdir(path.join(root, 'libraries', 'CommonLibSSE-NG', 'include', 'RE'), { recursive: true });
   await fs.mkdir(path.join(root, 'vcpkg-triplets'), { recursive: true });
   await fs.mkdir(path.join(root, 'DragonbornLogbookNative', 'build', 'relwithdebinfo'), { recursive: true });
@@ -36,6 +47,13 @@ async function makeFakeDevkit(layout = 'real-kit') {
   await fs.writeFile(path.join(root, 'tools', 'cmake', 'bin', 'ctest.exe'), Buffer.alloc(2048, 1));
   await fs.writeFile(path.join(root, 'tools', 'ninja.exe'), Buffer.alloc(2048, 2));
   await fs.writeFile(path.join(root, 'tools', 'vcpkg', 'vcpkg.exe'), Buffer.alloc(2048, 3));
+  await fs.writeFile(path.join(root, 'tools', 'msvc', 'bin', 'cl.exe'), Buffer.alloc(2048, 4));
+  await fs.writeFile(path.join(root, 'tools', 'windows-sdk', 'bin', 'rc.exe'), Buffer.alloc(2048, 5));
+  await fs.writeFile(path.join(root, 'tools', 'windows-sdk', 'bin', 'mt.exe'), Buffer.alloc(2048, 6));
+  await fs.writeFile(path.join(root, 'tools', 'windows-sdk', 'bin', '10.0.fake', 'x64', 'rc.exe'), Buffer.alloc(2048, 5));
+  await fs.writeFile(path.join(root, 'tools', 'windows-sdk', 'bin', '10.0.fake', 'x64', 'mt.exe'), Buffer.alloc(2048, 6));
+  await fs.writeFile(path.join(root, 'tools', 'windows-sdk', 'Include', '10.0.fake', 'um', 'windows.h'), '// fake\n');
+  await fs.writeFile(path.join(root, 'tools', 'windows-sdk', 'Lib', '10.0.fake', 'um', 'x64', 'kernel32.lib'), Buffer.alloc(2048, 7));
   await fs.writeFile(
     path.join(root, 'tools', 'vcpkg', 'scripts', 'buildsystems', 'vcpkg.cmake'),
     '# toolchain\n',
@@ -116,7 +134,44 @@ test('doctor finds nested real-kit tool and CommonLib paths', async (t) => {
   assert.ok(inventory.vcpkg.toolchainFile);
   assert.ok(inventory.samples.includes('DragonbornLogbookNative'));
   assert.ok(inventory.notes.some((note) => /no CMakeLists/i.test(note)));
+  assert.equal(inventory.ready, true);
   assert.equal(receipt.status, 'passed');
+});
+
+test('doctor fails loudly when a required tool makes the kit non-self-contained', async (t) => {
+  const { workspace, root } = await makeFakeDevkit();
+  t.after(() => fs.rm(workspace, { recursive: true, force: true }));
+  await fs.rm(path.join(root, 'tools', 'cmake', 'bin', 'cmake.exe'));
+  const { inventory, receipt } = await new SkseDevkitAdapter({
+    workspaceRoot: workspace,
+    explicitRoot: root,
+    env: { PATH: '' }
+  }).doctor();
+  assert.equal(inventory.ready, false);
+  assert.equal(receipt.status, 'failed');
+  assert.match(inventory.notes.join('\n'), /missing required tools:.*cmake/i);
+});
+
+test('ordinary Windows shell can inject a captured trusted MSVC environment', { skip: process.platform !== 'win32' }, async (t) => {
+  const { workspace, root } = await makeFakeDevkit();
+  t.after(() => fs.rm(workspace, { recursive: true, force: true }));
+  await fs.rm(path.join(root, 'tools', 'msvc'), { recursive: true, force: true });
+  const externalBin = path.join(root, 'fixture-vs', 'bin');
+  await fs.mkdir(externalBin, { recursive: true });
+  await fs.writeFile(path.join(externalBin, 'cl.exe'), Buffer.alloc(2048, 9));
+  let calls = 0;
+  const { inventory } = await new SkseDevkitAdapter({
+    workspaceRoot: workspace,
+    explicitRoot: root,
+    env: { PATH: '' },
+    async toolchainBootstrap(env) {
+      calls += 1;
+      return { ...env, PATH: externalBin, VSINSTALLDIR: path.join(root, 'fixture-vs') };
+    }
+  }).doctor();
+  assert.equal(calls, 1);
+  assert.equal(inventory.ready, true);
+  assert.match(inventory.tools.find((tool) => tool.name === 'cl').path, /fixture-vs/);
 });
 
 test('sourceDir defaults to kit sample when workspace has no CMake project', async (t) => {
@@ -192,4 +247,33 @@ test('validatePluginArtifacts finds sample preset output', async (t) => {
   assert.equal(report.dll.bytes, 4096);
   assert.equal(report.dll.sha256.length, 64);
   assert.equal(report.pdb.exists, true);
+});
+
+test('CTest treats an empty suite as an error instead of false validation', async (t) => {
+  const { workspace, root } = await makeFakeDevkit();
+  t.after(() => fs.rm(workspace, { recursive: true, force: true }));
+  const receipt = await new SkseDevkitAdapter({ workspaceRoot: workspace, explicitRoot: root }).test({ timeoutMs: 2_000 });
+  assert.ok(receipt.args.includes('--no-tests=error'));
+});
+
+test('CLI returns failure when a build receipt fails instead of reporting false success', async (t) => {
+  const { workspace, root } = await makeFakeDevkit();
+  t.after(() => fs.rm(workspace, { recursive: true, force: true }));
+  const cli = path.resolve(__dirname, '..', 'dist', 'adapters', 'skse-devkit.js');
+  await assert.rejects(
+    execFileAsync(process.execPath, [cli, 'build', '--workspace', workspace, '--root', root, '--timeout-ms', '1000']),
+    (error) => error.code !== 0 && /"status":\s*"(?:failed|launch_error|timed_out)"/.test(error.stdout)
+  );
+});
+
+test('CLI artifact validation exits nonzero when the plugin DLL is missing', async (t) => {
+  const { workspace, root } = await makeFakeDevkit();
+  t.after(() => fs.rm(workspace, { recursive: true, force: true }));
+  const empty = path.join(root, 'empty-build');
+  await fs.mkdir(empty);
+  const cli = path.resolve(__dirname, '..', 'dist', 'adapters', 'skse-devkit.js');
+  await assert.rejects(
+    execFileAsync(process.execPath, [cli, 'validate-artifacts', '--workspace', workspace, '--root', root, '--search-dir', empty]),
+    (error) => error.code === 1 && /"ok":\s*false/.test(error.stdout)
+  );
 });

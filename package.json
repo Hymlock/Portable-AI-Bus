@@ -9,6 +9,11 @@
   "files": [
     "dist/**",
     "bin/**",
+    "brains/**",
+    "scripts/bus-up.js",
+    "scripts/bus-console.js",
+    "scripts/build-distribution.js",
+    "node_modules/**",
     "providers/**",
     "templates/**",
     "media/**",
@@ -33,7 +38,8 @@
     "theme": "dark"
   },
   "engines": {
-    "vscode": "^1.101.0"
+    "vscode": "^1.101.0",
+    "node": ">=20"
   },
   "categories": [
     "Chat",
@@ -392,7 +398,8 @@
     "test:release": "npm test && npm run test:vscode:vsix",
     "check": "npm test && npm audit --audit-level=high",
     "check:release": "npm run check && npm run test:vscode",
-    "package": "vsce package"
+    "package": "vsce package",
+    "distribution": "node scripts/build-distribution.js"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
@@ -402,6 +409,11 @@
     "typescript": "^5.8.3"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.116.0",
     "node-pty": "^1.1.0"
-  }
+  },
+  "bundledDependencies": [
+    "@anthropic-ai/sdk",
+    "node-pty"
+  ]
 }

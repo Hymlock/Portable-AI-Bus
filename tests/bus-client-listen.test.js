@@ -69,3 +69,18 @@ test('an exhausted deadline reports timeout without a further poll', async () =>
   assert.equal(await client.listen('worker', 0), 'timeout');
   assert.equal(calls, 0, 'a deadline already past must not poll at all');
 });
+
+test('brain send preserves explicit keepBaton false', async () => {
+  const calls = [];
+  const client = cliBusClient({
+    root: 'C:/nowhere',
+    callSeatTool: async (_options, name, input) => {
+      calls.push({ name, input });
+      return { result: { ok: true } };
+    }
+  });
+  await client.tools('grok').send({
+    to: 'codex', kind: 'ack', subject: 'handoff', body: 'your turn', keepBaton: false
+  });
+  assert.equal(calls[0].input.keepBaton, false);
+});

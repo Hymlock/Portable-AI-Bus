@@ -223,7 +223,7 @@ Expect nested `tools/cmake/bin/cmake.exe`, `tools/vcpkg`, `libraries/CommonLibSS
 ```bash
 npm run compile
 npm test
-npx @vscode/vsce package --no-dependencies
+npm run package
 ```
 
 Install `.vsix` into a normal VS Code window and repeat **workflow + mailbox** smokes (not full harness matrix unless shipping harness UX).
@@ -232,6 +232,7 @@ Install `.vsix` into a normal VS Code window and repeat **workflow + mailbox** s
 
 - Chat participant missing
 - `mailbox.js` / `harness.js` / `skse-devkit.js` not staged
+- `bin/brain/cli.js`, `brains/agent-seat.js`, scripts, or `node_modules/node-pty` not staged
 - Claims ignored by agents (process issue, not bus)
 - Harness binding non-loopback (must not)
 - Tokens committed to git (must not)
@@ -242,13 +243,28 @@ Install `.vsix` into a normal VS Code window and repeat **workflow + mailbox** s
 - Halt checkpoint dropping the message that triggered it
 - LM worker running without explicit command
 - Docs describing Unify as required (it is not)
-- SKSE adapter claiming to vendor toolchains (it must not)
+- SKSE adapter claiming the VSIX embeds toolchains (it does not)
+- Clarification being recorded as goal completion
+
+## Distribution bundle check
+
+Use a tiny disposable Dev Kit fixture in automated tests. Do not copy the multi-gigabyte real kit:
+
+```bash
+npm run distribution -- --devkit-root <fixture> --out <unused-output> --dry-run
+```
+
+Confirm dry-run creates no output. For an authorized release build, confirm `manifest.json`
+contains the VSIX and every copied `devkit/` file with byte size and SHA-256, then independently
+rehash a sample. Run staged `skse-devkit.js doctor` against the copied payload. The manifest
+proves transfer integrity, not licensing or toolchain completeness.
 
 ## Minimum bar before commit / share
 
 - [ ] `npm run check` green (Node tests **plus** audit — not `npm test` alone)
 - [ ] On a desktop with VS Code: `npm run test:vscode:vsix` or full `npm run test:all`
 - [ ] F5 or installed VSIX: initialize + mailbox send/inbox
+- [ ] Installed VSIX stages and loads the generic brain plus bundled `node-pty`
 - [ ] Docs match staged bin names and v0.2 behaviour
 - [ ] No secrets in repo
 - [ ] PROVENANCE still accurate if dependencies changed

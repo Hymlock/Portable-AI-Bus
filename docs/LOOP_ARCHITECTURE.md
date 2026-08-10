@@ -86,10 +86,11 @@ Hymlock approved the direction, so this is no longer a recommendation. What ship
 | `brain/contract.ts` | `takeTurn(context) -> {done, capped}`, neutral `BrainTools`, `WakeContext` |
 | `brain/runner.ts` | **the wake loop** — drain, wake, act, loop. Never exits on `done` |
 | `brain/bus-client.ts` | binds the runner to the real harness by driving `worker-client.js` |
-| `brain/cli.ts` | `node dist/brain/cli.js --root R --seat S [--brain M]`, plus a default echo brain |
+| `brain/cli.ts` | staged as `.ai-bus/bin/brain/cli.js`; long-lived wake runner plus echo brain |
+| `brains/agent-seat.js` | packaged project-neutral brain with a required cross-vendor provider chain |
 
 ```bash
-node dist/brain/cli.js --root "<bus root>" --seat grok --brain ./my-brain.js
+node .ai-bus/scripts/bus-up.js --root . --console grok
 ```
 
 ### The one property everything else serves
@@ -97,6 +98,9 @@ node dist/brain/cli.js --root "<bus root>" --seat grok --brain ./my-brain.js
 `WakeResult.done` means **this wake's work is finished**. It does *not* mean the agent is
 finished, and the runner must never treat it that way. That is stated on the type rather than
 in a comment, because conflating the two IS the chat-session bug.
+
+A request for user clarification is also not goal completion. The brain sends the question,
+records the open dependency, finishes only the current wake, and resumes when an answer arrives.
 
 Proved by sabotage: reintroducing `if (result.done) break;` turns **three tests red**, including
 `a brain reporting done does NOT end the runner`. A regression guard that has never been red is

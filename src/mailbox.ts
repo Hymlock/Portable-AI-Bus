@@ -588,6 +588,8 @@ export class MailboxStore {
   async reassignBaton(input: {
     to: string;
     reason: string;
+    /** Atomic compare-and-move guard for automated failover. */
+    expectedFrom?: string;
     staleAfterSeconds?: number;
     /** Operator override: skip the staleness guard. For a human who can see the truth. */
     force?: boolean;
@@ -598,6 +600,14 @@ export class MailboxStore {
       const from = state.baton?.holder ?? null;
       if (!state.agents.includes(input.to)) {
         throw new Error(`unknown agent: ${input.to}`);
+      }
+      if (input.expectedFrom !== undefined && from !== input.expectedFrom) {
+        return {
+          moved: false,
+          from,
+          to: input.to,
+          why: `baton holder changed from expected ${input.expectedFrom} to ${from ?? '<nobody>'}; refusing stale failover`
+        };
       }
       if (from === input.to) {
         return { moved: false, from, to: input.to, why: `${input.to} already holds the baton` };
@@ -1371,6 +1381,17 @@ async function runCli(argv = process.argv.slice(2)) {
       }
       return report.stalled ? 1 : 0;
     }
+    case 'reassign': {
+      const result = await store.reassignBaton({
+        to: stringArg(args, 'to', true),
+        reason: stringArg(args, 'reason') || 'operator-requested baton recovery',
+        staleAfterSeconds: intArg(args, 'stale-after', 300),
+        expectedFrom: stringArg(args, 'expected-from') || undefined,
+        force: Boolean(args.force)
+      });
+      console.log(json ? JSON.stringify(result, null, 2) : result.why);
+      return result.moved || result.from === result.to ? 0 : 1;
+    }
     case 'configure-halting': {
       const state = await store.configureHalting({
         onStepCompletion: optionalBoolArg(args, 'on-step'),
@@ -1409,7 +1430,7 @@ async function runCli(argv = process.argv.slice(2)) {
     }
     default:
       throw new Error(
-        'usage: mailbox <init|send|inbox|read|wait|claim|release|claims|status|doctor|goal|assign|stall-check|configure-halting|complete-step|complete-goal|halt|resume> [options]'
+        'usage: mailbox <init|send|inbox|read|wait|claim|release|claims|status|doctor|goal|assign|stall-check|reassign|configure-halting|complete-step|complete-goal|halt|resume> [options]'
       );
   }
 }

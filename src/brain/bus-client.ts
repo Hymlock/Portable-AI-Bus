@@ -29,6 +29,8 @@ export type CliBusOptions = {
   log?: (event: string, data?: unknown) => void;
   /** Injected in tests. Defaults to the real long poll. */
   waitForMailbox?: typeof waitForMailbox;
+  /** Injected in tests. Defaults to the authenticated harness tool call. */
+  callSeatTool?: typeof callSeatTool;
   /** Injected in tests so a backoff test does not actually sleep. */
   sleep?: (ms: number) => Promise<void>;
 };
@@ -57,7 +59,8 @@ export function cliBusClient(options: CliBusOptions): BusClient {
 
   async function tool(seat: string, name: string, input: Record<string, unknown>, timeoutMs = 30_000) {
     try {
-      const { result } = await callSeatTool(
+      const call = options.callSeatTool ?? callSeatTool;
+      const { result } = await call(
         { root: options.root, seat, requestTimeoutMs: timeoutMs }, name, input);
       return result;
     } catch (error) {
@@ -119,7 +122,7 @@ export function cliBusClient(options: CliBusOptions): BusClient {
             kind: String(input?.kind ?? 'note').trim() || 'note',
             subject: String(input?.subject ?? '(no subject)').slice(0, 200),
             body: String(input?.body ?? '').trim() || '(empty)',
-            ...(input?.keepBaton ? { keepBaton: true } : {})
+            ...(typeof input?.keepBaton === 'boolean' ? { keepBaton: input.keepBaton } : {})
           });
         },
 

@@ -92,6 +92,7 @@ test('agent brain executes a model plan via tools (happy path)', async () => {
   assert.equal(sent.length, 1);
   assert.equal(sent[0].to, 'claude');
   assert.equal(sent[0].kind, 'ack');
+  assert.equal(result.note, 'acked;servedBy=api', 'provider identity must survive a model-authored note');
 });
 
 test('ATTACK: mid-stream / first-link failure falls through; brain still answers', async () => {
@@ -112,7 +113,7 @@ test('ATTACK: mid-stream / first-link failure falls through; brain still answers
   assert.equal(result.done, true);
   assert.equal(sent.length, 1);
   assert.equal(sent[0].body, 'from-fallback');
-  assert.match(result.note || '', /servedBy=api|ok|acked/);
+  assert.match(result.note || '', /servedBy=api/);
 });
 
 test('ATTACK: malformed model output yields receipt-only, not a throw', async () => {
@@ -199,5 +200,50 @@ test('provider throw path also receipts without killing the turn', async () => {
   });
   assert.equal(result.done, true);
   assert.match(result.note || '', /provider-threw/);
+  assert.equal(sent.length, 1);
+});
+
+test('repair-call exhaustion still receipts and signals baton failover', async () => {
+  let calls = 0;
+  const provider = {
+    kind: 'cli',
+    async ask() {
+      calls += 1;
+      if (calls === 1) return { text: 'not json', isError: false, servedBy: 'cli', attempts: [], exhausted: false };
+      return {
+        text: '', isError: true, exhausted: true,
+        attempts: [{ kind: 'cli', ok: false, reason: 'quota' }]
+      };
+    },
+    async probe() { return { ok: true, detail: '' }; }
+  };
+  const { api, sent } = tools();
+  const brain = createAgentBrain({ seat: 'grok', provider, maxRounds: 2 });
+  const result = await brain.takeTurn({
+    seat: 'grok', reason: 'mail', messages: [msg(21)], tools: api, budget: 5, log: () => {}
+  });
+  assert.equal(result.exhausted, true);
+  assert.match(result.note, /chain-exhausted:attempts=cli:quota/);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].kind, 'ack');
+});
+
+test('repair-call throw still sends a receipt instead of escaping the wake', async () => {
+  let calls = 0;
+  const provider = {
+    kind: 'cli',
+    async ask() {
+      calls += 1;
+      if (calls === 1) return { text: 'not json', isError: false };
+      throw new Error('connection vanished during repair');
+    },
+    async probe() { return { ok: true, detail: '' }; }
+  };
+  const { api, sent } = tools();
+  const brain = createAgentBrain({ seat: 'grok', provider, maxRounds: 2 });
+  const result = await brain.takeTurn({
+    seat: 'grok', reason: 'mail', messages: [msg(22)], tools: api, budget: 5, log: () => {}
+  });
+  assert.match(result.note, /provider-threw/);
   assert.equal(sent.length, 1);
 });

@@ -7,6 +7,7 @@ export type SkseDevkitResolveOptions = {
   workspaceRoot: string;
   explicitRoot?: string;
   env?: NodeJS.ProcessEnv;
+  toolchainBootstrap?: (env: NodeJS.ProcessEnv) => Promise<NodeJS.ProcessEnv>;
 };
 
 export type ToolPresence = {
@@ -19,6 +20,7 @@ export type SkseDevkitInventory = {
   schemaVersion: 1;
   root: string;
   rootExists: boolean;
+  ready: boolean;
   tools: ToolPresence[];
   commonLib: {
     root: string | null;
@@ -33,7 +35,7 @@ export type SkseDevkitInventory = {
   };
   samples: string[];
   visualStudio: { hints: string[] };
-  windowsSdk: { hints: string[] };
+  windowsSdk: { hints: string[]; root: string | null; version: string | null; complete: boolean };
   notes: string[];
 };
 
@@ -128,11 +130,15 @@ const SCRUB_ALLOW = new Set([
   'WindowsSDKVersion',
   'VSCMD_ARG_TGT_ARCH',
   'VSCMD_VER',
+  'VisualStudioVersion',
+  'UniversalCRTSdkDir',
+  'UCRTVersion',
   'INCLUDE',
   'LIB',
   'LIBPATH',
   'EXTERNAL_INCLUDE',
   'SKSE_DEVKIT_ROOT',
+  'AI_BUS_VCVARS64',
   'VCPKG_ROOT',
   'VCPKG_DEFAULT_TRIPLET'
 ]);
@@ -140,9 +146,14 @@ const SCRUB_ALLOW = new Set([
 export class SkseDevkitAdapter {
   readonly workspaceRoot: string;
   readonly root: string;
+  private readonly env: NodeJS.ProcessEnv;
+  private readonly toolchainBootstrap?: (env: NodeJS.ProcessEnv) => Promise<NodeJS.ProcessEnv>;
+  private preparedEnv?: Promise<{ env: NodeJS.ProcessEnv; notes: string[]; sdk: WindowsSdkSelection | null }>;
 
   constructor(options: SkseDevkitResolveOptions) {
     this.workspaceRoot = path.resolve(options.workspaceRoot);
+    this.env = options.env ?? process.env;
+    this.toolchainBootstrap = options.toolchainBootstrap;
     this.root = resolveDevkitRoot(options);
   }
 
@@ -166,8 +177,8 @@ export class SkseDevkitAdapter {
       startedAt,
       finishedAt: new Date(finished).toISOString(),
       durationMs: finished - started,
-      status: inventory.rootExists ? 'passed' : 'failed',
-      exitCode: inventory.rootExists ? 0 : 1,
+      status: inventory.ready ? 'passed' : 'failed',
+      exitCode: inventory.ready ? 0 : 1,
       signal: null,
       timedOut: false,
       stdoutTail: JSON.stringify(inventory, null, 2).slice(0, 4_000),
@@ -179,8 +190,10 @@ export class SkseDevkitAdapter {
   }
 
   async inventory(): Promise<SkseDevkitInventory> {
+    const prepared = await this.prepareToolchainEnvironment();
+    const effectiveEnv = prepared.env;
     const rootExists = await exists(this.root);
-    const notes: string[] = [];
+    const notes: string[] = [...prepared.notes];
     if (!rootExists) {
       notes.push(`Devkit root does not exist: ${this.root}`);
     }
@@ -210,12 +223,14 @@ export class SkseDevkitAdapter {
         bare: process.platform === 'win32' ? 'ctest.exe' : 'ctest'
       },
       { name: 'git', relatives: ['tools/git/cmd/git.exe'], bare: process.platform === 'win32' ? 'git.exe' : 'git' },
-      { name: 'cl', relatives: [], bare: process.platform === 'win32' ? 'cl.exe' : 'cl' }
+      { name: 'cl', relatives: ['tools/msvc/bin/cl.exe'], bare: process.platform === 'win32' ? 'cl.exe' : 'cl' },
+      { name: 'rc', relatives: ['tools/windows-sdk/bin/rc.exe'], bare: process.platform === 'win32' ? 'rc.exe' : 'rc' },
+      { name: 'mt', relatives: ['tools/windows-sdk/bin/mt.exe'], bare: process.platform === 'win32' ? 'mt.exe' : 'mt' }
     ];
 
     const tools: ToolPresence[] = [];
     for (const spec of toolSpecs) {
-      const found = await findTool(this.root, spec.relatives, spec.bare);
+      const found = await findTool(this.root, spec.relatives, spec.bare, effectiveEnv);
       tools.push({ name: spec.name, path: found, present: Boolean(found) });
     }
 
@@ -233,7 +248,7 @@ export class SkseDevkitAdapter {
     const vcpkgRoot = await firstExisting([
       path.join(this.root, 'tools', 'vcpkg'),
       path.join(this.root, 'vcpkg'),
-      process.env.VCPKG_ROOT ?? ''
+      effectiveEnv.VCPKG_ROOT ?? ''
     ]);
     const toolchainFile = vcpkgRoot
       ? await firstExisting([path.join(vcpkgRoot, 'scripts', 'buildsystems', 'vcpkg.cmake')])
@@ -243,21 +258,42 @@ export class SkseDevkitAdapter {
       (await readTextIfExists(path.join(this.root, 'triplet.txt')))?.trim() ||
       (overlayTriplets ? await detectOverlayTriplet(overlayTriplets) : null) ||
       (await detectTripletHint(this.root)) ||
-      process.env.VCPKG_DEFAULT_TRIPLET ||
+      effectiveEnv.VCPKG_DEFAULT_TRIPLET ||
       null;
 
     const samples = await listSampleProjects(this.root);
+    const requiredTools = process.platform === 'win32'
+      ? ['cmake', 'ninja', 'vcpkg', 'ctest', 'cl', 'rc', 'mt']
+      : ['cmake', 'ninja', 'vcpkg', 'ctest'];
+    const missingTools = requiredTools.filter((name) => !tools.some((tool) => tool.name === name && tool.present));
+    if (missingTools.length > 0) {
+      notes.push(`Toolchain is not ready; missing required tools: ${missingTools.join(', ')}.`);
+      if (process.platform === 'win32' && missingTools.some((name) => name === 'cl' || name === 'rc' || name === 'mt')) {
+        notes.push('Run from an MSVC Developer Command Prompt (vcvars64.bat) or provide cl.exe, rc.exe, and mt.exe on PATH. The adapter will not report ready without them.');
+      }
+    }
+    if (!commonLibRoot || !commonLibCmake) notes.push('CommonLibSSE-NG with CMakeLists.txt was not found.');
+    if (!toolchainFile) notes.push('The vcpkg CMake toolchain file was not found.');
+    if (process.platform === 'win32' && !prepared.sdk) notes.push('No complete Windows SDK has rc.exe, mt.exe, um/windows.h, and um/x64/kernel32.lib.');
+    const ready = rootExists && missingTools.length === 0 && Boolean(commonLibRoot && commonLibCmake && toolchainFile) &&
+      (process.platform !== 'win32' || Boolean(prepared.sdk));
 
     return {
       schemaVersion: 1,
       root: this.root,
       rootExists,
+      ready,
       tools,
       commonLib: { root: commonLibRoot, cmakeLists: commonLibCmake, headersSample },
       vcpkg: { root: vcpkgRoot, tripletHint, toolchainFile, overlayTriplets },
       samples,
-      visualStudio: { hints: await collectHints(this.root, ['vs_path.txt', 'visualstudio.txt', path.join('docs', 'vs.txt')], process.env.VSINSTALLDIR) },
-      windowsSdk: { hints: await collectHints(this.root, ['winsdk.txt', 'sdk.txt', path.join('docs', 'sdk.txt')], process.env.WindowsSdkDir) },
+      visualStudio: { hints: await collectHints(this.root, ['vs_path.txt', 'visualstudio.txt', path.join('docs', 'vs.txt')], effectiveEnv.VSINSTALLDIR) },
+      windowsSdk: {
+        hints: await collectHints(this.root, ['winsdk.txt', 'sdk.txt', path.join('docs', 'sdk.txt')], prepared.sdk?.root ?? effectiveEnv.WindowsSdkDir),
+        root: prepared.sdk?.root ?? null,
+        version: prepared.sdk?.version ?? null,
+        complete: Boolean(prepared.sdk)
+      },
       notes
     };
   }
@@ -354,7 +390,7 @@ export class SkseDevkitAdapter {
     return this.runFixed({
       action: 'test',
       executable: ctest,
-      args: ['--test-dir', buildDir, '--output-on-failure'],
+      args: ['--test-dir', buildDir, '--output-on-failure', '--no-tests=error'],
       cwd: sourceDir,
       sourceDir,
       buildDir,
@@ -497,6 +533,7 @@ export class SkseDevkitAdapter {
     let launchError: Error | undefined;
     let child: ChildProcess | undefined;
 
+    const prepared = await this.prepareToolchainEnvironment();
     const result = await new Promise<{ exitCode: number | null; signal: NodeJS.Signals | null }>((resolve) => {
       let settled = false;
       let exitFallback: NodeJS.Timeout | undefined;
@@ -522,7 +559,7 @@ export class SkseDevkitAdapter {
       try {
         child = spawn(input.executable, input.args, {
           cwd: input.cwd,
-          env: scrubEnv(process.env),
+          env: scrubEnv(prepared.env),
           shell: false,
           windowsHide: true,
           stdio: ['ignore', 'pipe', 'pipe'],
@@ -589,6 +626,13 @@ export class SkseDevkitAdapter {
       stderrSha256: err.sha256
     });
   }
+
+  private prepareToolchainEnvironment() {
+    if (!this.preparedEnv) {
+      this.preparedEnv = prepareToolchainEnvironment(this.env, this.toolchainBootstrap, this.root);
+    }
+    return this.preparedEnv;
+  }
 }
 
 function resolveDevkitRoot(options: SkseDevkitResolveOptions): string {
@@ -620,6 +664,200 @@ function scrubEnv(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   }
   next.AI_BUS_SCRUBBED = '1';
   return next;
+}
+
+type WindowsSdkSelection = {
+  root: string;
+  version: string;
+  bin: string;
+  include: string[];
+  lib: string[];
+  rc: string;
+  mt: string;
+};
+
+async function prepareToolchainEnvironment(
+  source: NodeJS.ProcessEnv,
+  injectedBootstrap?: (env: NodeJS.ProcessEnv) => Promise<NodeJS.ProcessEnv>,
+  devkitRoot?: string
+): Promise<{ env: NodeJS.ProcessEnv; notes: string[]; sdk: WindowsSdkSelection | null }> {
+  let env = { ...source };
+  const notes: string[] = [];
+  if (process.platform !== 'win32') return { env, notes, sdk: null };
+
+  const bundledClDir = devkitRoot ? path.join(devkitRoot, 'tools', 'msvc', 'bin') : '';
+  if (bundledClDir && await exists(path.join(bundledClDir, 'cl.exe'))) setPathEnvironment(env, prependPathList(bundledClDir, env.PATH ?? env.Path));
+  if (!(await executableOnPath('cl.exe', env))) {
+    try {
+      env = injectedBootstrap ? await injectedBootstrap(env) : await bootstrapMsvcEnvironment(env);
+      notes.push('Initialized MSVC environment from a validated vcvars64.bat installation.');
+    } catch (error) {
+      notes.push(`MSVC environment bootstrap failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  const sdk = await selectCompleteWindowsSdk(env, devkitRoot ? [path.join(devkitRoot, 'tools', 'windows-sdk')] : []);
+  if (sdk) env = mergeWindowsSdkEnvironment(env, sdk);
+  return { env, notes, sdk };
+}
+
+async function bootstrapMsvcEnvironment(source: NodeJS.ProcessEnv): Promise<NodeJS.ProcessEnv> {
+  const trustedRoots = programFilesRoots(source);
+  const vcvars = await discoverVcvars64(source, trustedRoots);
+  if (!vcvars) throw new Error('vcvars64.bat was not found beneath a trusted Program Files Visual Studio installation.');
+  if (!isTrustedVcvarsPath(vcvars, trustedRoots)) throw new Error('Discovered vcvars64.bat path failed validation.');
+  const systemRoot = source.SystemRoot ?? source.SYSTEMROOT ?? source.WINDIR;
+  const cmd = systemRoot ? path.join(systemRoot, 'System32', 'cmd.exe') : 'cmd.exe';
+  const command = 'call "%AI_BUS_VCVARS64%" >nul && set';
+  const output = await captureFixedProcess(cmd, ['/d', '/c', command], { ...source, AI_BUS_VCVARS64: vcvars }, 30_000, true);
+  const captured = parseEnvironmentBlock(output);
+  delete captured.AI_BUS_VCVARS64;
+  if (!captured.PATH && !captured.Path) throw new Error('vcvars64.bat returned no PATH environment.');
+  return { ...source, ...captured };
+}
+
+async function discoverVcvars64(source: NodeJS.ProcessEnv, trustedRoots: string[]) {
+  const pf86 = source['ProgramFiles(x86)'] ?? source.PROGRAMFILES;
+  const vswhere = pf86 ? path.join(pf86, 'Microsoft Visual Studio', 'Installer', 'vswhere.exe') : '';
+  if (vswhere && await exists(vswhere)) {
+    try {
+      const installation = (await captureFixedProcess(vswhere, [
+        '-latest', '-products', '*', '-requires', 'Microsoft.VisualStudio.Component.VC.Tools.x86.x64',
+        '-property', 'installationPath'
+      ], source, 15_000)).trim().split(/\r?\n/)[0];
+      const candidate = path.join(installation, 'VC', 'Auxiliary', 'Build', 'vcvars64.bat');
+      if (await exists(candidate) && isTrustedVcvarsPath(candidate, trustedRoots)) return candidate;
+    } catch {
+      // Fall through to fixed, trusted installation layouts.
+    }
+  }
+  const editions = ['BuildTools', 'Community', 'Professional', 'Enterprise'];
+  for (const root of trustedRoots) {
+    for (const year of ['2022', '2019', '2017']) {
+      for (const edition of editions) {
+        const candidate = path.join(root, 'Microsoft Visual Studio', year, edition, 'VC', 'Auxiliary', 'Build', 'vcvars64.bat');
+        if (await exists(candidate) && isTrustedVcvarsPath(candidate, trustedRoots)) return candidate;
+      }
+    }
+  }
+  return null;
+}
+
+function programFilesRoots(env: NodeJS.ProcessEnv) {
+  return Array.from(new Set([
+    env['ProgramFiles(x86)'], env.ProgramFiles, env.PROGRAMFILES, env.PROGRAMW6432
+  ].filter((value): value is string => Boolean(value)).map((value) => path.resolve(value))));
+}
+
+function isTrustedVcvarsPath(candidate: string, trustedRoots: string[]) {
+  if (/["&|<>^%\r\n]/.test(candidate) || path.basename(candidate).toLowerCase() !== 'vcvars64.bat') return false;
+  const resolved = path.resolve(candidate);
+  return trustedRoots.some((root) => isInside(resolved, root)) &&
+    resolved.toLowerCase().includes(`${path.sep}microsoft visual studio${path.sep}`);
+}
+
+async function captureFixedProcess(executable: string, args: string[], env: NodeJS.ProcessEnv, timeoutMs: number, windowsVerbatimArguments = false) {
+  return new Promise<string>((resolve, reject) => {
+    const child = spawn(executable, args, {
+      env: scrubEnv(env), shell: false, windowsHide: true, windowsVerbatimArguments, stdio: ['ignore', 'pipe', 'pipe']
+    });
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    let bytes = 0;
+    const append = (target: Buffer[], chunk: Buffer | string) => {
+      const value = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      bytes += value.length;
+      if (bytes <= 2 * 1024 * 1024) target.push(value);
+    };
+    child.stdout?.on('data', (chunk) => append(stdout, chunk));
+    child.stderr?.on('data', (chunk) => append(stderr, chunk));
+    const timer = setTimeout(() => void terminateProcessTree(child), timeoutMs);
+    timer.unref();
+    child.once('error', (error) => { clearTimeout(timer); reject(error); });
+    child.once('close', (code) => {
+      clearTimeout(timer);
+      if (bytes > 2 * 1024 * 1024) return reject(new Error('Toolchain discovery output exceeded 2 MiB.'));
+      if (code !== 0) return reject(new Error(Buffer.concat(stderr).toString('utf8').trim() || `process exited ${code}`));
+      resolve(Buffer.concat(stdout).toString('utf8'));
+    });
+  });
+}
+
+function parseEnvironmentBlock(value: string): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const line of value.split(/\r?\n/)) {
+    const index = line.indexOf('=');
+    if (index <= 0) continue;
+    const key = line.slice(0, index);
+    if (/^[A-Za-z_][A-Za-z0-9_()]*$/.test(key)) env[key] = line.slice(index + 1);
+  }
+  return env;
+}
+
+async function selectCompleteWindowsSdk(env: NodeJS.ProcessEnv, additionalRoots: string[] = []): Promise<WindowsSdkSelection | null> {
+  const roots = Array.from(new Set([
+    env.WindowsSdkDir,
+    ...additionalRoots,
+    env['ProgramFiles(x86)'] ? path.join(env['ProgramFiles(x86)'], 'Windows Kits', '10') : undefined,
+    env.PROGRAMFILES ? path.join(env.PROGRAMFILES, 'Windows Kits', '10') : undefined
+  ].filter((value): value is string => Boolean(value)).map((value) => path.resolve(value))));
+  for (const root of roots) {
+    const versions = new Set<string>();
+    const explicit = (env.WindowsSDKVersion ?? '').replace(/[\\/]+$/, '');
+    if (explicit) versions.add(explicit);
+    for (const parent of [path.join(root, 'Include'), path.join(root, 'Lib')]) {
+      try {
+        for (const entry of await fs.readdir(parent, { withFileTypes: true })) if (entry.isDirectory()) versions.add(entry.name);
+      } catch { /* try the next root */ }
+    }
+    const ordered = [...versions].sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+    if (explicit) ordered.sort((a, b) => a === explicit ? -1 : b === explicit ? 1 : b.localeCompare(a, undefined, { numeric: true }));
+    for (const version of ordered) {
+      const binCandidates = [path.join(root, 'bin', version, 'x64'), path.join(root, 'bin', 'x64')];
+      const bin = await firstExisting(binCandidates);
+      if (!bin) continue;
+      const rc = path.join(bin, 'rc.exe');
+      const mt = path.join(bin, 'mt.exe');
+      const include = ['um', 'shared', 'ucrt', 'winrt', 'cppwinrt'].map((part) => path.join(root, 'Include', version, part));
+      const lib = ['um', 'ucrt'].map((part) => path.join(root, 'Lib', version, part, 'x64'));
+      if (await exists(rc) && await exists(mt) && await exists(path.join(include[0], 'windows.h')) &&
+          await exists(path.join(lib[0], 'kernel32.lib'))) {
+        return { root, version, bin, include: await existingOnly(include), lib: await existingOnly(lib), rc, mt };
+      }
+    }
+  }
+  return null;
+}
+
+async function existingOnly(values: string[]) {
+  const result: string[] = [];
+  for (const value of values) if (await exists(value)) result.push(value);
+  return result;
+}
+
+function mergeWindowsSdkEnvironment(env: NodeJS.ProcessEnv, sdk: WindowsSdkSelection): NodeJS.ProcessEnv {
+  const next = { ...env };
+  setPathEnvironment(next, prependPathList(sdk.bin, env.PATH ?? env.Path));
+  next.INCLUDE = prependPathList(sdk.include.join(path.delimiter), env.INCLUDE);
+  next.LIB = prependPathList(sdk.lib.join(path.delimiter), env.LIB);
+  next.WindowsSdkDir = `${sdk.root}${path.sep}`;
+  next.WindowsSDKVersion = `${sdk.version}${path.sep}`;
+  next.CMAKE_RC_COMPILER = sdk.rc;
+  next.CMAKE_MT = sdk.mt;
+  return next;
+}
+
+function setPathEnvironment(env: NodeJS.ProcessEnv, value: string) {
+  if (Object.prototype.hasOwnProperty.call(env, 'Path')) env.Path = value;
+  else env.PATH = value;
+}
+
+function prependPathList(prefix: string, existing?: string) {
+  return existing ? `${prefix}${path.delimiter}${existing}` : prefix;
+}
+
+async function executableOnPath(name: string, env: NodeJS.ProcessEnv) {
+  return Boolean(await findTool('', [], name, env));
 }
 
 async function terminateProcessTree(child: ChildProcess) {
@@ -662,14 +900,14 @@ async function terminateProcessTree(child: ChildProcess) {
   }, 2_000).unref();
 }
 
-async function findTool(root: string, relatives: string[], bareName: string): Promise<string | null> {
+async function findTool(root: string, relatives: string[], bareName: string, env: NodeJS.ProcessEnv = process.env): Promise<string | null> {
   for (const relative of relatives) {
     const candidate = path.join(root, ...relative.split('/'));
     if (await exists(candidate)) {
       return candidate;
     }
   }
-  const pathEnv = process.env.PATH ?? process.env.Path ?? '';
+  const pathEnv = env.PATH ?? env.Path ?? '';
   for (const dir of pathEnv.split(path.delimiter)) {
     if (!dir) {
       continue;
@@ -935,15 +1173,21 @@ async function runCli(argv = process.argv.slice(2)) {
     return;
   }
   if (command === 'configure') {
-    process.stdout.write(`${JSON.stringify(await adapter.configure(common), null, 2)}\n`);
+    const receipt = await adapter.configure(common);
+    process.stdout.write(`${JSON.stringify(receipt, null, 2)}\n`);
+    process.exitCode = receiptExitCode(receipt);
     return;
   }
   if (command === 'build') {
-    process.stdout.write(`${JSON.stringify(await adapter.build(common), null, 2)}\n`);
+    const receipt = await adapter.build(common);
+    process.stdout.write(`${JSON.stringify(receipt, null, 2)}\n`);
+    process.exitCode = receiptExitCode(receipt);
     return;
   }
   if (command === 'test') {
-    process.stdout.write(`${JSON.stringify(await adapter.test(common), null, 2)}\n`);
+    const receipt = await adapter.test(common);
+    process.stdout.write(`${JSON.stringify(receipt, null, 2)}\n`);
+    process.exitCode = receiptExitCode(receipt);
     return;
   }
   if (command === 'search') {
@@ -955,24 +1199,26 @@ async function runCli(argv = process.argv.slice(2)) {
     return;
   }
   if (command === 'validate-artifacts') {
-    process.stdout.write(
-      `${JSON.stringify(
-        await adapter.validatePluginArtifacts({
+    const report = await adapter.validatePluginArtifacts({
           dllPath: option(argv, '--dll'),
           pdbPath: option(argv, '--pdb'),
           searchDir: option(argv, '--search-dir'),
           sourceDir: common.sourceDir,
           preset: common.preset
-        }),
-        null,
-        2
-      )}\n`
-    );
+        });
+    process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+    process.exitCode = report.ok ? 0 : 1;
     return;
   }
   throw new Error(
     'Usage: skse-devkit <doctor|configure|build|test|search|validate-artifacts> [--workspace PATH] [--root PATH] [--source-dir PATH] [--build-dir PATH] [--preset NAME]'
   );
+}
+
+function receiptExitCode(receipt: SkseCommandReceipt) {
+  if (receipt.status === 'passed') return 0;
+  if (receipt.status === 'timed_out') return 124;
+  return 1;
 }
 
 function option(argv: string[], name: string) {

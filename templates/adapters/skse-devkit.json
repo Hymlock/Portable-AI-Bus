@@ -8,7 +8,8 @@
     "Devkit root is a toolchain, not a CMake project. configure/build target a sourceDir (workspace CMakeLists or a kit sample).",
     "Real kit layout: tools/cmake/bin/cmake.exe, tools/ninja.exe, tools/vcpkg/vcpkg.exe, libraries/CommonLibSSE-NG, vcpkg-triplets/, samples like DragonbornLogbookNative.",
     "Does not vendor or embed binaries. Root: --root | SKSE_DEVKIT_ROOT | ${workspace}/.ai-bus/toolchains/skse-devkit.",
-    "source/build paths are realpath-jailed to workspace or devkit root."
+    "source/build paths are realpath-jailed to workspace or devkit root.",
+    "On Windows doctor fails until cmake, ninja, vcpkg, ctest, cl, rc, mt, CommonLib, and the vcpkg toolchain are all discoverable; run from an initialized MSVC Developer Command Prompt when the compiler/SDK are external."
   ],
   "module": "src/adapters/skse-devkit.ts",
   "cli": "node dist/adapters/skse-devkit.js",
@@ -37,7 +38,8 @@
       "args": ["${workspace}/.ai-bus/bin/skse-devkit.js", "doctor", "--workspace", "${workspace}"],
       "cwd": "${workspace}",
       "timeoutMs": 60000,
-      "allowedSeats": ["codex", "claude", "grok", "*"]
+      "inheritEnv": ["SKSE_DEVKIT_ROOT", "VCPKG_ROOT", "VCPKG_DEFAULT_TRIPLET", "VSINSTALLDIR", "VCINSTALLDIR", "VCToolsInstallDir", "VCToolsVersion", "VisualStudioVersion", "WindowsSdkDir", "WindowsSDKVersion", "UniversalCRTSdkDir", "UCRTVersion", "VSCMD_ARG_TGT_ARCH", "VSCMD_VER", "INCLUDE", "LIB", "LIBPATH", "EXTERNAL_INCLUDE", "CXX", "CC", "CMAKE_RC_COMPILER", "CMAKE_MT"],
+      "allowedSeats": ["*"]
     },
     {
       "id": "skse.configure",
@@ -45,7 +47,44 @@
       "args": ["${workspace}/.ai-bus/bin/skse-devkit.js", "configure", "--workspace", "${workspace}"],
       "cwd": "${workspace}",
       "timeoutMs": 600000,
-      "allowedSeats": []
+      "inheritEnv": ["SKSE_DEVKIT_ROOT", "VCPKG_ROOT", "VCPKG_DEFAULT_TRIPLET", "VSINSTALLDIR", "VCINSTALLDIR", "VCToolsInstallDir", "VCToolsVersion", "VisualStudioVersion", "WindowsSdkDir", "WindowsSDKVersion", "UniversalCRTSdkDir", "UCRTVersion", "VSCMD_ARG_TGT_ARCH", "VSCMD_VER", "INCLUDE", "LIB", "LIBPATH", "EXTERNAL_INCLUDE", "CXX", "CC", "CMAKE_RC_COMPILER", "CMAKE_MT"],
+      "allowedSeats": ["*"]
+    },
+    {
+      "id": "skse.build",
+      "command": "node",
+      "args": ["${workspace}/.ai-bus/bin/skse-devkit.js", "build", "--workspace", "${workspace}"],
+      "cwd": "${workspace}",
+      "timeoutMs": 600000,
+      "inheritEnv": ["SKSE_DEVKIT_ROOT", "VCPKG_ROOT", "VCPKG_DEFAULT_TRIPLET", "VSINSTALLDIR", "VCINSTALLDIR", "VCToolsInstallDir", "VCToolsVersion", "VisualStudioVersion", "WindowsSdkDir", "WindowsSDKVersion", "UniversalCRTSdkDir", "UCRTVersion", "VSCMD_ARG_TGT_ARCH", "VSCMD_VER", "INCLUDE", "LIB", "LIBPATH", "EXTERNAL_INCLUDE", "CXX", "CC", "CMAKE_RC_COMPILER", "CMAKE_MT"],
+      "allowedSeats": ["*"]
+    },
+    {
+      "id": "skse.test",
+      "command": "node",
+      "args": ["${workspace}/.ai-bus/bin/skse-devkit.js", "test", "--workspace", "${workspace}"],
+      "cwd": "${workspace}",
+      "timeoutMs": 600000,
+      "inheritEnv": ["SKSE_DEVKIT_ROOT", "VCPKG_ROOT", "VCPKG_DEFAULT_TRIPLET", "VSINSTALLDIR", "VCINSTALLDIR", "VCToolsInstallDir", "VCToolsVersion", "VisualStudioVersion", "WindowsSdkDir", "WindowsSDKVersion", "UniversalCRTSdkDir", "UCRTVersion", "VSCMD_ARG_TGT_ARCH", "VSCMD_VER", "INCLUDE", "LIB", "LIBPATH", "EXTERNAL_INCLUDE", "CXX", "CC", "CMAKE_RC_COMPILER", "CMAKE_MT"],
+      "allowedSeats": ["*"]
+    },
+    {
+      "id": "skse.validate-artifacts",
+      "command": "node",
+      "args": ["${workspace}/.ai-bus/bin/skse-devkit.js", "validate-artifacts", "--workspace", "${workspace}"],
+      "cwd": "${workspace}",
+      "timeoutMs": 60000,
+      "inheritEnv": ["SKSE_DEVKIT_ROOT"],
+      "allowedSeats": ["*"]
+    },
+    {
+      "id": "skse.search.plugin-entrypoint",
+      "command": "node",
+      "args": ["${workspace}/.ai-bus/bin/skse-devkit.js", "search", "--workspace", "${workspace}", "--query", "SKSEPlugin_Load"],
+      "cwd": "${workspace}",
+      "timeoutMs": 60000,
+      "inheritEnv": ["SKSE_DEVKIT_ROOT"],
+      "allowedSeats": ["*"]
     }
   ],
   "safety": {

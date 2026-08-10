@@ -29,17 +29,63 @@
       "args": ["${workspace}/.ai-bus/bin/skse-devkit.js", "doctor", "--workspace", "${workspace}"],
       "cwd": "${workspace}",
       "timeoutMs": 60000,
+      "inheritEnv": ["SKSE_DEVKIT_ROOT", "VCPKG_ROOT", "VCPKG_DEFAULT_TRIPLET", "VSINSTALLDIR", "VCINSTALLDIR", "VCToolsInstallDir", "VCToolsVersion", "VisualStudioVersion", "WindowsSdkDir", "WindowsSDKVersion", "UniversalCRTSdkDir", "UCRTVersion", "VSCMD_ARG_TGT_ARCH", "VSCMD_VER", "INCLUDE", "LIB", "LIBPATH", "EXTERNAL_INCLUDE", "CXX", "CC", "CMAKE_RC_COMPILER", "CMAKE_MT"],
+      "allowedSeats": ["*"]
+    },
+    {
+      "id": "skse.configure",
+      "description": "Configure the workspace or first dev-kit sample with fixed CMake/Ninja arguments.",
+      "category": "skse-devkit",
+      "command": "node",
+      "args": ["${workspace}/.ai-bus/bin/skse-devkit.js", "configure", "--workspace", "${workspace}"],
+      "cwd": "${workspace}",
+      "timeoutMs": 600000,
+      "inheritEnv": ["SKSE_DEVKIT_ROOT", "VCPKG_ROOT", "VCPKG_DEFAULT_TRIPLET", "VSINSTALLDIR", "VCINSTALLDIR", "VCToolsInstallDir", "VCToolsVersion", "VisualStudioVersion", "WindowsSdkDir", "WindowsSDKVersion", "UniversalCRTSdkDir", "UCRTVersion", "VSCMD_ARG_TGT_ARCH", "VSCMD_VER", "INCLUDE", "LIB", "LIBPATH", "EXTERNAL_INCLUDE", "CXX", "CC", "CMAKE_RC_COMPILER", "CMAKE_MT"],
       "allowedSeats": ["*"]
     },
     {
       "id": "skse.build",
-      "description": "Build the configured workspace SKSE project. Operator-only unless explicitly delegated.",
+      "description": "Build the configured workspace or first dev-kit sample using fixed CMake arguments.",
       "category": "skse-devkit",
       "command": "node",
       "args": ["${workspace}/.ai-bus/bin/skse-devkit.js", "build", "--workspace", "${workspace}"],
       "cwd": "${workspace}",
       "timeoutMs": 600000,
-      "allowedSeats": []
+      "inheritEnv": ["SKSE_DEVKIT_ROOT", "VCPKG_ROOT", "VCPKG_DEFAULT_TRIPLET", "VSINSTALLDIR", "VCINSTALLDIR", "VCToolsInstallDir", "VCToolsVersion", "VisualStudioVersion", "WindowsSdkDir", "WindowsSDKVersion", "UniversalCRTSdkDir", "UCRTVersion", "VSCMD_ARG_TGT_ARCH", "VSCMD_VER", "INCLUDE", "LIB", "LIBPATH", "EXTERNAL_INCLUDE", "CXX", "CC", "CMAKE_RC_COMPILER", "CMAKE_MT"],
+      "allowedSeats": ["*"]
+    },
+    {
+      "id": "skse.test",
+      "description": "Run CTest in the configured build directory with output on failure.",
+      "category": "skse-devkit",
+      "command": "node",
+      "args": ["${workspace}/.ai-bus/bin/skse-devkit.js", "test", "--workspace", "${workspace}"],
+      "cwd": "${workspace}",
+      "timeoutMs": 600000,
+      "inheritEnv": ["SKSE_DEVKIT_ROOT", "VCPKG_ROOT", "VCPKG_DEFAULT_TRIPLET", "VSINSTALLDIR", "VCINSTALLDIR", "VCToolsInstallDir", "VCToolsVersion", "VisualStudioVersion", "WindowsSdkDir", "WindowsSDKVersion", "UniversalCRTSdkDir", "UCRTVersion", "VSCMD_ARG_TGT_ARCH", "VSCMD_VER", "INCLUDE", "LIB", "LIBPATH", "EXTERNAL_INCLUDE", "CXX", "CC", "CMAKE_RC_COMPILER", "CMAKE_MT"],
+      "allowedSeats": ["*"]
+    },
+    {
+      "id": "skse.validate-artifacts",
+      "description": "Locate and hash the built plugin DLL and optional PDB; fail when no valid DLL exists.",
+      "category": "skse-devkit",
+      "command": "node",
+      "args": ["${workspace}/.ai-bus/bin/skse-devkit.js", "validate-artifacts", "--workspace", "${workspace}"],
+      "cwd": "${workspace}",
+      "timeoutMs": 60000,
+      "inheritEnv": ["SKSE_DEVKIT_ROOT"],
+      "allowedSeats": ["*"]
+    },
+    {
+      "id": "skse.search.plugin-entrypoint",
+      "description": "Bounded read-only CommonLib search for the SKSEPlugin_Load entrypoint.",
+      "category": "skse-devkit",
+      "command": "node",
+      "args": ["${workspace}/.ai-bus/bin/skse-devkit.js", "search", "--workspace", "${workspace}", "--query", "SKSEPlugin_Load"],
+      "cwd": "${workspace}",
+      "timeoutMs": 60000,
+      "inheritEnv": ["SKSE_DEVKIT_ROOT"],
+      "allowedSeats": ["*"]
     }
   ]
 }

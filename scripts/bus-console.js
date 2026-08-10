@@ -23,19 +23,23 @@
  */
 
 const { spawn, spawnSync } = require('node:child_process');
+const fs = require('node:fs');
 const path = require('node:path');
 
 const REPO = path.resolve(__dirname, '..');
-const DIST = path.join(REPO, 'dist');
+const DIST = fs.existsSync(path.join(REPO, 'dist', 'brain', 'cli.js'))
+  ? path.join(REPO, 'dist')
+  : path.join(REPO, 'bin');
 
 function option(name, fallback) {
   const index = process.argv.indexOf(name);
   return index >= 0 && index + 1 < process.argv.length ? process.argv[index + 1] : fallback;
 }
 
-const root = option('--root', path.resolve(REPO, '..', 'ai-bus'));
-const seats = option('--brains', '').split(',').map((s) => s.trim()).filter(Boolean);
-const brainFile = option('--brain', path.join(REPO, 'brains', 'ensouled-seat.js'));
+const defaultRoot = path.basename(REPO) === '.ai-bus' ? path.dirname(REPO) : process.cwd();
+const root = path.resolve(option('--root', defaultRoot));
+const seats = option('--brains', 'claude,codex,grok').split(',').map((s) => s.trim()).filter(Boolean);
+const brainFile = path.resolve(option('--brain', path.join(REPO, 'brains', 'agent-seat.js')));
 
 if (seats.length === 0) {
   console.error('usage: bus-console --root <bus root> --brains <seat,seat>');
@@ -90,6 +94,7 @@ if (children.length === 0) {
 console.log('');
 console.log(`bus console: ${children.length} brain(s) attached to this window.`);
 console.log('Closing this window stops them. Ctrl+C stops them cleanly.');
+console.log('Brains continue after each wake; a clarification request leaves the goal open.');
 console.log('');
 
 function shutdown() {

@@ -103,6 +103,48 @@ test('capability child receives a minimal environment unless names are explicitl
   assert.equal(receipt.stdout.tail, 'absent');
 });
 
+test('capability child receives an explicitly inherited dev-kit root without leaking unrelated values', async (t) => {
+  const kitName = 'SKSE_DEVKIT_ROOT';
+  const secretName = 'PORTABLE_AI_BUS_UNRELATED_SECRET';
+  process.env[kitName] = path.join(os.tmpdir(), 'configured-skse-kit');
+  process.env[secretName] = 'must-not-leak';
+  const root = await workspace([{
+    id: 'devkit-env',
+    command: process.execPath,
+    args: ['-e', `process.stdout.write(JSON.stringify({ kit: process.env.${kitName}, secret: process.env.${secretName} || null }))`],
+    inheritEnv: [kitName],
+    timeoutMs: 5000
+  }]);
+  t.after(async () => {
+    delete process.env[kitName];
+    delete process.env[secretName];
+    await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  });
+  const receipt = await new CapabilityRunner(root).run('devkit-env');
+  assert.deepEqual(JSON.parse(receipt.stdout.tail), { kit: process.env[kitName], secret: null });
+});
+
+test('shipped capability template exposes a fixed safe Dev Kit workflow to every registered seat', async () => {
+  const template = JSON.parse(await fs.readFile(path.resolve(__dirname, '..', 'templates', 'capabilities.json'), 'utf8'));
+  const byId = new Map(template.capabilities.map((item) => [item.id, item]));
+  for (const id of [
+    'skse.doctor', 'skse.configure', 'skse.build', 'skse.test',
+    'skse.validate-artifacts', 'skse.search.plugin-entrypoint'
+  ]) {
+    const capability = byId.get(id);
+    assert.ok(capability, `missing ${id}`);
+    assert.deepEqual(capability.allowedSeats, ['*']);
+    assert.equal(capability.command, 'node');
+    assert.ok(capability.args.includes('${workspace}/.ai-bus/bin/skse-devkit.js'));
+  }
+  for (const id of ['skse.doctor', 'skse.configure', 'skse.build', 'skse.test']) {
+    assert.ok(byId.get(id).inheritEnv.includes('SKSE_DEVKIT_ROOT'));
+    assert.ok(byId.get(id).inheritEnv.includes('VCPKG_ROOT'));
+    assert.ok(byId.get(id).inheritEnv.includes('INCLUDE'));
+    assert.ok(byId.get(id).inheritEnv.includes('LIB'));
+  }
+});
+
 test('timeout terminates descendants in the owned process tree', async (t) => {
   const root = await workspace([]);
   const marker = path.join(root, 'grandchild-survived.txt');

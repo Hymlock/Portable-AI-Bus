@@ -13,6 +13,68 @@ import { cliBusClient } from './bus-client';
 import { MailboxStore } from '../mailbox';
 import { runBrain } from './runner';
 
+export type ExhaustionHandlerOptions = {
+  seat: string;
+  root: string;
+  log?: (event: string, data?: unknown) => void;
+};
+
+/**
+ * Build the whole-chain exhaustion handler once per brain process.
+ *
+ * The compare-and-move guard prevents a non-holder (or a stale status read) from stealing an
+ * active baton. The cooldown prevents three exhausted seats from endlessly handing the same
+ * baton around while allowing a later, genuinely separate exhaustion episode to recover.
+ */
+export function createExhaustionHandler(options: ExhaustionHandlerOptions) {
+  const { seat, root, log = () => {} } = options;
+  let lastHandoffAt = 0;
+  const handoffCooldownMs = 5 * 60_000;
+  return async ({ detail }: { seat: string; detail: string }) => {
+    if (Date.now() - lastHandoffAt < handoffCooldownMs) {
+      log('exhausted-handoff-suppressed', { seat, detail });
+      return;
+    }
+    const mailbox = new MailboxStore(root);
+    const state = await mailbox.status();
+    if (state.baton?.holder !== seat) {
+      log('exhausted-not-holder', { seat, holder: state.baton?.holder ?? null, detail });
+      return;
+    }
+    const ordered = state.agents;
+    const ownIndex = ordered.indexOf(seat);
+    const successor = ordered.length > 1
+      ? ordered[(ownIndex + 1 + ordered.length) % ordered.length]
+      : undefined;
+    if (!successor || successor === seat) {
+      log('exhausted-no-successor', { seat, detail });
+      return;
+    }
+    const result = await mailbox.reassignBaton({
+      to: successor,
+      reason: `${seat} exhausted every provider (${detail})`,
+      expectedFrom: seat,
+      force: true
+    });
+    if (!result.moved) {
+      log('exhausted-handoff-refused', result);
+      return;
+    }
+    lastHandoffAt = Date.now();
+    log('baton-handed-off', result);
+    await mailbox.send({
+      from: seat,
+      to: successor,
+      kind: 'handoff',
+      subject: `${seat} is out of providers - baton is yours`,
+      body: `Every provider in my chain is spent: ${detail}\n\n` +
+            'I am still listening and will pick work back up when credit returns. ' +
+            'Taking the baton because a holder that cannot act is a stall.',
+      keepBaton: false
+    });
+  };
+}
+
 function option(argv: string[], name: string): string | undefined {
   const index = argv.indexOf(name);
   return index >= 0 && index + 1 < argv.length ? argv[index + 1] : undefined;
@@ -93,6 +155,8 @@ export async function main(argv: string[]): Promise<number> {
     process.once('SIGTERM', stop);
   });
 
+  const onExhausted = createExhaustionHandler({ seat, root, log });
+
   const summary = await runBrain({
     seat,
     brain,
@@ -100,33 +164,7 @@ export async function main(argv: string[]): Promise<number> {
     // The endgame: this seat has spent every provider in its chain. It cannot think, so it
     // must not keep the baton - a holder that cannot act is the stall we spent this project
     // diagnosing. Hand off to any other registered seat and say why.
-    onExhausted: async ({ detail }) => {
-      const mailbox = new MailboxStore(root);
-      const state = await mailbox.status();
-      const successor = state.agents.find((agent: string) => agent !== seat);
-      if (!successor) {
-        log('exhausted-no-successor', { seat, detail });
-        return;
-      }
-      const result = await mailbox.reassignBaton({
-        to: successor,
-        reason: `${seat} exhausted every provider (${detail})`,
-        force: true
-      });
-      log('baton-handed-off', result);
-      await mailbox.send({
-        from: seat,
-        to: successor,
-        kind: 'handoff',
-        subject: `${seat} is out of providers - baton is yours`,
-        body: `Every provider in my chain is spent: ${detail}
-
-` +
-              'I am still listening and will pick work back up when credit returns. ' +
-              'Taking the baton because a holder that cannot act is a stall.',
-        keepBaton: false
-      });
-    },
+    onExhausted,
     budgetPerWake: integerOption(argv, '--budget', 30),
     listenSeconds: integerOption(argv, '--listen-s', 300),
     log,

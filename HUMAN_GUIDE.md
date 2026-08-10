@@ -12,13 +12,25 @@ It stages a small control kit into the repo (`.ai-bus/`) and gives you:
 It does **not** create a magical always-on multiplayer AI chat. Someone (you, or an agent session you already started) still has to act on the next message.
 
 ## Normal human path
-1. Install or F5-run the extension.
+1. Install Node.js 20+ and install the VSIX with **Extensions: Install from VSIX...** (or F5-run
+   the extension for development).
 2. Open your project folder.
 3. In VS Code Chat, talk to **`@ai-bus`**.
 4. Say **`initialize the bus for this repo`**.
 5. Start a task, watch status, and point each AI at the handoff docs + mailbox.
 
 You can do the same from the Command Palette: search for **Portable AI Bus**.
+
+After initialization, Claude, Codex, or Grok can start the complete Bus with the same command:
+
+```bash
+node .ai-bus/scripts/bus-up.js --root . --console claude
+```
+
+Change `--console` to the initiating provider. All three brains start by default and no seat is
+tied to one vendor. On Windows, `node .ai-bus/scripts/bus-console.js --root .` uses one visible
+shared console to prevent provider subprocess flashes. Authenticate at least two provider CLIs
+first; `.ai-bus/docs/AUTH.md` explains no-API-key routes.
 
 ## The files you will see
 After initialize:
@@ -53,6 +65,9 @@ There is also a configurable **halt policy** so two bots cannot congratulate eac
 | Structured completion | step: continue; goal: halt | Record a summary and evidence, then apply the matching policy |
 
 Use Command Palette → **Configure Round, Step, and Goal Halting**, **Record Step Completion**, or **Record Goal Completion**. Completion is never guessed from ordinary model prose; someone must record it explicitly. **Resume Workspace Bus** clears the current halt but preserves the configured policy and history. If the hard round cap caused the halt, add more rounds with the mailbox CLI before sending again.
+
+Clarification is not completion. Send the question, name the open dependency, and leave the goal
+open until the answer arrives.
 
 ### Commands humans use
 - `@ai-bus mailbox status`
@@ -147,7 +162,10 @@ While the extension is open, a timer checks unread counts and worker-lease stale
 The first check establishes a quiet baseline, and later checks notify only on new transitions. The timer never invokes a model, reads/acknowledges mail, releases a claim, or revives a stopped process. It reminds the human; it does not replace the human.
 
 ## Optional: SKSE DevKit
-If you build Skyrim SKSE plugins, the bus can **talk to a DevKit you already installed**. It does **not** download or ship compilers, CommonLib, or game files.
+If you build Skyrim SKSE plugins, the VSIX can **talk to a DevKit you already installed**. An
+offline distribution may include an operator-supplied kit beside the VSIX; the release builder
+copies it and hashes every file but does not grant redistribution rights or supply missing
+MSVC/Windows SDK components. See `.ai-bus/docs/DISTRIBUTION.md`.
 
 Point it with `SKSE_DEVKIT_ROOT` or put a kit under `.ai-bus/toolchains/skse-devkit`.
 
@@ -173,3 +191,5 @@ or `@ai-bus` in VS Code chat.
 - How we verify builds: `TESTING.md`
 - Licence and “what we did not copy”: `docs/PROVENANCE.md`
 - Full technical surface: `README.md`
+- Provider login: `docs/AUTH.md`
+- Install, update, recovery, uninstall, and Dev Kit bundle: `docs/DISTRIBUTION.md`
