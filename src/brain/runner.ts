@@ -99,6 +99,13 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
 
   const summary: RunnerSummary = { wakes: 0, cappedWakes: 0, errors: 0, stoppedBy: 'signal' };
   let reason: WakeReason = 'startup';
+  /**
+   * Did the last turn end with work still to do?
+   *
+   * Carried across iterations so a seat can finish something that does not fit in one wake.
+   * Without it, a long task can only ever advance when someone happens to send mail.
+   */
+  let hasOpenWork = false;
 
   try {
     while (!stopped) {
@@ -113,7 +120,7 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
       // hit twice; draining first makes it structurally impossible here.
       let messages = await bus.read(seat);
 
-      if (messages.length === 0 && reason !== 'startup') {
+      if (messages.length === 0 && reason !== 'startup' && !hasOpenWork) {
         const outcome = await bus.listen(seat, listenSeconds);
         if (stopped) break;
         reason = outcome === 'mail' ? 'mail' : 'timeout';
@@ -122,6 +129,11 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
         }
       } else if (messages.length > 0) {
         reason = 'mail';
+      } else if (hasOpenWork) {
+        // Do not spend a listen window on a seat that already knows what it is doing. Blocking
+        // here for `listenSeconds` is what turned "I have more to do" into a five-minute pause
+        // per step, which is indistinguishable from a stall to anyone watching.
+        reason = 'timeout';
       }
 
       summary.wakes += 1;
@@ -147,7 +159,15 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
       // `thinkWhenIdle` restores the old behaviour for anyone who wants a seat that acts
       // unprompted. It is off by default because "no mail" is the overwhelmingly common case and
       // the cost is paid on every seat, forever.
-      if (reason === 'timeout' && messages.length === 0 && !thinkWhenIdle) {
+      // ...unless the seat left work UNFINISHED. `done: false` means "I have more to do", and a
+      // seat that says so must get another turn without waiting for someone to write to it.
+      //
+      // This is the regression that made the idle-skip dangerous. Two seats were given
+      // multi-step audits, acknowledged them, and stopped - grok logged `messages:1, calls:0`
+      // and worker's own note read "Audit remains open". Nothing was broken and nothing was
+      // working: no mail meant no wake, no wake meant no thinking, and open work could never
+      // resume. Silence again looked exactly like progress.
+      if (reason === 'timeout' && messages.length === 0 && !thinkWhenIdle && !hasOpenWork) {
         log('wake-idle-skipped', { seat });
         continue;
       }
@@ -195,6 +215,12 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
         }
       }
 
+      // Carry "unfinished" into the next iteration, but NOT past an exhausted chain or a capped
+      // wake. A seat with no provider left cannot continue by trying harder, and a brain that
+      // just burned its whole budget is the last thing to hand another turn to immediately -
+      // both would spin at full speed on a problem they cannot solve.
+      hasOpenWork = result.done === false && !result.exhausted && !result.capped;
+
       log('wake-complete', {
         seat,
         reason,
@@ -202,6 +228,7 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
         calls,
         done: result.done,
         capped: result.capped ?? false,
+        continuing: hasOpenWork,
         note: result.note
       });
 

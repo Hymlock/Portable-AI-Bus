@@ -1,0 +1,113 @@
+const assert = require('node:assert/strict');
+const test = require('node:test');
+const { runBrain } = require('../dist/brain/runner.js');
+
+/** A bus that delivers one task and then goes quiet forever, like a real one. */
+function quietBus(firstMessages) {
+  let delivered = false;
+  const calls = { listen: 0, read: 0 };
+  return {
+    calls,
+    client: {
+      async listen() { calls.listen += 1; return 'timeout'; },
+      async read() {
+        calls.read += 1;
+        if (delivered) return [];
+        delivered = true;
+        return firstMessages;
+      },
+      tools() {
+        return {
+          async send() { return {}; }, async status() { return {}; },
+          async claim() { return {}; }, async release() { return {}; }, async runCapability() { return {}; }
+        };
+      }
+    }
+  };
+}
+
+const task = [{ seq: 1, from: 'hymlock', to: 'grok', kind: 'task', subject: 'audit', body: 'multi-step work' }];
+
+test('a seat that says done:false gets another turn without waiting for mail', async () => {
+  // The live failure. Two seats were given multi-step audits, acknowledged them, and stopped:
+  // grok logged `messages:1, calls:0` and worker's own note read "Audit remains open". Nothing
+  // was broken and nothing was progressing - no mail meant no wake, no wake meant no thinking,
+  // so open work could never resume. Silence looked exactly like progress, again.
+  const bus = quietBus(task);
+  let turns = 0;
+  const brain = {
+    async takeTurn() {
+      turns += 1;
+      return { done: turns >= 3, note: `step ${turns}` };   // finishes on the third turn
+    }
+  };
+
+  // Bounded to exactly the three turns the work needs, so every listen counted here would be
+  // one taken BETWEEN the seat's own steps. Allowing extra wakes would also count the ordinary
+  // listens a finished seat makes while waiting for new mail, which are correct.
+  await runBrain({ seat: 'grok', brain, bus: bus.client, maxWakes: 3, listenSeconds: 300 });
+
+  assert.equal(turns, 3, 'the brain must be able to finish work that spans several turns');
+  assert.equal(bus.calls.listen, 0,
+    'and must NOT block on a 300s listen between its own steps - that reads as a stall');
+});
+
+test('CONTROL: without done:false the same seat stops after one turn', async () => {
+  // Proves the test detects the bug rather than passing by construction. A brain that always
+  // reports finished must idle-skip, which is the behaviour that keeps a quiet bus cheap.
+  const bus = quietBus(task);
+  let turns = 0;
+  const brain = { async takeTurn() { turns += 1; return { done: true }; } };
+
+  await runBrain({ seat: 'grok', brain, bus: bus.client, maxWakes: 8, listenSeconds: 300 });
+
+  assert.equal(turns, 1, 'a finished seat must not keep thinking - that is what costs money');
+});
+
+test('open work does NOT survive an exhausted chain', async () => {
+  // A seat with no provider left cannot continue by trying harder. Carrying "unfinished" past
+  // exhaustion would spin at full speed on a problem no amount of turns can solve.
+  const bus = quietBus(task);
+  let turns = 0;
+  const brain = {
+    async takeTurn() { turns += 1; return { done: false, exhausted: true, note: 'no providers' }; }
+  };
+
+  await runBrain({ seat: 'grok', brain, bus: bus.client, maxWakes: 6, listenSeconds: 300, onExhausted: async () => {} });
+
+  assert.equal(turns, 1, 'exhaustion ends the continuation, whatever `done` says');
+});
+
+test('open work does NOT survive a capped wake', async () => {
+  // A brain that just burned its entire per-wake budget is the last thing to hand another turn
+  // to immediately.
+  const bus = quietBus(task);
+  let turns = 0;
+  const brain = {
+    async takeTurn({ tools }) {
+      turns += 1;
+      for (let i = 0; i < 50; i += 1) await tools.status();   // blow the budget
+      return { done: false };
+    }
+  };
+
+  await runBrain({ seat: 'grok', brain, bus: bus.client, maxWakes: 6, listenSeconds: 300, budgetPerWake: 3 });
+
+  assert.equal(turns, 1, 'a capped wake must not immediately earn another one');
+});
+
+test('the log says whether a seat is continuing, so a watcher can tell work from a stall', async () => {
+  const bus = quietBus(task);
+  const events = [];
+  let turns = 0;
+  const brain = { async takeTurn() { turns += 1; return { done: turns >= 2 }; } };
+
+  await runBrain({
+    seat: 'grok', brain, bus: bus.client, maxWakes: 6, listenSeconds: 300,
+    log: (event, data) => events.push({ event, data })
+  });
+
+  const completions = events.filter((e) => e.event === 'wake-complete');
+  assert.equal(completions[0].data.continuing, true, 'first turn left work open');
+  assert.equal(completions[1].data.continuing, false, 'second turn finished it');
+});
