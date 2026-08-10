@@ -49,6 +49,19 @@ test('Unicode messages round-trip and batch read marks every selected message', 
   assert.equal((await store.inbox('codex')).length, 0);
 });
 
+test('replacing a goal clears assignments from the previous coordination contract', async () => {
+  await store.setGoal({ statement: 'old work', doneWhen: 'old evidence exists', setBy: 'operator' });
+  await store.assignGoal('codex', 'implement the old work');
+  assert.equal((await store.status()).goal.assignments.codex, 'implement the old work');
+
+  const replaced = await store.setGoal({
+    statement: 'new work',
+    doneWhen: 'new evidence exists',
+    setBy: 'operator'
+  });
+  assert.deepEqual(replaced.goal.assignments, {});
+});
+
 test('a delayed acknowledgement cannot steal the baton from a newer holder', async () => {
   await store.send({ from: 'codex', to: 'claude', subject: 'work', body: 'take this task' });
   assert.equal((await store.status()).baton.holder, 'claude');

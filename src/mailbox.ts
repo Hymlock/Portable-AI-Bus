@@ -549,7 +549,11 @@ export class MailboxStore {
         doneWhen: goal.doneWhen.trim(),
         setAt: nowIso(),
         setBy: goal.setBy ?? null,
-        assignments: state.goal?.assignments ?? {}
+        // A replacement goal is a new coordination contract. Carrying the previous goal's
+        // assignments forward briefly tells every returning seat to perform obsolete work and
+        // is especially dangerous when a brain wakes between `goal` and the later `assign`
+        // commands. Require the operator to assign the new goal deliberately.
+        assignments: {}
       };
       await this.writeStateUnsafe(state);
       await this.appendLineUnsafe(

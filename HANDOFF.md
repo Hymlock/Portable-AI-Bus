@@ -12,6 +12,8 @@ working tree is clean. Read this top to bottom before starting anything.
 > model providers from the durable coordination root. This was required for the project's
 > central `Projects/ai-bus` topology; without it, agents could acknowledge repository tasks but
 > launched their provider in a non-repository directory.
+> A subsequent live goal change exposed and fixed stale assignment carryover: replacing a goal
+> now starts with an empty assignment map, so no brain can wake into work owned by the old goal.
 
 ## Two open defects. Fix these before new work.
 
