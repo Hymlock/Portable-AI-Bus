@@ -136,10 +136,36 @@ export function buildWakePrompt(seat: string, messages: BrainMessage[]): string 
  * rather than a throw â€” a brain that dies on bad model text is the stall we are removing.
  */
 export function parsePlan(text: string): { plan: AgentPlan; malformed: boolean } {
-  const trimmed = text.trim();
+  let trimmed = text.trim();
   if (!trimmed) {
     return { plan: { actions: [], done: true, note: 'empty-model-output' }, malformed: true };
   }
+
+  // Provider adapters normally remove their transport envelopes, but the plan boundary must
+  // remain safe when one leaks through. Live Grok output reached this function as
+  // `{ "text": "{\"actions\":[...] }" }`; treating that as an empty plan bought an
+  // unnecessary repair call. Peel only known answer fields, with a hard bound, until the
+  // object itself has an actions array. This also covers nested CLI/SDK transports without
+  // weakening action validation below.
+  for (let depth = 0; depth < 12; depth += 1) {
+    const start = trimmed.indexOf('{');
+    const end = trimmed.lastIndexOf('}');
+    if (start < 0 || end <= start) {
+      return { plan: { actions: [], done: true, note: 'no-json-object' }, malformed: true };
+    }
+    try {
+      const candidate = JSON.parse(trimmed.slice(start, end + 1)) as Record<string, unknown>;
+      if (Array.isArray(candidate.actions)) break;
+      const nested = ['text', 'result', 'response', 'content', 'message']
+        .map((key) => candidate[key])
+        .find((value): value is string => typeof value === 'string' && value.trim().length > 0);
+      if (!nested) break;
+      trimmed = nested.trim();
+    } catch {
+      break;
+    }
+  }
+
   const start = trimmed.indexOf('{');
   const end = trimmed.lastIndexOf('}');
   if (start < 0 || end <= start) {
@@ -665,4 +691,3 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
 export const agentBrainFactory = (provider: ModelProvider): BrainFactory => {
   return ({ seat, log }) => createAgentBrain({ seat, provider, log });
 };
-

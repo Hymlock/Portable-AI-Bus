@@ -62,6 +62,19 @@ test('parsePlan accepts bare JSON and rejects fences-without-object as malformed
   assert.equal(prose.plan.note, 'no-json-object');
 });
 
+test('parsePlan unwraps provider answer envelopes at the final safety boundary', () => {
+  const plan = JSON.stringify({
+    actions: [{ type: 'send', to: 'codex', kind: 'ack', subject: 'received', body: 'working' }],
+    done: false
+  });
+  const wrapped = JSON.stringify({ text: JSON.stringify({ response: plan }) });
+  const parsed = parsePlan(wrapped);
+  assert.equal(parsed.malformed, false);
+  assert.equal(parsed.plan.done, false);
+  assert.equal(parsed.plan.actions.length, 1);
+  assert.equal(parsed.plan.actions[0].type, 'send');
+});
+
 test('parsePlan rejects type-only tool actions before they reach the Bus', () => {
   const missingId = parsePlan('{"actions":[{"type":"capability"}],"done":true}');
   assert.equal(missingId.malformed, true);
