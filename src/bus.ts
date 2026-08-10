@@ -567,9 +567,38 @@ export class WorkspaceBus {
     await this.assertContainedPath(root, path.join(root, 'tmp', 'ai-prompts'), 'prompt artifact directory');
     await this.assertContainedPath(root, paths.busDir, 'workspace bus directory');
     await fs.rm(path.join(root, 'tmp', 'ai-prompts'), { recursive: true, force: true });
-    await fs.rm(paths.busDir, { recursive: true, force: true });
-    await this.clearExcludeFile(paths);
+    const preservedToolchains = await this.removeBusDirectoryPreservingToolchains(paths);
+    if (preservedToolchains) {
+      // Toolchains are operator-owned payloads, not staged Bus files. Keep the surviving
+      // directory out of Git after uninstalling the broader `.ai-bus/` exclusion.
+      await this.updateExcludeFile(paths, ['.ai-bus/toolchains/']);
+    } else {
+      await this.clearExcludeFile(paths);
+    }
     await fs.rm(this.ownershipLedgerPath(root), { force: true });
+  }
+
+  private async removeBusDirectoryPreservingToolchains(paths: BusPaths): Promise<boolean> {
+    let entries: string[];
+    try {
+      entries = await fs.readdir(paths.busDir);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+      throw error;
+    }
+
+    const preservedToolchains = entries.includes('toolchains');
+    for (const entry of entries) {
+      if (entry === 'toolchains') continue;
+      // `entry` came from readdir rather than caller input. Removing each immediate child
+      // also unlinks a hostile junction instead of traversing it, while the containing
+      // `.ai-bus` path has already passed assertContainedPath above.
+      await fs.rm(path.join(paths.busDir, entry), { recursive: true, force: true });
+    }
+    if (!preservedToolchains) {
+      await fs.rm(paths.busDir, { recursive: true, force: true });
+    }
+    return preservedToolchains;
   }
 
   async isInitialized(root: string): Promise<boolean> {
@@ -628,6 +657,7 @@ export class WorkspaceBus {
       { from: 'brains', to: path.join(paths.busDir, 'brains') },
       { from: 'scripts/bus-up.js', to: path.join(paths.busDir, 'scripts', 'bus-up.js') },
       { from: 'scripts/bus-console.js', to: path.join(paths.busDir, 'scripts', 'bus-console.js') },
+      { from: 'scripts/bus-tick.js', to: path.join(paths.busDir, 'scripts', 'bus-tick.js') },
       { from: 'node_modules/node-pty', to: path.join(paths.busDir, 'node_modules', 'node-pty') },
       { from: 'node_modules/@anthropic-ai/sdk', to: path.join(paths.busDir, 'node_modules', '@anthropic-ai', 'sdk') },
       { from: 'node_modules/@babel/runtime', to: path.join(paths.busDir, 'node_modules', '@babel', 'runtime') },

@@ -8,6 +8,7 @@ const vscode = require('vscode');
 const net = require('node:net');
 const { promisify } = require('node:util');
 const { credentialWorkspaceKey } = require('../dist/workspace-key.js');
+const { WorkspaceBus } = require('../dist/bus.js');
 
 const execFileAsync = promisify(execFile);
 
@@ -21,6 +22,7 @@ async function run() {
   if (process.env.PAB_EXPECT_INSTALLED === '1') await assertInstalledExtension();
   await fs.mkdir(path.join(first, 'docs'), { recursive: true });
   await fs.mkdir(path.join(first, '.git', 'info'), { recursive: true });
+  await fs.mkdir(path.join(second, '.git', 'info'), { recursive: true });
   await fs.mkdir(path.join(first, '.ai-bus'), { recursive: true });
   await fs.writeFile(path.join(first, 'CLAUDE.md'), 'project-owned claude instructions\n', 'utf8');
   await fs.writeFile(path.join(first, 'docs', 'ai-plan.md'), 'project-owned plan\n', 'utf8');
@@ -38,7 +40,7 @@ async function run() {
     '.ai-bus/bin/mailbox.js', '.ai-bus/bin/harness.js', '.ai-bus/bin/worker-client.js',
     '.ai-bus/bin/workspace-key.js', '.ai-bus/bin/brain/cli.js',
     '.ai-bus/bin/brain/process-host.js', '.ai-bus/brains/agent-seat.js',
-    '.ai-bus/scripts/bus-up.js', '.ai-bus/scripts/bus-console.js',
+    '.ai-bus/scripts/bus-up.js', '.ai-bus/scripts/bus-console.js', '.ai-bus/scripts/bus-tick.js',
     '.ai-bus/node_modules/node-pty/package.json',
     '.ai-bus/node_modules/@anthropic-ai/sdk/package.json',
     '.ai-bus/HUMAN_GUIDE.md', '.ai-bus/OPERATOR.md', '.ai-bus/TESTING.md',
@@ -184,6 +186,20 @@ async function run() {
     credentialDir,
     port: endpoint.port
   }, null, 2)}\n`, 'utf8');
+
+  await vscode.commands.executeCommand('portableAiBus.stopHarness');
+  const devKitMarker = path.join(second, '.ai-bus', 'toolchains', 'skse-devkit', 'operator-owned.txt');
+  await fs.mkdir(path.dirname(devKitMarker), { recursive: true });
+  await fs.writeFile(devKitMarker, 'operator-owned Dev Kit payload\n', 'utf8');
+  // Exercise WorkspaceBus.remove directly so the modal command cannot turn a cancelled
+  // confirmation into a false-positive test. Removal does not use ExtensionContext.
+  await new WorkspaceBus({}).remove(second);
+  assert.equal(await fs.readFile(devKitMarker, 'utf8'), 'operator-owned Dev Kit payload\n');
+  await assert.rejects(fs.access(path.join(second, '.ai-bus', 'bin')), { code: 'ENOENT' });
+  await assert.rejects(fs.access(path.join(second, '.ai-bus', 'install-state.json')), { code: 'ENOENT' });
+  const postRemoveExclude = await fs.readFile(path.join(second, '.git', 'info', 'exclude'), 'utf8');
+  assert.match(postRemoveExclude, /^\.ai-bus\/toolchains\/$/m);
+  assert.doesNotMatch(postRemoveExclude, /^\.ai-bus\/$/m);
   console.log('Portable AI Bus VS Code integration smoke passed.');
 }
 
@@ -198,7 +214,7 @@ async function assertInstalledExtension() {
   for (const relative of [
     'dist/extension.js', 'dist/harness.js', 'dist/mailbox.js', 'dist/worker-client.js',
     'dist/workspace-key.js', 'dist/brain/cli.js', 'dist/brain/process-host.js',
-    'brains/agent-seat.js', 'scripts/bus-up.js', 'scripts/bus-console.js',
+    'brains/agent-seat.js', 'scripts/bus-up.js', 'scripts/bus-console.js', 'scripts/bus-tick.js',
     'node_modules/node-pty/package.json', 'node_modules/@anthropic-ai/sdk/package.json',
     'bin/validate_ai_bus.js', 'providers/providers.json',
     'docs/AUTH.md', 'docs/DISTRIBUTION.md',

@@ -12,6 +12,7 @@
     "brains/**",
     "scripts/bus-up.js",
     "scripts/bus-console.js",
+    "scripts/bus-tick.js",
     "scripts/build-distribution.js",
     "node_modules/**",
     "providers/**",

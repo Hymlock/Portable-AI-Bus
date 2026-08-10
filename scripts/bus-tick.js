@@ -73,8 +73,18 @@ function liveBrains() {
 function busState() {
   try {
     const state = JSON.parse(fs.readFileSync(path.join(runtime, 'mailbox', 'state.json'), 'utf8'));
-    const unread = Object.entries(state.unread ?? {})
-      .filter(([, n]) => Number(n) > 0)
+    // Unread counts are not stored in state.json. They are derived from durable messages by
+    // MailboxStore.status(); reading a nonexistent `state.unread` made every tick claim
+    // `unread:none`, including when dozens of messages were waiting.
+    const counts = new Map();
+    const inbox = path.join(runtime, 'mailbox', 'inbox');
+    for (const file of fs.readdirSync(inbox).filter((name) => name.endsWith('.json')).sort()) {
+      const message = JSON.parse(fs.readFileSync(path.join(inbox, file), 'utf8'));
+      if (message.read !== true && typeof message.to === 'string') {
+        counts.set(message.to, (counts.get(message.to) ?? 0) + 1);
+      }
+    }
+    const unread = [...counts].sort(([left], [right]) => left.localeCompare(right))
       .map(([who, n]) => `${who}:${n}`);
     const heldSeconds = state.baton?.since
       ? Math.round((Date.now() - Date.parse(state.baton.since)) / 1000)
@@ -105,6 +115,7 @@ function tick() {
 
   const parts = [
     `tick ${stamp}`,
+    `pilot:${seat}`,
     `brains:${brains.length ? brains.join(',') : 'NONE'}`,
     `baton:${bus.baton}${bus.heldSeconds === null ? '' : `(${bus.heldSeconds}s)`}`,
     `round:${bus.round}/${bus.maxRounds}`,

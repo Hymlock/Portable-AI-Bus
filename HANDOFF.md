@@ -3,6 +3,14 @@
 Written by the `claude` seat at 96% of its session limit. Everything below is committed; the
 working tree is clean. Read this top to bottom before starting anything.
 
+> **Update after `ece4b57` (2026-08-10):** both blocking defects below are resolved. Workspace
+> removal preserves operator-owned `.ai-bus/toolchains/`, and provider-chain overrides now
+> require two distinct vendors rather than two spellings for one vendor. The same reliability
+> patch also retries transient Windows atomic-renames, prevents delayed acknowledgements from
+> stealing a newer baton, and packages/tests `bus-tick` for the pilot chat. Next open defect:
+> detached brains need an explicit worktree separate from the coordination root; without it,
+> they can acknowledge repository tasks but launch their provider in a non-repository temp dir.
+
 ## Two open defects. Fix these before new work.
 
 Both were found by the `codex` and `worker` seats during a documentation audit, and both are

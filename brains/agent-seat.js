@@ -12,6 +12,13 @@ const { createAgentBrain } = require(runtimeModule('brains/index.js'));
 const { resolveChain } = require(runtimeModule('providers.js'));
 
 const SUPPORTED_KINDS = new Set(['codex', 'grok', 'cli', 'oauth', 'api']);
+const VENDOR_BY_KIND = {
+  cli: 'Anthropic',
+  oauth: 'Anthropic',
+  api: 'Anthropic',
+  codex: 'OpenAI',
+  grok: 'xAI'
+};
 const DEFAULT_CHAINS = {
   claude: ['cli', 'codex', 'grok', 'oauth', 'api'],
   codex: ['codex', 'grok', 'cli', 'oauth', 'api'],
@@ -27,8 +34,12 @@ function providerConfigs(env = process.env, seat = 'default') {
   if (invalid.length > 0) {
     throw new Error(`Unsupported PORTABLE_AI_BUS_PROVIDER_CHAIN entries: ${invalid.join(', ')}`);
   }
-  if (new Set(kinds).size < 2) {
-    throw new Error('A bus seat provider chain must contain at least two distinct providers.');
+  const vendors = new Set(kinds.map((kind) => VENDOR_BY_KIND[kind]));
+  if (vendors.size < 2) {
+    throw new Error(
+      `A bus seat provider chain must contain at least two distinct vendors; ` +
+      `${kinds.join(',')} resolves only to ${[...vendors].join(',')}.`
+    );
   }
   return kinds.map((kind) => ({ kind }));
 }

@@ -49,6 +49,39 @@ test('Unicode messages round-trip and batch read marks every selected message', 
   assert.equal((await store.inbox('codex')).length, 0);
 });
 
+test('a delayed acknowledgement cannot steal the baton from a newer holder', async () => {
+  await store.send({ from: 'codex', to: 'claude', subject: 'work', body: 'take this task' });
+  assert.equal((await store.status()).baton.holder, 'claude');
+  await store.send({ from: 'claude', to: 'codex', kind: 'ack', subject: 'accepted', body: 'working' });
+  assert.equal((await store.status()).baton.holder, 'claude');
+
+  await store.send({ from: 'codex', to: 'codex', subject: 'new coordination', body: 'codex takes over' });
+  assert.equal((await store.status()).baton.holder, 'codex');
+  await store.send({ from: 'grok', to: 'claude', kind: 'ack', subject: 'late receipt', body: 'old work received' });
+  assert.equal((await store.status()).baton.holder, 'codex');
+});
+
+test('atomic mailbox publish retries transient Windows rename failures', async () => {
+  let failuresRemaining = 2;
+  let renameAttempts = 0;
+  const resilient = new MailboxStore(root, {
+    renameFile: async (source, destination) => {
+      renameAttempts += 1;
+      if (failuresRemaining > 0) {
+        failuresRemaining -= 1;
+        const error = new Error('simulated scanner lock');
+        error.code = 'EPERM';
+        throw error;
+      }
+      await fs.rename(source, destination);
+    }
+  });
+
+  await resilient.send({ from: 'codex', to: 'grok', subject: 'durable', body: 'survives contention' });
+  assert.equal(renameAttempts, 4, 'message and state publishes should succeed after two retries');
+  assert.equal((await resilient.inbox('grok'))[0].body, 'survives contention');
+});
+
 test('a non-repository mailbox does not spawn git merely to report status', async () => {
   const fakeBin = await fs.mkdtemp(path.join(os.tmpdir(), 'portable-ai-bus-fake-git-'));
   const marker = path.join(fakeBin, 'invoked.txt');

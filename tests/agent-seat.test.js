@@ -12,9 +12,24 @@ test('each built-in seat leads with its provider and immediately crosses vendors
     ['grok', 'codex']);
 });
 
-test('generic agent seat rejects a chain tied to one provider', () => {
+test('generic agent seat rejects every single-vendor chain, not merely duplicate kinds', () => {
   assert.throws(
     () => providerConfigs({ PORTABLE_AI_BUS_PROVIDER_CHAIN: 'codex' }, 'claude'),
-    /at least two distinct providers/
+    /at least two distinct vendors.*OpenAI/
+  );
+  assert.throws(
+    () => providerConfigs({ PORTABLE_AI_BUS_PROVIDER_CHAIN: 'oauth,api' }, 'claude'),
+    /at least two distinct vendors.*Anthropic/
+  );
+  assert.throws(
+    () => providerConfigs({ PORTABLE_AI_BUS_PROVIDER_CHAIN: 'cli,oauth,api' }, 'grok'),
+    /at least two distinct vendors.*Anthropic/
+  );
+});
+
+test('an override with two vendor families remains valid', () => {
+  assert.deepEqual(
+    providerConfigs({ PORTABLE_AI_BUS_PROVIDER_CHAIN: 'oauth,codex' }, 'claude'),
+    [{ kind: 'oauth' }, { kind: 'codex' }]
   );
 });

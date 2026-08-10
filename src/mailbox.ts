@@ -226,9 +226,14 @@ function messageFileName(seq: number, from: string, to: string) {
 
 export class MailboxStore {
   readonly paths: MailboxPaths;
+  private readonly renameFile: (source: string, destination: string) => Promise<void>;
 
-  constructor(root: string) {
+  constructor(
+    root: string,
+    options?: { renameFile?: (source: string, destination: string) => Promise<void> }
+  ) {
     const resolvedRoot = path.resolve(root);
+    this.renameFile = options?.renameFile ?? fs.rename;
     const mailboxDir = path.join(resolvedRoot, '.ai-bus', 'runtime', 'mailbox');
     this.paths = {
       root: resolvedRoot,
@@ -318,8 +323,15 @@ export class MailboxStore {
       // "nobody is doing anything" is indistinguishable from "someone is thinking hard", and
       // every stall on this project happened with both seats alive and heartbeating.
       // An ack keeps the baton by default: the sender has taken the work, not handed it back.
-      const keepsBaton = input.keepBaton ?? message.kind === 'ack';
-      state.baton = keepsBaton
+      const implicitAck = input.keepBaton === undefined && message.kind === 'ack';
+      const keepsBaton = input.keepBaton ?? implicitAck;
+      // A delayed acknowledgement from an old wake must not steal leadership from a newer
+      // holder. An ack still confirms work when its sender already holds the baton (the normal
+      // handoff path), while an explicit keepBaton value retains its existing semantics.
+      const staleAck = implicitAck && state.baton !== null && state.baton.holder !== message.from;
+      state.baton = staleAck
+        ? state.baton
+        : keepsBaton
         ? {
             holder: message.from,
             since: state.baton?.holder === message.from ? state.baton.since : message.createdAt,
@@ -1148,9 +1160,25 @@ export class MailboxStore {
     const temporary = `${filePath}.${process.pid}.${Math.random().toString(16).slice(2)}.tmp`;
     try {
       await fs.writeFile(temporary, content, 'utf8');
-      await fs.rename(temporary, filePath);
+      await this.renameWithRetry(temporary, filePath);
     } finally {
       await fs.rm(temporary, { force: true });
+    }
+  }
+
+  private async renameWithRetry(source: string, destination: string) {
+    const transient = new Set(['EPERM', 'EACCES', 'EBUSY']);
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        await this.renameFile(source, destination);
+        return;
+      } catch (error) {
+        if (attempt >= 7 || !transient.has(errorCode(error) ?? '')) throw error;
+        // Antivirus/indexer handles on Windows commonly clear within one scheduler slice.
+        // Keep the temporary file intact and retry the atomic publish; never delete the live
+        // destination as a workaround because that would create a data-loss window.
+        await delay(Math.min(100, 10 * (2 ** attempt)));
+      }
     }
   }
 
