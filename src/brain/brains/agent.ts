@@ -239,9 +239,17 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
           'any other name is refused and your message is lost.'
         : '';
 
+      /** Set when a round ended in `done` with nothing sent; carried into the next prompt. */
+      let unreportedTask = false;
+
       for (let round = 0; round < maxRounds; round += 1) {
         const base = buildWakePrompt(seat, messages);
-        const prompt = rosterLine ? `${rosterLine}\n\n${base}` : base;
+        const correction = unreportedTask
+          ? 'You marked the work done but sent NOTHING. A task is not finished until you have ' +
+            'sent your findings to the seat that asked. Either send a report now, or set ' +
+            '"done":false and keep working. Do not claim done again without a send action.\n\n'
+          : '';
+        const prompt = `${correction}${rosterLine ? `${rosterLine}\n\n` : ''}${base}`;
         let reply: ModelReply | ChainReply;
         try {
           reply = await provider.ask(prompt, { systemPrompt, sessionId });
@@ -360,6 +368,26 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
           }
           // Unfinished on purpose: the runner gives an open seat another turn.
           return { done: false, note: lastNote };
+        }
+
+        // DONE REQUIRES EVIDENCE. A seat handed a task may not declare itself finished without
+        // having sent something back.
+        //
+        // Every system-level cause of the stalled audits was fixed - continuation across turns,
+        // the seat roster, refused actions surfaced - and the seats STILL acknowledged a
+        // multi-step audit and reported done, having sent nothing. The prompt asked them not to.
+        // Asking is not a mechanism. This is: an unanswered task keeps the wake open, and the
+        // model is told precisely what is missing.
+        const wasAsked = messages.some((m) => String(m.kind ?? '').toLowerCase() === 'task');
+        const reported = plan.actions.some((a) => a.type === 'send');
+        if (plan.done !== false && wasAsked && !reported) {
+          log('done-without-report', { seat, round });
+          if (round + 1 < maxRounds) {
+            unreportedTask = true;
+            lastNote = durableNote('done claimed without a report - continuing');
+            continue;   // same mail context; the next prompt carries the correction
+          }
+          return { done: false, note: durableNote('done claimed without a report') };
         }
 
         if (plan.done !== false) {
