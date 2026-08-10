@@ -718,6 +718,20 @@ export function grokProvider(options: GrokProviderOptions = {}): ModelProvider {
       const { code, stdout, stderr } = await run(args, timeoutMs);
       const { text, error } = extractGrokAnswer(stdout);
 
+      // Diagnostic, not a fix. Three parser rewrites today were aimed at shapes I reconstructed
+      // from a 120-character log snippet, and the isolated shape parses fine while the live one
+      // does not - so the assumption about what actually arrives is wrong somewhere. Record the
+      // raw envelope's size and ENDS when extraction falls back to raw text, because a truncated
+      // stream and a differently-shaped one look identical in a snippet and demand opposite fixes.
+      if (!error && text === stdout.trim() && stdout.trim().startsWith('{')) {
+        log('grok-extract-fellback', {
+          rawLength: stdout.length,
+          head: stdout.slice(0, 60),
+          tail: stdout.slice(-60),
+          endsBalanced: stdout.trim().endsWith('}')
+        });
+      }
+
       if (error || code !== 0 || !text.trim()) {
         // The failure TEXT is returned rather than swallowed: `classifyFailure` reads it to tell
         // "not signed in" (auth - fall through now) from a rate limit (retry this same link).
