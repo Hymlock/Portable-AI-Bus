@@ -342,6 +342,21 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
         // A roster we could not read is not worth failing a wake over; the prompt just omits it.
       }
 
+      /**
+       * Capabilities this seat may actually run, for the same reason as the roster.
+       *
+       * Three seats burned whole wakes calling `shell`, `workspace_runner` and
+       * `read_write_test`. None exists. Nothing had ever told them what does, so each failure
+       * earned a repair round and each repair round produced a fresh guess - paid calls all the
+       * way down. An inventory costs one cheap call and ends the guessing.
+       */
+      let knownCapabilities: string[] = [];
+      try {
+        knownCapabilities = await tools.listCapabilities?.() ?? [];
+      } catch {
+        // Same rule: not knowing is survivable, failing the wake over it is not.
+      }
+
       const exhaustionNote = (reply: ChainReply) =>
         `chain-exhausted:attempts=${(reply.attempts ?? [])
           .map((a: { kind: string; reason?: string }) => `${a.kind}:${a.reason ?? 'error'}`)
@@ -357,6 +372,13 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
         ? `Seats that exist on this bus: ${knownSeats.join(', ')}. Address mail ONLY to these; ` +
           'any other name is refused and your message is lost.'
         : '';
+
+      // State the allowlist, or state that there is none. Silence is what produced the guessing:
+      // a seat told nothing assumes a shell exists somewhere and spends the wake looking for it.
+      const capabilityLine = knownCapabilities.length
+        ? `Capabilities you may run: ${knownCapabilities.join(', ')}. These are the ONLY ones; ` +
+          'any other id is refused. There is no shell, and no capability writes files.'
+        : 'No capabilities are available to you. You cannot run anything; report instead.';
 
       /** Set when a round ended in `done` with nothing sent; carried into the next prompt. */
       let unreportedTask = false;
@@ -391,7 +413,9 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
             'findings to the seat that asked, using a kind such as "report" or "finding" ' +
             '(never "ack"), or set "done":false and keep working.\n\n'
           : '';
-        const prompt = `${correction}${rosterLine ? `${rosterLine}\n\n` : ''}${base}`;
+        const prompt = [correction, rosterLine, capabilityLine, base]
+          .filter((part) => typeof part === 'string' && part.length > 0)
+          .join('\n\n');
         let reply: ModelReply | ChainReply;
         try {
           reply = await provider.ask(prompt, { systemPrompt, sessionId, responseSchema: PLAN_SCHEMA });
@@ -568,4 +592,5 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
 export const agentBrainFactory = (provider: ModelProvider): BrainFactory => {
   return ({ seat, log }) => createAgentBrain({ seat, provider, log });
 };
+
 

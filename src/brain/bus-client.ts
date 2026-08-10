@@ -147,6 +147,21 @@ export function cliBusClient(options: CliBusOptions): BusClient {
 
         async runCapability(id, timeoutMs = 60_000) {
           return tool(seat, 'capability_run', { id, timeoutMs }, timeoutMs + 10_000);
+        },
+
+        async listCapabilities() {
+          const result = await tool(seat, 'capability_list', {});
+          // Shape-tolerant on purpose: the harness may answer with an array of ids, an array of
+          // objects, or a wrapper. A brain that throws here would lose the whole wake over an
+          // inventory lookup, which is a worse outcome than simply not knowing.
+          const rows = Array.isArray(result)
+            ? result
+            : Array.isArray((result as { capabilities?: unknown })?.capabilities)
+              ? (result as { capabilities: unknown[] }).capabilities
+              : [];
+          return rows
+            .map((row) => (typeof row === 'string' ? row : (row as { id?: unknown })?.id))
+            .filter((id): id is string => typeof id === 'string' && id.length > 0);
         }
       };
     }

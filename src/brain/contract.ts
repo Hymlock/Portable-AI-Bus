@@ -51,6 +51,17 @@ export type BrainTools = {
   release(paths?: string[]): Promise<unknown>;
   /** Allowlisted, non-shell capabilities. Same guarantees as the harness tool. */
   runCapability(id: string, timeoutMs?: number): Promise<unknown>;
+  /**
+   * The capability ids this seat may actually run.
+   *
+   * Without it a model guesses, and guesses cost money. Three seats spent whole wakes calling
+   * `shell`, `workspace_runner` and `read_write_test` — none of which exist — because nothing
+   * ever told them the allowlist. Each failure earned a repair round, and each repair round was
+   * a paid call that produced another guess.
+   *
+   * Same lesson as the seat roster: a model given no inventory invents a plausible one.
+   */
+  listCapabilities(): Promise<string[]>;
 };
 
 export type WakeResult = {

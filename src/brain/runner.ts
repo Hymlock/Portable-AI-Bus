@@ -262,6 +262,11 @@ function wrapWithBudget(tools: BrainTools, onCall: () => void): BrainTools {
     status: () => { onCall(); return tools.status(); },
     claim: (paths, why) => { onCall(); return tools.claim(paths, why); },
     release: (paths) => { onCall(); return tools.release(paths); },
-    runCapability: (id, timeoutMs) => { onCall(); return tools.runCapability(id, timeoutMs); }
+    runCapability: (id, timeoutMs) => { onCall(); return tools.runCapability(id, timeoutMs); },
+    // Deliberately NOT counted against the wake budget. It is an inventory lookup the brain
+    // makes once to avoid guessing, and charging for it would push a seat toward guessing
+    // again - which is the behaviour that cost whole wakes to `shell`, `workspace_runner` and
+    // `read_write_test`, none of which exist.
+    listCapabilities: () => tools.listCapabilities()
   };
 }
