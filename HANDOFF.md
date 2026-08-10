@@ -1,140 +1,115 @@
-# Handoff — 2026-08-09, evening
+# Handoff — 2026-08-10
 
-> ## ⚠️ SUPERSEDED 2026-08-10. Read this box before believing anything below it.
->
-> This is a **point-in-time** handoff, kept because its failure record is still worth having.
-> Several of its statements are now false:
->
-> | This document says | Actually, as of 2026-08-10 |
-> |---|---|
-> | Brains are stopped | All four seats run — `claude`, `codex`, `grok`, `worker` |
-> | The flashes are unfixed | Fixed in `18d31aa` — provider CLIs are hosted in a **headless ConPTY** (`src/brain/process-host.ts`, 7 tests). Independent re-measurement was commissioned; see the mailbox |
-> | `mailbox reassign` does not exist | Implemented |
-> | `brains/ensouled-seat.js` names the bus after one project | Renamed to `agent-seat.js`; the old path is a deprecated shim |
-> | 161 tests | **188** |
->
-> **What is still true and still worth reading:** the seven attempts that did NOT work
-> (table below) and why, and the two dead theories — `git` is invoked by *absolute path*, so
-> PATH stripping cannot help; and stdio handles are not console *ownership*, so `stdio:
-> 'inherit'` alone cannot help. That is the section this file exists for.
->
-> Current state lives in `README.md` and `OPERATOR.md`. Do not take planning direction from here.
+Written by the `claude` seat at 96% of its session limit. Everything below is committed; the
+working tree is clean. Read this top to bottom before starting anything.
 
-Written by the `claude` seat as its session limit approached. Hymlock is continuing on Codex.
-Everything below is committed; nothing is in flight on disk.
+## Two open defects. Fix these before new work.
 
-## Read this first
+Both were found by the `codex` and `worker` seats during a documentation audit, and both are
+**product bugs, not doc bugs**. The documentation now warns about them; the code does not yet
+prevent them.
 
-**Brains are STOPPED, deliberately.** Not crashed. Console windows flash while they run (see
-below), and Hymlock asked for that to stop. Starting them again is a decision, not a repair.
+### 1. Remove Workspace Bus destroys an operator's Dev Kit
 
-**When the Anthropic session runs out, the `cli` link fails and every chain falls through to
-`codex` or `grok`.** That is the designed behaviour, and it is the thing the whole evening was
-about. It needs no intervention. If a seat goes quiet instead of falling through, that is a bug
-worth chasing.
+`removeUnlocked` in `src/bus.ts` (~line 570) runs `fs.rm(busDir, { recursive: true, force: true })`
+over the whole `.ai-bus` tree. The word `toolchain` appears **nowhere** in that file, so a
+multi-gigabyte kit at `.ai-bus/toolchains/skse-devkit` — where `DISTRIBUTION.md` tells operators
+to put it — is deleted with no preservation and no confirmation.
 
-## State
+**Fix:** preserve `toolchains/` across removal, or refuse and prompt when it is non-empty. A
+test should install a fixture there and assert it survives.
 
-Three vendors, three wallets, all verified live tonight:
+### 2. The founding constraint is not enforced
 
-| Link | Vendor | Auth | Verified |
-|---|---|---|---|
-| `cli` | Anthropic | existing Claude subscription | `pong`, 4.1 s |
-| `codex` | OpenAI | `Logged in using ChatGPT` | `pong`, 6.7 s |
-| `grok` | xAI | `grok login`, SuperGrok / X Premium+ | `pong`, 3.0 s |
+`brains/agent-seat.js:30` checks `new Set(kinds).size < 2` — distinct provider **kinds**, not
+distinct **vendors**. `PORTABLE_AI_BUS_PROVIDER_CHAIN=oauth,api` passes and is entirely
+Anthropic, so one exhausted account stops that seat. That is precisely the failure the whole
+chain design exists to prevent (*"if we run out of tokens on Codex our busses stopped"*).
 
-No chain is single-vendor. Each seat leads with its own vendor and falls through to the others
-(`brains/ensouled-seat.js`, `CHAINS`).
+**Fix:** map kinds to vendors (`cli`/`oauth`/`api` → anthropic, `codex` → openai, `grok` → xai)
+and require two distinct **vendors**, with a clear error naming the single-vendor chain.
 
-Three-way relay verified end to end, from the mailbox record:
+Also lower severity, all documented: exhaustion→baton reassignment is conditional (holder,
+successor, five-minute cooldown, CAS); the `oauth` provider never calls `resolveAnthropicOAuth`,
+so an ambient `ANTHROPIC_API_KEY` shadows the selected profile.
 
-```
-362 claude->grok [task] leg 1     365 grok->claude  [note] leg 1 done
-363 grok->claude [ack]            366 codex->grok   [ack]
-364 grok->codex  [task] leg 2     367 codex->claude [ack] "The relay arrived."
-```
+## Licensing: the Dev Kit cannot ship as-is
 
-Every leg landed, every seat echoed, and the exchange **terminated** — `wake-acks-only` shows the
-ack guard cutting the ping-pong that ran away earlier.
+The `worker` seat's verdict, component by component: CMake BSD-3-Clause, Ninja Apache-2.0,
+vcpkg MIT **but every installed port keeps its own licence**, CommonLibSSE-NG/SKSE
+version-and-file-specific, and Microsoft permits redistribution only of designated **REDIST**
+files — not MSVC Build Tools or Windows SDK trees. **Do not ship the 5.49 GiB payload** until a
+per-file bill of materials and licence allowlist exist.
 
-161 tests green. Recent commits: `6aa07b1` codex provider + four window bugs, `6666b22` ack guard,
-`b5db723` grok provider, `1e3ce35` idle-skip + reverted PATH theory.
+## What shipped today
 
-## The open problem: console flashes
+`bus-tick.js` — a heartbeat for the **pilot** chat, the half that still falls asleep. Brains are
+processes and keep going; the human's chat window ends its turn when it stops speaking. The tick
+prints one state line per interval; a host that watches stdout re-enters the model on each line.
+Reads the mailbox from **disk**, so it keeps beating when the harness dies.
 
-Every flash is `git.exe`, spawned **by the agent CLI**, not by us. Captured with a
-`SetWinEventHook` on window creation — polling never caught them, they live under one frame.
+Runtime fixes, in order found — each one hid the next:
 
-```
-CREATE pid=13796 conhost class=ConsoleWindowClass title=C:\Program Files\Git\mingw64\bin\git.exe
-```
+| Fix | Was |
+|---|---|
+| `executePlan` returns failures | Tool errors discarded; a report lost to `403 unknown_seat` still logged `done` |
+| Seat roster in the prompt | Nothing told a model which seats exist, so it invented `orchestrator` |
+| Two caps distinguished | A brain out of *rounds* returned `done:true, capped:true`; the runner refused to continue it, stranding a seat whose note read "Audit is open" |
+| `maxRounds` 3 → 12 | Enough to acknowledge and stop, not enough to investigate |
+| Done requires evidence | A `task` wake cannot end in `done` without a send |
+| A receipt is not a report | Seats satisfied that rule with acks — eight acks, zero findings |
 
-Root cause, from the `worker` seat's analysis (mailbox #360, the best account anyone produced):
-a console-subsystem child gets a window only when it needs a console and does **not inherit**
-one. The one thing a whole process tree inherits by default is the console object. Every fix
-that operates on *our* `CreateProcess` call is therefore aimed at the wrong process.
+**198 tests green.** Docs corrected in `239c033`.
 
-Tried and **measured as insufficient** — do not repeat these:
+## The documentation audit, and how to continue it
 
-| # | Attempt | Result |
-|---|---|---|
-| 1 | `windowsHide: true` on our spawn | applies to the CLI only, never to git |
-| 2 | `detached: true` + `windowsHide` | hides ours, survives the parent; git still flashes |
-| 3 | `Start-Process -WindowStyle Hidden` | worse — Win11 hands the console to Windows Terminal |
-| 4 | default console host → `conhost` | helped, did not stop it (`HKCU\Console\%%Startup`) |
-| 5 | non-repo `cwd` | probes walk *upward* and read user config; the failing call is the flash |
-| 6 | one shared console, `stdio: 'inherit'` | 37 windows — handles are not console *ownership* |
-| 7 | strip git from child `PATH` | 37 → 35. git is invoked by **absolute path**. Reverted. |
+Method that worked, after three keyword passes missed a README describing the wrong product:
+read end to end, extract every **claim**, **test** each against the running system, verdict
+TRUE / FALSE / UNVERIFIABLE. A claim you did not execute is UNVERIFIABLE, not TRUE.
 
-Next step, already commissioned to the `worker` seat: `src/brain/console-host.ts` — give the tree
-a console object with no window (ConPTY, or `AllocConsole` + immediate `ShowWindow(SW_HIDE)`).
-**Open question it must answer honestly:** the repo currently ships with *zero* runtime
-dependencies, and Node cannot make Win32 calls without a native addon. If the fix needs a
-dependency, that needs saying plainly rather than working around.
+| Document | State |
+|---|---|
+| `README.md`, `HUMAN_GUIDE.md`, `TESTING.md`, `AUTH.md`, `DISTRIBUTION.md`, `LOOP_ARCHITECTURE.md` | Audited **and fixed** |
+| `OPERATOR.md` | Audited; no false claims. All 20 commands need `initialize` first — that precondition is still unstated in the file |
+| `docs/PROVENANCE.md` | **Audited, NOT fixed** — the one piece of unfinished work |
 
-Pass criterion: re-run the window hook over a 75 s one-wake scenario. **Zero** `ConsoleWindowClass`
-creates. Keep the hook — it is the only instrument that ever caught these.
+`PROVENANCE.md` states legal conclusions as fact: "does not copy", "the repository owner
+identified these projects as their own work", "avoids carrying CC-BY-NC-ND terms", "does not
+inherit this repository's license". Both seats marked these **UNVERIFIABLE** — no authorization
+record is stored, no external repo revisions or licence files are cited. Codex also flagged that
+`src/brain/contract.ts` says it was *"modelled on and adapted from Star Slug's contract"*, which
+sits awkwardly beside "does not copy". Attribute the claims (*"According to the repository
+owner…"*) rather than asserting them, and cite revisions.
 
-The guaranteed-zero alternative, if the console route costs too much: in-process SDK providers.
-No child process, so no grandchild, so no console. It does not cover CLI-shaped vendors.
+**The systemic finding:** reasoning ages well; **paths, counts and status markers rot**.
+`.ai-bus/bin` and `.ai-bus/scripts` appeared in three documents and existed in none — they are
+real, but only after `initialize`, and no document said so. `HUMAN_GUIDE.md` now has a
+"Running from a clone" section.
 
-## Audit in flight (dispatched, mostly unanswered — brains stopped before they finished)
+## Ensouled
 
-- **A → grok** — initiation from any seat. Includes a confirmed bug: `bus-up` prints a recovery
-  instruction telling the user to run `mailbox reassign`, and **that verb does not exist**;
-  `reassignBaton()` exists in `src/mailbox.ts` but is not exposed on the CLI. The recovery
-  instruction we print is impossible to follow. Not yet fixed.
-- **B → codex** — failover and handoff. Key question: if all three vendors are exhausted at once,
-  does the bus report loudly or stall silently?
-- **C → worker** — distributability and dev kit. Note `package.json` declares `engines.vscode`
-  only — no Node version, no dependencies — and the C++/dev-kit access Hymlock wants is, as far as
-  I can see, **aspirational**: no capability exists for it today. Needs confirming.
-- **D → grok** — de-Ensoul the bus. Hymlock: *"this bus is NOT specifically for Ensouled, it is
-  meant to be used with any production."* `brains/ensouled-seat.js` is the default brain every
-  seat loads and its name alone contradicts that. Inventory requested; rename not yet done.
+Phase 3's blocking precondition is **resolved**: the shipped `Mantella.exe` is byte-identical to
+the Nexus v0.14 archive (SHA-256 `B103FB5C…`). Gates green — 8 passed, 0 failed, 2 delegated.
 
-Task bodies are in the scratchpad under `tasks/A.txt`…`E.txt` and were sent with `--body-file`
-(`--body` mangles anything containing quotes — that is why the first dispatch failed).
+Open: identify the upstream **commit** that produced the archive. You cannot `git branch` from a
+zip. Narrow by 26 action JSONs carrying `enabled`, `skyrim_characters.csv` at 3,156 rows with
+duplicate headers, `_internal` at 3,596 files. **If no commit matches, the archive was built
+from something not in public history — that is itself the answer and changes Phase 3 again.**
+
+Two paths that cost hours, both counter-intuitive: the program lives **inside** the mod folder
+(`…\[NoDelete] [051.00001] Mantella\SKSE\Plugins\MantellaSoftware\`), and the authoritative log
+is `…\Documents\My Games\Mantella\logging.log`, not the one beside the exe.
 
 ## Restarting
 
-```
-node scripts/bus-up.js --root "<bus root>" --console <your seat> --brains codex,grok,worker
-```
-
-`bus-up` is idempotent, refuses to take the baton from an active holder, and now detects existing
-brains correctly. Expect flashes until `console-host` lands.
-
-To stop everything:
-
-```powershell
-Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'brain[\\/]cli\.js' } |
-  ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+```bash
+node scripts/bus-up.js --root "<bus root>" --console <your seat> --brains claude,codex,grok,worker
+node scripts/bus-tick.js --root "<bus root>" --interval-s 240   # under your host's watcher
 ```
 
-## Machine changes made tonight
+**Restart brains AFTER every build.** I lost three cycles dispatching work to brains running
+pre-fix code, and the logs looked identical to a working bus. Compare the brain start time
+against `dist/brain/brains/agent.js`.
 
-- Installed the xAI CLI: `npm i -g @xai-official/grok`. Real binary at `~/.grok/bin/grok.exe`
-  (the `%APPDATA%\npm` entry is a trampoline Node 24 cannot spawn).
-- Set default console host to `conhost`: `HKCU\Console\%%Startup`, both `DelegationConsole` and
-  `DelegationTerminal`. **Revert = delete that key**; prior state was "Let Windows decide".
+The pre-commit hook honours `BUS_SEAT`; commit with `BUS_SEAT=<your seat> git commit`. Claim
+before touching a file — the guard has caught real collisions, including mine.
