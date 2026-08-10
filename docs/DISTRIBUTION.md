@@ -44,10 +44,26 @@ legally included in that payload.
 
 - Stop brains and the harness before update. Install the newer VSIX with `--force`, reinitialize
   to refresh managed staged files, then restart `bus-up`.
-- Provider timeout/quota/auth failure falls through to another vendor. Whole-chain exhaustion
-  records evidence and reassigns the baton. A dead OS process still needs `bus-up` restarted;
-  v0.2 has no service supervisor.
+- Provider timeout/quota/auth failure falls through to **the next configured provider**. The
+  default chains cross vendor boundaries, but a custom chain is validated for distinct provider
+  *kinds*, not distinct vendors — `oauth,api` passes validation and is entirely Anthropic. Check
+  `servedBy` in `brain-<seat>.log` if you need proof a different vendor answered.
+- Whole-chain exhaustion is always **logged**; the baton moves only if the exhausted seat holds
+  it, has a successor, is outside the five-minute cooldown, and the compare-and-move succeeds.
+  Reassignment is conditional, not automatic.
+- A dead OS process still needs `bus-up` restarted; v0.2 has no service supervisor.
 - Clarification is an open dependency, not completion. Keep the goal open and resume after the
   answer arrives.
-- Run **Portable AI Bus: Remove Workspace Bus** before uninstalling if staged workspace files
-  should be removed. Operator-supplied Dev Kit payloads are not silently deleted.
+
+> ### ⚠️ Remove Workspace Bus DELETES an operator-supplied Dev Kit
+>
+> **Back up `.ai-bus/toolchains/` before running Remove.** `removeUnlocked` in `src/bus.ts`
+> executes `fs.rm(busDir, { recursive: true, force: true })` over the whole `.ai-bus` tree. It
+> has no special case for `toolchains/`, no preservation step, and no confirmation — so a
+> multi-gigabyte kit installed exactly where this document tells you to put it is destroyed
+> without warning.
+>
+> This section previously claimed such payloads "are not silently deleted." That was the
+> opposite of the truth, and the code has said so since the feature was written. Keep the kit
+> outside the workspace and point at it with `SKSE_DEVKIT_ROOT` if you would rather not rely on
+> remembering.

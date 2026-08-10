@@ -68,7 +68,7 @@ brain for testing — the fake-LLM tier, arrived at independently.
 |---|---|---|
 | Durable mailbox, claims, baton | ✅ better | — |
 | Wake signal | ✅ `listen`, wake-on-exit | ✅ `waitForWake` |
-| **A runner that owns the loop** | ❌ **missing** | ✅ `llm-player.js` + brains |
+| **A runner that owns the loop** | ✅ `brain/runner.ts` (**built** — see below; this row read "missing" for a day after it shipped) | ✅ `llm-player.js` + brains |
 | Provider adapter | ◐ `vscode-lm-worker.ts` (VS Code models only) | ✅ direct SDK |
 | Bounded work per wake | ✅ `maxTurns` | ✅ `MAX_ACTIONS_PER_WAKE` |
 
@@ -85,7 +85,7 @@ Hymlock approved the direction, so this is no longer a recommendation. What ship
 |---|---|
 | `brain/contract.ts` | `takeTurn(context) -> {done, capped}`, neutral `BrainTools`, `WakeContext` |
 | `brain/runner.ts` | **the wake loop** — drain, wake, act, loop. Never exits on `done` |
-| `brain/bus-client.ts` | binds the runner to the real harness by driving `worker-client.js` |
+| `brain/bus-client.ts` | binds the runner to the harness **in process**, via `waitForMailbox` / `callSeatTool` |
 | `brain/cli.ts` | staged as `.ai-bus/bin/brain/cli.js`; long-lived wake runner plus echo brain |
 | `brains/agent-seat.js` | packaged project-neutral brain with a required cross-vendor provider chain |
 
@@ -190,5 +190,11 @@ Any classified failure — `quota`, `rate-limit`, `auth`, `unavailable`, or an u
 Being wrong about whether to continue costs the seat.** `fallThroughOn` can narrow it where a
 request would fail identically everywhere.
 
-Nine tests, and the fall-through was **verified by sabotage**: replacing it with `break` turns
+Twelve tests, and the fall-through was **verified by sabotage**: replacing it with `break` turns
 three of them red.
+
+> **A gap this document should not hide.** The chain is validated for at least two distinct
+> provider *kinds*, not two distinct **vendors**. `PORTABLE_AI_BUS_PROVIDER_CHAIN=oauth,api`
+> satisfies the check and is entirely Anthropic, so a single exhausted account still stops that
+> seat — the exact failure the section above claims to prevent. Default chains do cross vendors;
+> overrides are on trust.

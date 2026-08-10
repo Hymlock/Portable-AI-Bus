@@ -9,7 +9,14 @@ It stages a small control kit into the repo (`.ai-bus/`) and gives you:
 2. **A mailbox** — durable messages and path “claims” between agents
 3. **Optional advanced tools** — a local harness server and build adapters (for example SKSE)
 
-It does **not** create a magical always-on multiplayer AI chat. Someone (you, or an agent session you already started) still has to act on the next message.
+Once started, **brains do act on the next message by themselves.** A brain is a long-lived
+process that wakes when mail arrives, calls a model, does the work, and keeps going across
+several turns until the job is done. You do not have to poke it.
+
+What it is **not** is a multiplayer AI chat: seats exchange durable mail, they do not hold
+conversations, and nothing wakes another vendor's *chat window* for you. And the chat window
+**you** sit in is still a chat session — it falls asleep when it stops speaking — which is what
+`bus-tick` is for (see "Keeping your own chat awake" below).
 
 ## Normal human path
 1. Install Node.js 20+ and install the VSIX with **Extensions: Install from VSIX...** (or F5-run
@@ -27,10 +34,41 @@ After initialization, Claude, Codex, or Grok can start the complete Bus with the
 node .ai-bus/scripts/bus-up.js --root . --console claude
 ```
 
-Change `--console` to the initiating provider. All three brains start by default and no seat is
-tied to one vendor. On Windows, `node .ai-bus/scripts/bus-console.js --root .` uses one visible
-shared console to prevent provider subprocess flashes. Authenticate at least two provider CLIs
-first; `.ai-bus/docs/AUTH.md` explains no-API-key routes.
+Change `--console` to the initiating provider. All three brains start by default, and each seat
+leads with its own vendor. Authenticate at least two provider CLIs first; `docs/AUTH.md`
+explains the no-API-key routes.
+
+## Running from a clone, without the extension
+
+The commands above assume an **initialized** workspace — `initialize` is what creates
+`.ai-bus/bin/` and `.ai-bus/docs/`. If you have simply cloned this repository, those paths do
+not exist yet and every `.ai-bus/bin/...` command below will fail with `MODULE_NOT_FOUND`. Run
+the repo copies instead:
+
+```bash
+npm install && npm run compile
+node scripts/bus-up.js   --root "<bus root>" --console claude --brains claude,codex,grok
+node dist/worker-client.js status --seat claude --root "<bus root>"
+node dist/mailbox.js status --root "<bus root>"
+```
+
+Nothing here needs VS Code. This is the mode the project itself was developed in for days
+before anyone noticed the documentation described only the staged layout.
+
+## Keeping your own chat awake
+
+Brains keep going by themselves. The chat window **you** drive does not — it is a chat session,
+and its turn ends when it stops speaking, so work pauses between your messages even while every
+seat is healthy.
+
+```bash
+node scripts/bus-tick.js --root "<bus root>" --interval-s 240
+tick 10:51:43  brains:claude,codex,grok,worker  baton:hymlock(44s)  round:497/550  unread:none
+```
+
+Each line is a wake signal. Run it under whatever background-watch facility your assistant
+offers, and it resumes on each tick without you typing. It does not make a chat immortal: when
+the session ends, so does the listener.
 
 ## The files you will see
 After initialize:

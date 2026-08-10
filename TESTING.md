@@ -40,7 +40,7 @@ npm run test:vscode:vsix
 npm run test:release
 ```
 
-The source runner uses an isolated temporary multi-folder workspace and the installed VS Code executable (`VSCODE_EXECUTABLE_PATH` can override its location). It verifies ownership-safe staging, forged-manifest resistance, external-ledger integrity failure, suspend conflict preservation, symlink/junction ancestor rejection, authenticated live harness, explicit stop, suspend/resume restoration, workspace-folder removal, and actual extension-host deactivation cleanup. It also checks that the recorded loopback port refuses connections and that the endpoint, lock, and instance credential directory are gone after each stop boundary.
+The source runner uses an isolated temporary multi-folder workspace and a VS Code executable resolved in this order: `VSCODE_EXECUTABLE_PATH`, a conventional local installation, and failing both, one **downloaded automatically** by `@vscode/test-electron`. A pre-installed editor is therefore not required, contrary to what this section claimed until 2026-08-10. It verifies ownership-safe staging, forged-manifest resistance, external-ledger integrity failure, suspend conflict preservation, symlink/junction ancestor rejection, authenticated live harness, explicit stop, suspend/resume restoration, workspace-folder removal, and actual extension-host deactivation cleanup. It also checks that the recorded loopback port refuses connections and that the endpoint, lock, and instance credential directory are gone after each stop boundary.
 
 The VSIX runner packages into a temporary directory, installs into a unique empty extensions directory, confirms the precise extension/version inventory and loaded physical path, checks critical shipped assets, then runs the lifecycle smoke through a separate no-op test driver. This prevents a source checkout from shadowing the artifact under test. Packaging invokes `vscode:prepublish`, so a clean clone cannot ship absent or stale `dist/` output.
 
@@ -112,12 +112,15 @@ node .ai-bus/bin/harness.js serve --root . --port 0
 
 In another shell (replace port + token):
 
-```bash
+```cmd
 curl -s -H "Authorization: Bearer <operator-token>" http://127.0.0.1:<port>/v1/tools
 curl -s -H "Authorization: Bearer <operator-token>" -H "Content-Type: application/json" ^
   -d "{\"requestId\":\"t1\",\"name\":\"mailbox_status\",\"input\":{}}" ^
   http://127.0.0.1:<port>/v1/tool
 ```
+
+The block is `cmd` on purpose: `^` is cmd.exe's line continuation. In Bash use `\` instead, and
+note that in PowerShell `curl` is an alias for `Invoke-WebRequest` — call `curl.exe` explicitly.
 
 Checks:
 - No auth → 401 with structured error
@@ -174,10 +177,13 @@ Confirm receipt under `.ai-bus/runtime/receipts/` with redacted tails, `shell: f
 
 Unit tests use a fake kit layout. Optional real kit:
 
-```bash
-set SKSE_DEVKIT_ROOT=C:\path\to\SKSEDevKit
+```cmd
+set "SKSE_DEVKIT_ROOT=C:\path\to\SKSEDevKit"
 node .ai-bus/bin/skse-devkit.js doctor --workspace .
 ```
+
+PowerShell: `$env:SKSE_DEVKIT_ROOT = 'C:\path\to\SKSEDevKit'` ·
+Bash: `export SKSE_DEVKIT_ROOT=/c/path/to/SKSEDevKit`
 
 Expect nested `tools/cmake/bin/cmake.exe`, `tools/vcpkg`, `libraries/CommonLibSSE-NG`, sample project list.
 **Do not** require a full configure/build for CI; that needs VS/MSVC.
