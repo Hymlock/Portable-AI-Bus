@@ -24,6 +24,13 @@ discovery).
 > So the honest prerequisite is: **at least one signed-in model gateway**, which in Codex's case
 > means having that extension installed. Grok is the one route that is fully editor-free today.
 >
+> **Recommended: install all three.** Then any vendor can be the *pilot* — the seat you drive
+> from. You open that vendor's chat window, tell it to initiate the bus, and it takes the baton;
+> the others run as brains alongside it. When one vendor is throttled or out of credit, you
+> simply pilot from another, and the seats keep working because every chain crosses a vendor
+> boundary anyway. One install decision buys both halves of the resilience: independent
+> **wallets** and an independent **place to stand**.
+>
 > The packaging currently states this backwards: `package.json` declares `main:
 > dist/extension.js` and **no `bin` entry**, so there is no first-class CLI install even though
 > the CLI is what does the work. Tracked as a distribution defect — see the `worker` seat's
