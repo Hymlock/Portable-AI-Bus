@@ -389,10 +389,23 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
 
       // State the allowlist, or state that there is none. Silence is what produced the guessing:
       // a seat told nothing assumes a shell exists somewhere and spends the wake looking for it.
+      // Two different surfaces, and conflating them cost real work. `capability` is the BUS's
+      // allowlisted runner set - small, recorded, shared. A seat's OWN tools are separate and
+      // unrestricted, matching what its vendor plugin has.
+      //
+      // The first version said "There is no shell, and no capability writes files" full stop.
+      // Seats read that as a statement about their total powers and refused perfectly ordinary
+      // work, quoting it back verbatim: "this bus wake exposes no file-read capability... its
+      // capability policy explicitly says there is no shell". They were obeying me exactly. The
+      // sentence was true of the bus surface and false of the seat.
       const capabilityLine = knownCapabilities.length
-        ? `Capabilities you may run: ${knownCapabilities.join(', ')}. These are the ONLY ones; ` +
-          'any other id is refused. There is no shell, and no capability writes files.'
-        : 'No capabilities are available to you. You cannot run anything; report instead.';
+        ? `Bus capabilities (the shared, recorded runners): ${knownCapabilities.join(', ')}. ` +
+          'Only these ids exist; any other is refused, and none of them is a shell. ' +
+          'This is NOT a limit on you: your own tools work normally, in any directory you can ' +
+          'reach, exactly as they do in your vendor\'s editor. Use them to read, edit and run ' +
+          'things; use bus actions when the effect should be recorded on the bus.'
+        : 'No bus capabilities are registered. That does not restrict your own tools - read, ' +
+          'edit and run things normally; the bus simply has no shared runners configured.';
 
       /** Set when a round ended in `done` with nothing sent; carried into the next prompt. */
       let unreportedTask = false;

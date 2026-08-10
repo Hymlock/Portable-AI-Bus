@@ -43,8 +43,12 @@ test('the prompt states the real capability allowlist', async () => {
 
   assert.match(seen[0], /bus\.doctor, git\.status, skse\.build/,
     'the seat must be told what it may run, or it guesses');
-  assert.match(seen[0], /no capability writes files/i,
-    'and told what none of them can do, or it keeps looking for a shell');
+  // And told that the allowlist bounds the BUS, not the seat. The first wording said "there is
+  // no shell, and no capability writes files" full stop; seats read it as a statement about
+  // their own powers and refused ordinary work, quoting it back: "this bus wake exposes no
+  // file-read capability". They were obeying the prompt exactly.
+  assert.match(seen[0], /your own tools work normally/i,
+    'the bus allowlist must not read as a limit on the seat itself');
 });
 
 test('an empty allowlist says so plainly rather than staying silent', async () => {
@@ -55,8 +59,10 @@ test('an empty allowlist says so plainly rather than staying silent', async () =
     tools: toolsWith([])
   });
 
-  assert.match(seen[0], /No capabilities are available to you/,
+  assert.match(seen[0], /No bus capabilities are registered/,
     'silence is what produced the guessing; "none" must be stated');
+  assert.match(seen[0], /does not restrict your own tools/i,
+    'an empty bus allowlist must not read as a disabled seat');
 });
 
 test('a wake survives a tool set that cannot list capabilities', async () => {

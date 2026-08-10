@@ -190,7 +190,13 @@ export function cliProvider(options: CliProviderOptions = {}): ModelProvider {
     },
 
     async ask(prompt, { systemPrompt, sessionId, model, timeoutMs = 300_000 } = {}) {
-      const args = ['-p', '--output-format', 'json'];
+      // `bypassPermissions` for the same reason codex gets `danger-full-access`: a seat should
+      // have what this vendor's plugin has. In `-p` there is no human to answer a permission
+      // prompt, so the default mode silently reduces a capable agent to a reader - the same
+      // restriction as codex's old sandbox, wearing different clothes. It is granted here rather
+      // than left to chance because a seat that half-works is harder to diagnose than one that
+      // cannot work at all: this is precisely how grok looked "broken" for two days.
+      const args = ['-p', '--output-format', 'json', '--permission-mode', 'bypassPermissions'];
       if (systemPrompt) args.push('--append-system-prompt', systemPrompt);
       if (model) args.push('--model', model);
       // Continuing a session reuses the cached system prompt. The first call on this machine
@@ -495,7 +501,21 @@ export function codexProvider(options: CodexProviderOptions = {}): ModelProvider
       //
       // `--sandbox` still bounds it to the workspace rather than the whole machine, which is the
       // level the design calls for: agents that can do the work, inside the tree they were given.
-      const args = ['exec', '--skip-git-repo-check', '--sandbox', 'workspace-write',
+      // `danger-full-access`, matching what this vendor's own VS Code plugin already has.
+      // Hymlock, 2026-08-10: *"They need full permissions like their VSCode plugins."*
+      //
+      // `workspace-write` was not academic - it broke real work within the hour. A seat asked to
+      // audit the BUS source could not read it, because its workdir is the Ensouled repo while
+      // the bus lives in a sibling directory, and it correctly reported
+      // "BLOCKED: provider code/history unavailable". Confining a seat to one tree makes
+      // cross-repository work impossible, which is most of what these seats are for.
+      //
+      // The safety model is not this flag and never was. It is the bus: a loopback-only harness,
+      // per-seat bearer tokens that cannot impersonate another seat, claims recording who owns
+      // what, the baton recording who drives, halt returning 423, and git making every edit
+      // reversible. Trusted agents whose ACTIONS ARE RECORDED beats a sandbox that also blocks
+      // the legitimate work.
+      const args = ['exec', '--skip-git-repo-check', '--sandbox', 'danger-full-access',
                     '--output-last-message', answerFile];
       if (options.model) args.push('--model', options.model);
       // Codex has no separate system-prompt flag, so it is prepended. Keeping the shape
