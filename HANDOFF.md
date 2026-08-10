@@ -1,5 +1,25 @@
 # Handoff — 2026-08-09, evening
 
+> ## ⚠️ SUPERSEDED 2026-08-10. Read this box before believing anything below it.
+>
+> This is a **point-in-time** handoff, kept because its failure record is still worth having.
+> Several of its statements are now false:
+>
+> | This document says | Actually, as of 2026-08-10 |
+> |---|---|
+> | Brains are stopped | All four seats run — `claude`, `codex`, `grok`, `worker` |
+> | The flashes are unfixed | Fixed in `18d31aa` — provider CLIs are hosted in a **headless ConPTY** (`src/brain/process-host.ts`, 7 tests). Independent re-measurement was commissioned; see the mailbox |
+> | `mailbox reassign` does not exist | Implemented |
+> | `brains/ensouled-seat.js` names the bus after one project | Renamed to `agent-seat.js`; the old path is a deprecated shim |
+> | 161 tests | **188** |
+>
+> **What is still true and still worth reading:** the seven attempts that did NOT work
+> (table below) and why, and the two dead theories — `git` is invoked by *absolute path*, so
+> PATH stripping cannot help; and stdio handles are not console *ownership*, so `stdio:
+> 'inherit'` alone cannot help. That is the section this file exists for.
+>
+> Current state lives in `README.md` and `OPERATOR.md`. Do not take planning direction from here.
+
 Written by the `claude` seat as its session limit approached. Hymlock is continuing on Codex.
 Everything below is committed; nothing is in flight on disk.
 
