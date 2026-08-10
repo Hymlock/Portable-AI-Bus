@@ -263,24 +263,56 @@ function toolFailure(result: unknown): string | undefined {
  * Returning the failures lets the caller do the only correct thing: tell the model its send did
  * not land, and keep the work open instead of closing it.
  */
-export async function executePlan(tools: BrainTools, plan: AgentPlan): Promise<PlanFailure[]> {
+export async function executePlan(
+  tools: BrainTools,
+  plan: AgentPlan,
+  routing: { seats?: string[]; fallbackTo?: string } = {}
+): Promise<PlanFailure[]> {
   const failures: PlanFailure[] = [];
   const note = (action: string, result: unknown) => {
     const detail = toolFailure(result);
     if (detail) failures.push({ action, detail });
   };
 
+  /**
+   * Deliver to a real seat, even when the model names one that does not exist.
+   *
+   * The grok seat repeatedly addressed reports to `console`. The harness refused each one
+   * (`403 unknown_seat`), so the report never landed, so "done requires a report" correctly
+   * refused to close the wake, so the repair path ran - TEN paid calls on a task whose actual
+   * work had already been committed. A correct guard amplifying one bad recipient.
+   *
+   * Redirecting to whoever asked is the honest repair: the report reaches a real seat, and the
+   * substitution is recorded as a failure so the model is told it got the name wrong. Refusing
+   * instead would be principled and would lose the report, which is the outcome that costs.
+   */
+  const resolveRecipient = (requested: string): { to: string; problem?: string } => {
+    const seats = routing.seats ?? [];
+    if (seats.length === 0 || seats.includes(requested)) return { to: requested };
+    const fallback = routing.fallbackTo && seats.includes(routing.fallbackTo)
+      ? routing.fallbackTo
+      : undefined;
+    if (!fallback) return { to: requested };
+    return {
+      to: fallback,
+      problem: `"${requested}" is not a seat; delivered to "${fallback}" instead. Seats: ${seats.join(', ')}.`
+    };
+  };
+
   for (const action of plan.actions) {
     switch (action.type) {
-      case 'send':
-        note(`send to ${action.to}`, await tools.send({
-          to: action.to,
+      case 'send': {
+        const { to, problem } = resolveRecipient(action.to);
+        if (problem) failures.push({ action: `send to ${action.to}`, detail: problem });
+        note(`send to ${to}`, await tools.send({
+          to,
           kind: action.kind ?? 'note',
           subject: action.subject,
           body: action.body,
           keepBaton: action.keepBaton
         }));
         break;
+      }
       case 'claim':
         note('claim', await tools.claim(action.paths, action.why));
         break;
@@ -424,7 +456,13 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
         const attemptedReceipt = actions.some((action) =>
           action.type === 'send' && RECEIPT_KINDS.has(String(action.kind ?? 'note').toLowerCase())
         );
-        const failures = await executePlan(tools, filtered);
+        // Route against the real roster, falling back to whoever sent the task. A report
+        // addressed to a seat that does not exist is a lost report, and the guard that notices
+        // it then costs a repair round per attempt.
+        const failures = await executePlan(tools, filtered, {
+          seats: knownSeats,
+          fallbackTo: messages.find((m) => knownSeats.includes(m.from))?.from ?? 'hymlock'
+        });
         if (attemptedReceipt && !failures.some((failure) => failure.action.startsWith('send to '))) {
           receiptSent = true;
         }
