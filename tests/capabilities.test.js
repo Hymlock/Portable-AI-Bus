@@ -35,6 +35,27 @@ test('capability runner uses argv without shell interpretation and writes a rece
   assert.equal(latest.runId, receipt.runId);
 });
 
+test('central config and receipts can be separated from the capability worktree', async (t) => {
+  const coordinationRoot = await workspace([{
+    id: 'where',
+    command: process.execPath,
+    args: ['-e', 'process.stdout.write(process.cwd())'],
+    cwd: '${workspace}',
+    timeoutMs: 5000
+  }]);
+  const workdir = await fs.mkdtemp(path.join(os.tmpdir(), 'portable-ai-bus-workdir-'));
+  t.after(async () => {
+    await fs.rm(coordinationRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    await fs.rm(workdir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  });
+
+  const runner = new CapabilityRunner(workdir, { configRoot: coordinationRoot });
+  const receipt = await runner.run('where');
+  assert.equal(path.resolve(receipt.stdout.tail), path.resolve(workdir));
+  await fs.access(path.join(coordinationRoot, '.ai-bus', 'runtime', 'receipts', 'latest.json'));
+  await assert.rejects(fs.access(path.join(workdir, '.ai-bus', 'runtime', 'receipts', 'latest.json')));
+});
+
 test('capability output and command metadata redact common secrets', async (t) => {
   const root = await workspace([
     {

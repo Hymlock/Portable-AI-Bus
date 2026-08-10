@@ -103,8 +103,17 @@ inspect and edit the intended tree: `--root ../ai-bus --workdir .`.
 On Windows, `node .ai-bus/scripts/bus-console.js --root .` keeps all brains under one visible
 console for the strongest no-flash guarantee. Brains continue after each wake. Clarification is
 an open dependency, never goal completion. A provider credit failure falls through to another
-vendor; whole-chain exhaustion hands off the baton. A dead process still requires `bus-up` to be
-restarted because v0.2 does not install a service supervisor.
+vendor; whole-chain exhaustion hands off the baton. Use the controlled replacement command after
+a build or path change:
+
+```bash
+node .ai-bus/scripts/bus-restart.js --root . --workdir . --console codex --brains claude,codex,grok
+```
+
+`bus-up` is non-destructive ensure-up. From a source checkout it also installs missing central
+capability configuration and binaries without overwriting operator config. `bus-restart` stops
+only exact-root Bus processes and verifies their replacements. The Bus does not install an
+operating-system service supervisor.
 
 Initialization preserves pre-existing repository files. Only files actually created by the bus enter its ownership ledger; user-modified managed files are preserved on reinitialize and remove. Destructive lifecycle operations require an HMAC-checked ownership ledger outside the repository, reject junction/symlink escapes, serialize through a cross-process workspace lock, and recover interrupted install or suspend state. The in-repo manifest is descriptive, not destructive authority.
 

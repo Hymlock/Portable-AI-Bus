@@ -656,6 +656,8 @@ export class WorkspaceBus {
       { from: 'dist/brain', to: path.join(paths.busDir, 'bin', 'brain') },
       { from: 'brains', to: path.join(paths.busDir, 'brains') },
       { from: 'scripts/bus-up.js', to: path.join(paths.busDir, 'scripts', 'bus-up.js') },
+      { from: 'scripts/bus-restart.js', to: path.join(paths.busDir, 'scripts', 'bus-restart.js') },
+      { from: 'scripts/bus-processes.js', to: path.join(paths.busDir, 'scripts', 'bus-processes.js') },
       { from: 'scripts/bus-console.js', to: path.join(paths.busDir, 'scripts', 'bus-console.js') },
       { from: 'scripts/bus-tick.js', to: path.join(paths.busDir, 'scripts', 'bus-tick.js') },
       { from: 'node_modules/node-pty', to: path.join(paths.busDir, 'node_modules', 'node-pty') },

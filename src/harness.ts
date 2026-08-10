@@ -58,6 +58,8 @@ type HarnessOptions = {
   leaseSweepMs?: number;
   maxWakeMessages?: number;
   maxWakeResponseBytes?: number;
+  /** Repository used by capabilities; mailbox state and credentials remain under workspaceRoot. */
+  workdir?: string;
 };
 
 const DEFAULT_PORT = 47_831;
@@ -85,6 +87,7 @@ export class HarnessServer {
   readonly lockPath: string;
   readonly recoveryLockPath: string;
   readonly instanceId: string;
+  readonly workdir: string;
   private readonly maxBodyBytes: number;
   private readonly maxConcurrentRuns: number;
   private readonly leaseStaleMs: number;
@@ -113,8 +116,9 @@ export class HarnessServer {
 
   constructor(readonly workspaceRoot: string, options: HarnessOptions = {}) {
     this.workspaceRoot = path.resolve(workspaceRoot);
+    this.workdir = path.resolve(options.workdir ?? this.workspaceRoot);
     this.mailbox = new MailboxStore(this.workspaceRoot);
-    this.capabilities = new CapabilityRunner(this.workspaceRoot);
+    this.capabilities = new CapabilityRunner(this.workdir, { configRoot: this.workspaceRoot });
     this.runtimeDir = path.join(this.workspaceRoot, '.ai-bus', 'runtime', 'harness');
     this.instanceId = randomUUID();
     const workspaceKey = credentialWorkspaceKey(this.workspaceRoot);
@@ -185,6 +189,8 @@ export class HarnessServer {
         authScheme: 'Bearer',
         seats: registeredAgents,
         pid: process.pid,
+        coordinationRoot: this.workspaceRoot,
+        workdir: this.workdir,
         startedAt: new Date().toISOString()
       };
       await this.atomicJson(this.endpointPath, endpoint);
@@ -1188,14 +1194,15 @@ function mintToken(principal: string) {
 async function runCli(argv = process.argv.slice(2)) {
   const command = argv[0];
   if (command !== 'serve') {
-    throw new Error('Usage: harness.js serve [--root PATH] [--port N]');
+    throw new Error('Usage: harness.js serve [--root PATH] [--workdir REPO] [--port N]');
   }
   const root = option(argv, '--root') ?? path.resolve(__dirname, '..', '..');
+  const workdir = option(argv, '--workdir') ?? root;
   const port = Number(option(argv, '--port') ?? DEFAULT_PORT);
   if (!Number.isInteger(port) || port < 0 || port > 65_535) {
     throw new Error('port must be an integer from 0 through 65535.');
   }
-  const server = new HarnessServer(root);
+  const server = new HarnessServer(root, { workdir });
   const endpoint = await server.start(port);
   process.stdout.write(`Portable AI Bus harness listening at http://${endpoint.host}:${endpoint.port}\n`);
   process.stdout.write(`Bearer token: ${endpoint.tokenPath}\n`);

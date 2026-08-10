@@ -116,7 +116,7 @@ is `…\Documents\My Games\Mantella\logging.log`, not the one beside the exe.
 ## Restarting
 
 ```bash
-node scripts/bus-up.js --root "<bus root>" --console <your seat> --brains claude,codex,grok,worker
+node scripts/bus-restart.js --root "<bus root>" --workdir "<repository>" --console <your seat> --brains claude,codex,grok,worker
 node scripts/bus-tick.js --root "<bus root>" --interval-s 240   # under your host's watcher
 ```
 

@@ -337,6 +337,13 @@ pass `--workdir <repository>` to `bus-up` (or `bus-console`) so model-backed bra
 the actual checkout. The two roots are intentionally separate: mailbox durability does not
 imply repository context.
 
+`bus-up` never replaces a live process. After a build or any root/worktree/brain-module change,
+use `node .ai-bus/scripts/bus-restart.js --root <bus-root> --workdir <repository> --console codex
+--brains claude,codex,grok`. Discovery fails closed rather than killing by seat name: only
+harness/brain command lines whose `--root` exactly matches are stopped. The new harness records
+both roots in `runtime/harness/endpoint.json`; capabilities execute in the worktree while their
+configuration and receipts remain under the coordination root.
+
 The process waits, drains, acts, reports, and **waits again**. `done` means this wake finished,
 never that the agent finished. With a brain running you do not need the listener loop — the
 runner is the listener.

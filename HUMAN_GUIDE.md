@@ -41,6 +41,14 @@ explains the no-API-key routes.
 Normally the Bus and repository share a root. For a central mailbox that coordinates another
 checkout, keep the two paths explicit: `--root "<bus root>" --workdir "<repository>"`. Without
 `--workdir`, detached model CLIs deliberately use the Bus root and cannot inspect another repo.
+Harness capabilities use the same worktree, while configuration, mailbox state, credentials, and
+receipts remain under the coordination root. After rebuilding or changing either path, run:
+
+```bash
+node scripts/bus-restart.js --root "<bus root>" --workdir "<repository>" --console codex --brains claude,codex,grok
+```
+
+It stops exact-root Bus processes only; a same-seat brain belonging to another Bus is untouched.
 
 ## Running from a clone, without the extension
 

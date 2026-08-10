@@ -44,6 +44,22 @@ test('harness rejects unauthenticated clients and exposes provider-neutral tools
   assert.ok(tools.body.tools.some((item) => item.name === 'mailbox_send'));
 });
 
+test('harness keeps coordination state separate from capability workdir', async (t) => {
+  const workdir = await fs.mkdtemp(path.join(os.tmpdir(), 'portable-ai-bus-harness-workdir-'));
+  const { root, server } = await setup([], 20, { workdir });
+  t.after(async () => {
+    await server.stop();
+    await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    await fs.rm(workdir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  });
+  assert.equal(server.workspaceRoot, path.resolve(root));
+  assert.equal(server.capabilities.workspaceRoot, path.resolve(workdir));
+  assert.equal(server.capabilities.configRoot, path.resolve(root));
+  const endpoint = JSON.parse(await fs.readFile(path.join(root, '.ai-bus', 'runtime', 'harness', 'endpoint.json'), 'utf8'));
+  assert.equal(endpoint.coordinationRoot, path.resolve(root));
+  assert.equal(endpoint.workdir, path.resolve(workdir));
+});
+
 test('harness request ids make repeated send requests idempotent', async (t) => {
   const { root, server, request } = await setup(['codex', 'grok']);
   t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });

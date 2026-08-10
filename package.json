@@ -11,6 +11,8 @@
     "bin/**",
     "brains/**",
     "scripts/bus-up.js",
+    "scripts/bus-restart.js",
+    "scripts/bus-processes.js",
     "scripts/bus-console.js",
     "scripts/bus-tick.js",
     "scripts/build-distribution.js",

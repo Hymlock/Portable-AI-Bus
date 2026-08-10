@@ -57,6 +57,8 @@ type RunOptions = {
 
 type RunnerOptions = {
   allowOutsideWorkspace?: boolean;
+  /** Root that owns Bus configuration and durable receipts when coordination is centralized. */
+  configRoot?: string;
 };
 
 const DEFAULT_TIMEOUT_MS = 10 * 60_000;
@@ -68,14 +70,16 @@ const MAX_ARG_LENGTH = 32_768;
 export class CapabilityRunner {
   readonly configPath: string;
   readonly receiptsDir: string;
+  readonly configRoot: string;
 
   private readonly allowOutsideWorkspace: boolean;
 
   constructor(readonly workspaceRoot: string, options: RunnerOptions = {}) {
     this.workspaceRoot = path.resolve(workspaceRoot);
+    this.configRoot = path.resolve(options.configRoot ?? this.workspaceRoot);
     this.allowOutsideWorkspace = options.allowOutsideWorkspace === true;
-    this.configPath = path.join(this.workspaceRoot, '.ai-bus', 'capabilities.json');
-    this.receiptsDir = path.join(this.workspaceRoot, '.ai-bus', 'runtime', 'receipts');
+    this.configPath = path.join(this.configRoot, '.ai-bus', 'capabilities.json');
+    this.receiptsDir = path.join(this.configRoot, '.ai-bus', 'runtime', 'receipts');
   }
 
   async list(): Promise<CapabilityDefinition[]> {
@@ -220,7 +224,7 @@ export class CapabilityRunner {
   private async loadConfig(): Promise<CapabilityConfig> {
     const raw = await fs.readFile(this.configPath, 'utf8').catch((error: NodeJS.ErrnoException) => {
       if (error.code === 'ENOENT') {
-        throw new Error(`Capability config is missing: ${path.relative(this.workspaceRoot, this.configPath)}`);
+        throw new Error(`Capability config is missing: ${path.relative(this.configRoot, this.configPath)}`);
       }
       throw error;
     });
@@ -250,8 +254,8 @@ export class CapabilityRunner {
   }
 
   private async ensureSafeReceiptsDirectory() {
-    const realRoot = await fs.realpath(this.workspaceRoot);
-    let current = this.workspaceRoot;
+    const realRoot = await fs.realpath(this.configRoot);
+    let current = this.configRoot;
     for (const segment of ['.ai-bus', 'runtime', 'receipts']) {
       current = path.join(current, segment);
       const stat = await fs.lstat(current).catch((error: NodeJS.ErrnoException) => {

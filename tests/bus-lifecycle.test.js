@@ -1,0 +1,69 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const fsp = require('node:fs/promises');
+const os = require('node:os');
+const path = require('node:path');
+const test = require('node:test');
+const {
+  bootstrapCoordinationRoot,
+  identifyNodeProcess,
+  optionFromCommandLine,
+  processesForRoot,
+  samePath
+} = require('../scripts/bus-processes.js');
+
+test('process identity parser keeps root, workdir, seat, and brain distinct', () => {
+  const command = 'node "C:\\kit path\\dist\\brain\\cli.js" --root "C:\\bus root" --workdir "D:\\repo path" --seat grok --brain "C:\\kit path\\brains\\agent-seat.js"';
+  assert.equal(optionFromCommandLine(command, '--root'), 'C:\\bus root');
+  const identity = identifyNodeProcess({ pid: 42, commandLine: command });
+  assert.equal(identity.type, 'brain');
+  assert.equal(identity.seat, 'grok');
+  assert.equal(identity.root, 'C:\\bus root');
+  assert.equal(identity.workdir, 'D:\\repo path');
+});
+
+test('exact-root selection never captures a same-seat process from another Bus', () => {
+  const first = identifyNodeProcess({
+    pid: 10,
+    commandLine: 'node C:\\kit\\dist\\brain\\cli.js --root C:\\bus-a --workdir C:\\repo-a --seat codex --brain C:\\kit\\brains\\agent-seat.js'
+  });
+  const second = identifyNodeProcess({
+    pid: 11,
+    commandLine: 'node C:\\kit\\dist\\brain\\cli.js --root C:\\bus-b --workdir C:\\repo-b --seat codex --brain C:\\kit\\brains\\agent-seat.js'
+  });
+  assert.deepEqual(processesForRoot([first, second], 'C:\\bus-a').map((item) => item.pid), [10]);
+  assert.equal(samePath(first.workdir, 'C:\\repo-a'), true);
+  assert.equal(samePath(first.workdir, second.workdir), false);
+});
+
+test('canonical path equality resolves trailing separators and directory links', async (t) => {
+  const fixture = await fsp.mkdtemp(path.join(os.tmpdir(), 'portable-ai-bus-canonical-'));
+  const target = path.join(fixture, 'target');
+  const alias = path.join(fixture, 'alias');
+  await fsp.mkdir(target);
+  await fsp.symlink(target, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  t.after(() => fsp.rm(fixture, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
+  assert.equal(samePath(`${target}${path.sep}`, alias), true);
+});
+
+test('coordination bootstrap installs missing config and bins without overwriting operator config', async (t) => {
+  const fixture = await fsp.mkdtemp(path.join(os.tmpdir(), 'portable-ai-bus-lifecycle-'));
+  const repo = path.join(fixture, 'repo');
+  const root = path.join(fixture, 'root');
+  for (const relative of ['templates', 'dist', 'dist/adapters']) {
+    await fsp.mkdir(path.join(repo, relative), { recursive: true });
+  }
+  await fsp.mkdir(root);
+  await fsp.writeFile(path.join(repo, 'templates', 'capabilities.json'), '{"version":1,"capabilities":[]}');
+  await fsp.writeFile(path.join(repo, 'dist', 'mailbox.js'), 'mailbox');
+  await fsp.writeFile(path.join(repo, 'dist', 'capabilities.js'), 'capabilities');
+  await fsp.writeFile(path.join(repo, 'dist', 'adapters', 'skse-devkit.js'), 'adapter');
+  t.after(() => fsp.rm(fixture, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
+
+  const created = bootstrapCoordinationRoot(repo, root);
+  assert.equal(created.length, 4);
+  const config = path.join(root, '.ai-bus', 'capabilities.json');
+  await fsp.writeFile(config, 'operator-owned');
+  assert.deepEqual(bootstrapCoordinationRoot(repo, root), []);
+  assert.equal(fs.readFileSync(config, 'utf8'), 'operator-owned');
+});

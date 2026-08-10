@@ -20,6 +20,12 @@
 const { spawn, spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
+const {
+  bootstrapCoordinationRoot,
+  listNodeProcesses,
+  processesForRoot,
+  samePath
+} = require('./bus-processes');
 
 const REPO = path.resolve(__dirname, '..');
 const DIST = fs.existsSync(path.join(REPO, 'dist', 'harness.js'))
@@ -69,20 +75,46 @@ function launchHidden(exe, args, logFile) {
   return child.pid ?? null;
 }
 
-// --- 1. harness -----------------------------------------------------------------
+function mailbox(args) {
+  const result = spawnSync(process.execPath, [path.join(DIST, 'mailbox.js'), ...args, '--root', root], {
+    encoding: 'utf8', windowsHide: true
+  });
+  if (result.status !== 0) throw new Error((result.stderr || result.stdout || `mailbox exited ${result.status}`).trim());
+  return (result.stdout || '') + (result.stderr || '');
+}
+
+// --- 1. runtime kit and seats ----------------------------------------------------
+
+const stagedRepo = path.basename(REPO).toLowerCase() === '.ai-bus';
+const created = stagedRepo ? [] : bootstrapCoordinationRoot(REPO, root);
+if (created.length) log(`bootstrap    installed ${created.length} missing coordination asset(s)`);
+mailbox(['init', '--agents', allSeats.join(','), '--max-rounds', '550']);
+log(`seats        ${allSeats.join(', ')}`);
+log(`workdir      ${workdir}`);
+
+// --- 2. harness -----------------------------------------------------------------
 
 function harnessAlive() {
   const endpoint = path.join(root, '.ai-bus', 'runtime', 'harness', 'endpoint.json');
   if (!fs.existsSync(endpoint)) return false;
+  let pid;
   try {
-    const { pid } = JSON.parse(fs.readFileSync(endpoint, 'utf8'));
+    ({ pid } = JSON.parse(fs.readFileSync(endpoint, 'utf8')));
     // The endpoint file OUTLIVES the process - a power cut leaves it pointing at a dead port,
     // and trusting it cost this project a stall. Check the pid, not the file.
     process.kill(pid, 0);
-    return true;
   } catch {
     return false;
   }
+  // Process enumeration failure is not evidence that the endpoint owner is dead. Fail closed;
+  // otherwise an access-denied query makes ensure-up launch a competing harness.
+  const processInfo = processesForRoot(listNodeProcesses(), root)
+    .find((item) => item.type === 'harness' && item.pid === pid);
+  if (!processInfo) return false;
+  if (!samePath(processInfo.workdir, workdir)) {
+    throw new Error(`Harness ${pid} uses --workdir ${processInfo.workdir}; requested ${workdir}. Run bus-restart.`);
+  }
+  return true;
 }
 
 if (harnessAlive()) {
@@ -90,7 +122,7 @@ if (harnessAlive()) {
 } else {
   launchHidden(
     process.execPath,
-    [path.join(DIST, 'harness.js'), 'serve', '--root', root, '--port', '0'],
+    [path.join(DIST, 'harness.js'), 'serve', '--root', root, '--workdir', workdir, '--port', '0'],
     path.join(root, '.ai-bus', 'runtime', 'harness-serve.log')
   );
   const deadline = Date.now() + 15000;
@@ -102,18 +134,14 @@ if (harnessAlive()) {
   log(harnessAlive() ? 'harness      started' : 'harness      FAILED to start');
 }
 
-// --- 2..3. seats and baton ------------------------------------------------------
-
-function mailbox(args) {
-  const result = spawnSync(process.execPath, [path.join(DIST, 'mailbox.js'), ...args, '--root', root], {
-    encoding: 'utf8', windowsHide: true
-  });
-  return (result.stdout || '') + (result.stderr || '');
+const harnessStatus = spawnSync(process.execPath, [
+  path.join(DIST, 'worker-client.js'), 'status', '--root', root, '--seat', consoleSeat
+], { encoding: 'utf8', windowsHide: true });
+if (harnessStatus.status !== 0) {
+  throw new Error(`Harness is not healthy: ${(harnessStatus.stderr || harnessStatus.stdout || 'status failed').trim()}`);
 }
 
-mailbox(['init', '--agents', allSeats.join(','), '--max-rounds', '550']);
-log(`seats        ${allSeats.join(', ')}`);
-log(`workdir      ${workdir}`);
+// --- 3. baton -------------------------------------------------------------------
 
 const statusRaw = mailbox(['status', '--json']);
 let state = {};
@@ -159,15 +187,15 @@ if (!holder) {
  * failure mode is a brain that does not start rather than an unbounded pile of them.
  */
 function brainRunning(seat) {
-  if (process.platform !== 'win32') return false;
-  const out = spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command',
-    `(Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -match 'brain[\\\\/]cli\\.js' -and $_.CommandLine -match '--seat ${seat}(\\s|$)' } | Measure-Object).Count`
-  ], { encoding: 'utf8', windowsHide: true });
-  if (out.status !== 0) {
-    log(`brain:${seat.padEnd(7)} could not check for a running brain - assuming one exists`);
-    return true;
-  }
-  return Number((out.stdout || '0').trim()) > 0;
+  const matches = processesForRoot(listNodeProcesses(), root)
+    .filter((item) => item.type === 'brain' && item.seat === seat);
+  if (matches.length === 0) return false;
+  const exact = matches.filter((item) => samePath(item.workdir, workdir) && samePath(item.brain, brainFile));
+  if (exact.length === 1 && matches.length === 1) return true;
+  throw new Error(
+    `brain:${seat} has ${matches.length} process(es) for this root but not exactly one matching ` +
+    `--workdir ${workdir} and --brain ${brainFile}. Run bus-restart.`
+  );
 }
 
 for (const seat of brainSeats) {
