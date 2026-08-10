@@ -39,7 +39,12 @@ const DEFAULT_SYSTEM = [
   'You are a bus seat agent. You receive mail and decide actions.',
   'Reply with ONLY a JSON object (no markdown fences) of the form:',
   '{"actions":[{"type":"send","to":"<seat>","kind":"ack","subject":"...","body":"..."}],"done":true,"note":"..."}',
-  'Allowed action types: send, claim, release, capability, done.',
+  'Exact action schemas:',
+  'send={"type":"send","to":"seat","kind":"ack|report|finding|note","subject":"text","body":"text","keepBaton":true|false};',
+  'claim={"type":"claim","paths":["relative/path"],"why":"text"};',
+  'release={"type":"release","paths":["relative/path"]};',
+  'capability={"type":"capability","id":"bus.doctor","timeoutMs":60000};',
+  'done={"type":"done","note":"text"}. Never omit required fields.',
   'Always acknowledge each incoming message with a short receipt send before other work.',
   'Do not name vendors, CLI tools, or API keys. Stay model-agnostic.'
 ].join(' ');
@@ -80,14 +85,15 @@ export function parsePlan(text: string): { plan: AgentPlan; malformed: boolean }
   }
   try {
     const raw = JSON.parse(trimmed.slice(start, end + 1)) as Partial<AgentPlan>;
-    const actions = Array.isArray(raw.actions) ? raw.actions.filter(isAction) : [];
+    const rawActions = Array.isArray(raw.actions) ? raw.actions : [];
+    const actions = rawActions.filter(isAction);
     return {
       plan: {
         actions,
         done: raw.done !== false,
         note: typeof raw.note === 'string' ? raw.note : undefined
       },
-      malformed: false
+      malformed: !Array.isArray(raw.actions) || actions.length !== rawActions.length
     };
   } catch {
     return { plan: { actions: [], done: true, note: 'json-parse-failed' }, malformed: true };
@@ -96,9 +102,27 @@ export function parsePlan(text: string): { plan: AgentPlan; malformed: boolean }
 
 function isAction(value: unknown): value is BrainAction {
   if (!value || typeof value !== 'object') return false;
-  const type = (value as { type?: unknown }).type;
-  return type === 'send' || type === 'claim' || type === 'release' ||
-    type === 'capability' || type === 'done';
+  const action = value as Record<string, unknown>;
+  const strings = (items: unknown) => Array.isArray(items) && items.length > 0 &&
+    items.every((item) => typeof item === 'string' && item.trim().length > 0);
+  switch (action.type) {
+    case 'send':
+      return typeof action.to === 'string' && action.to.trim().length > 0 &&
+        typeof action.subject === 'string' && typeof action.body === 'string' &&
+        (action.kind === undefined || typeof action.kind === 'string') &&
+        (action.keepBaton === undefined || typeof action.keepBaton === 'boolean');
+    case 'claim':
+      return strings(action.paths) && typeof action.why === 'string' && action.why.trim().length > 0;
+    case 'release':
+      return action.paths === undefined || strings(action.paths);
+    case 'capability':
+      return typeof action.id === 'string' && action.id.trim().length > 0 && action.id.length <= 100 &&
+        (action.timeoutMs === undefined || (Number.isInteger(action.timeoutMs) && Number(action.timeoutMs) > 0));
+    case 'done':
+      return action.note === undefined || typeof action.note === 'string';
+    default:
+      return false;
+  }
 }
 
 /**

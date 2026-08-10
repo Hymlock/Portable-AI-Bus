@@ -62,6 +62,19 @@ test('parsePlan accepts bare JSON and rejects fences-without-object as malformed
   assert.equal(prose.plan.note, 'no-json-object');
 });
 
+test('parsePlan rejects type-only tool actions before they reach the Bus', () => {
+  const missingId = parsePlan('{"actions":[{"type":"capability"}],"done":true}');
+  assert.equal(missingId.malformed, true);
+  assert.deepEqual(missingId.plan.actions, []);
+
+  const emptyClaim = parsePlan('{"actions":[{"type":"claim","paths":[],"why":"work"}],"done":true}');
+  assert.equal(emptyClaim.malformed, true);
+
+  const valid = parsePlan('{"actions":[{"type":"capability","id":"bus.doctor","timeoutMs":60000}],"done":false}');
+  assert.equal(valid.malformed, false);
+  assert.equal(valid.plan.actions[0].id, 'bus.doctor');
+});
+
 test('buildWakePrompt is vendor-neutral (no provider tooling names)', () => {
   const prompt = buildWakePrompt('grok', [msg(1)]);
   assert.match(prompt, /Seat: grok/);
