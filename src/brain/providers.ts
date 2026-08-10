@@ -555,20 +555,43 @@ export function extractGrokAnswer(stdout: string): { text: string; error?: strin
     return { text: '' };
   };
 
-  const start = trimmed.indexOf('{');
-  if (start >= 0) {
-    // Parse the LARGEST balanced span, not from the first brace to the end. Under
-    // `--json-schema` the CLI wraps the answer in its usual envelope AND the answer is itself
-    // JSON, so a naive slice can end mid-structure and fail, dropping the whole reply to the
-    // raw-text fallback - which reads downstream as "the model returned prose" when it did
-    // exactly what was asked.
-    const end = trimmed.lastIndexOf('}');
-    const span = end > start ? trimmed.slice(start, end + 1) : trimmed.slice(start);
-    try {
-      const whole = fromObject(JSON.parse(span) as Record<string, unknown>);
-      if (whole.text || whole.error) return whole;
-    } catch { /* not one document - try JSONL below */ }
+  // Scan for EVERY top-level JSON object by matching braces, and take the last one that carries
+  // an answer.
+  //
+  // Two earlier attempts failed here, each for a different reason, and both looked from the
+  // outside like "the model returned prose":
+  //   - first brace to end of document: spans past the first object when several are emitted
+  //   - first brace to LAST brace: same failure once the CLI emits tool events plus an answer,
+  //     which is exactly what happens with tool execution enabled
+  // A compliant reply was being discarded by the parser both times.
+  let best: { text: string; error?: string } | undefined;
+  for (let i = 0; i < trimmed.length; i += 1) {
+    if (trimmed[i] !== '{') continue;
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let j = i; j < trimmed.length; j += 1) {
+      const ch = trimmed[j];
+      if (escaped) { escaped = false; continue; }
+      if (ch === '\\') { escaped = true; continue; }
+      if (ch === '"') { inString = !inString; continue; }
+      if (inString) continue;
+      if (ch === '{') depth += 1;
+      else if (ch === '}') {
+        depth -= 1;
+        if (depth === 0) {
+          try {
+            const parsed = fromObject(JSON.parse(trimmed.slice(i, j + 1)) as Record<string, unknown>);
+            if (parsed.error) return parsed;          // an error is decisive; stop at once
+            if (parsed.text) best = parsed;            // otherwise keep the LAST answer seen
+          } catch { /* not an object we understand; keep scanning */ }
+          i = j;                                       // continue after this object
+          break;
+        }
+      }
+    }
   }
+  if (best) return best;
 
   let text = '';
   let error: string | undefined;

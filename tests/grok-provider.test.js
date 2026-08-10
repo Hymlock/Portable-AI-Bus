@@ -77,6 +77,42 @@ test('a schema-constrained reply is unwrapped, not mistaken for prose', () => {
     'the inner PLAN must survive, not the envelope around it');
 });
 
+test('multiple JSON documents: the ANSWER is taken, not the tool events', () => {
+  // What the CLI emits once tool execution is enabled: event objects, then the answer. Two
+  // earlier parsers spanned across documents and failed, dropping a compliant reply to the
+  // raw-text fallback - which downstream reads as "the model returned prose".
+  const plan = '{"actions":[{"type":"send","to":"hymlock","kind":"report","subject":"x","body":"y"}],"done":true}';
+  const stream = [
+    JSON.stringify({ type: 'tool_use', name: 'read_file', status: 'running' }),
+    JSON.stringify({ type: 'tool_result', ok: true }),
+    JSON.stringify({ text: plan, stopReason: 'end_turn' })
+  ].join('\r\n');
+
+  const out = extractGrokAnswer(stream);
+  assert.equal(out.error, undefined);
+  assert.deepEqual(JSON.parse(out.text), JSON.parse(plan));
+});
+
+test('an error object anywhere in the stream wins over a later answer', () => {
+  // "Not signed in" must never be masked by a trailing object, or the chain keeps a dead link.
+  const stream = [
+    JSON.stringify({ type: 'error', message: 'Not signed in.' }),
+    JSON.stringify({ text: '{"actions":[],"done":true}' })
+  ].join('\n');
+  const out = extractGrokAnswer(stream);
+  assert.equal(out.error, 'Not signed in.');
+});
+
+test('braces inside strings do not break the scan', () => {
+  // A body containing JSON-looking text would fool naive brace counting.
+  const plan = JSON.stringify({
+    actions: [{ type: 'send', to: 'hymlock', kind: 'report', subject: 's', body: 'saw {"a":1} in the log' }],
+    done: true
+  });
+  const out = extractGrokAnswer(JSON.stringify({ text: plan, stopReason: 'end_turn' }));
+  assert.deepEqual(JSON.parse(out.text), JSON.parse(plan));
+});
+
 test('the parser handles the other shapes the CLI can emit', () => {
   assert.equal(extractGrokAnswer('{"text":"one line"}').text, 'one line');
   assert.equal(extractGrokAnswer('plain text answer').text, 'plain text answer');
