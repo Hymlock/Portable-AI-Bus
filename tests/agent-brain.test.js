@@ -75,6 +75,22 @@ test('parsePlan rejects type-only tool actions before they reach the Bus', () =>
   assert.equal(valid.plan.actions[0].id, 'bus.doctor');
 });
 
+test('one invalid sibling action does not discard valid work', () => {
+  // Captured live from Grok: `claim` meant "I am taking this task", not a filesystem claim.
+  // It must not reach the Bus, but the valid acknowledgement beside it should execute and the
+  // done:false continuation should survive without a paid malformed-output repair.
+  const mixed = parsePlan(JSON.stringify({
+    actions: [
+      { type: 'send', to: 'codex', kind: 'ack', subject: 'received', body: 'working' },
+      { type: 'claim', id: '704', timeoutMs: 600000 }
+    ],
+    done: false
+  }));
+  assert.equal(mixed.malformed, false);
+  assert.equal(mixed.plan.done, false);
+  assert.deepEqual(mixed.plan.actions.map((action) => action.type), ['send']);
+});
+
 test('buildWakePrompt is vendor-neutral (no provider tooling names)', () => {
   const prompt = buildWakePrompt('grok', [msg(1)]);
   assert.match(prompt, /Seat: grok/);

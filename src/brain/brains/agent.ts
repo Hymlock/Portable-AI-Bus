@@ -157,13 +157,21 @@ export function parsePlan(text: string): { plan: AgentPlan; malformed: boolean }
         ? normalizeAction(action as Record<string, unknown>)
         : action))
       .filter(isAction);
+    // Reject unsafe/meaningless actions individually without throwing away valid siblings.
+    // Live Grok output paired a valid acknowledgement with a conceptual task `claim` carrying
+    // an id and timeout instead of filesystem paths. The invalid claim was correctly filtered,
+    // but marking the whole plan malformed discarded the acknowledgement and bought another
+    // repair call. A plan is malformed when its action container is absent, or when it requested
+    // actions and NONE are safe to execute. The done-without-report guard still prevents a valid
+    // courtesy action from concealing an invalid/missing substantive report.
+    const hasOnlyRejectedActions = rawActions.length > 0 && actions.length === 0;
     return {
       plan: {
         actions,
         done: raw.done !== false,
         note: typeof raw.note === 'string' ? raw.note : undefined
       },
-      malformed: !Array.isArray(raw.actions) || actions.length !== rawActions.length
+      malformed: !Array.isArray(raw.actions) || hasOnlyRejectedActions
     };
   } catch {
     return { plan: { actions: [], done: true, note: 'json-parse-failed' }, malformed: true };
@@ -657,5 +665,4 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
 export const agentBrainFactory = (provider: ModelProvider): BrainFactory => {
   return ({ seat, log }) => createAgentBrain({ seat, provider, log });
 };
-
 
