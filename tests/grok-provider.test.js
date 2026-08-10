@@ -93,6 +93,20 @@ test('multiple JSON documents: the ANSWER is taken, not the tool events', () => 
   assert.deepEqual(JSON.parse(out.text), JSON.parse(plan));
 });
 
+test('a doubly-wrapped answer is unwrapped to the plan', () => {
+  // Observed live: the answer arrives inside an envelope that is itself inside an envelope. A
+  // single unwrap returns another envelope, which then fails to parse as a plan and is logged
+  // as "malformed output" from a model that had complied exactly.
+  const plan = '{"actions":[{"type":"send","to":"hymlock","kind":"report","subject":"x","body":"y"}],"done":true}';
+  const once = JSON.stringify({ text: plan, stopReason: 'end_turn' });
+  const twice = JSON.stringify({ text: once, stopReason: 'end_turn' });
+
+  assert.deepEqual(JSON.parse(extractGrokAnswer(twice).text), JSON.parse(plan));
+  // and unwrapping must stop at the plan rather than chewing into it
+  assert.deepEqual(JSON.parse(extractGrokAnswer(once).text), JSON.parse(plan));
+  assert.deepEqual(JSON.parse(extractGrokAnswer(plan).text), JSON.parse(plan));
+});
+
 test('an error object anywhere in the stream wins over a later answer', () => {
   // "Not signed in" must never be masked by a trailing object, or the chain keeps a dead link.
   const stream = [

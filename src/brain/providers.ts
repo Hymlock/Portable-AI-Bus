@@ -591,7 +591,26 @@ export function extractGrokAnswer(stdout: string): { text: string; error?: strin
       }
     }
   }
-  if (best) return best;
+  if (best) {
+    // Unwrap repeatedly. Observed live: the answer arrives inside an envelope that is itself
+    // inside an envelope, so a single unwrap returns another envelope - which then fails to
+    // parse as a plan and is logged as "malformed output" from a model that complied.
+    // Bounded, because an unbounded unwrap on hostile input is a hang.
+    let text = best.text;
+    for (let depth = 0; depth < 3; depth += 1) {
+      const inner = text.trim();
+      if (!inner.startsWith('{') || inner.includes('"actions"')) break;
+      try {
+        const parsed = fromObject(JSON.parse(inner) as Record<string, unknown>);
+        if (parsed.error) return parsed;
+        if (!parsed.text || parsed.text === text) break;
+        text = parsed.text;
+      } catch {
+        break;
+      }
+    }
+    return { text };
+  }
 
   let text = '';
   let error: string | undefined;
