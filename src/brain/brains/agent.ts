@@ -1,8 +1,8 @@
-/**
+﻿/**
  * Model-agnostic agent brain.
  *
  * One prompt shape, one action schema, any ModelProvider (including a chain). There is no
- * Anthropic/OpenAI/xAI branch here — if a seat needs a vendor, that belongs in the provider
+ * Anthropic/OpenAI/xAI branch here â€” if a seat needs a vendor, that belongs in the provider
  * chain, not in the brain. That is Hymlock's hard constraint: no seat tied to one vendor.
  */
 
@@ -49,6 +49,46 @@ const DEFAULT_SYSTEM = [
   'Do not name vendors, CLI tools, or API keys. Stay model-agnostic.'
 ].join(' ');
 
+/**
+ * The plan shape, as JSON Schema, for providers that can constrain decoding.
+ *
+ * Declared once and passed on every `ask`. Providers that support it (xAI's CLI does, via
+ * `--json-schema`) can no longer return prose; the rest ignore it and `parsePlan` handles the
+ * output exactly as before. No vendor branch enters the brain.
+ *
+ * This exists because the grok seat replied "I'll identify the code commit and report findings"
+ * â€” every wake, ending in `malformed-output`, while authenticated and billing its own vendor.
+ * The prompt already said "reply with ONLY a JSON object". A schema is the difference between
+ * asking and requiring.
+ */
+export const PLAN_SCHEMA = {
+  type: 'object',
+  properties: {
+    actions: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          type: { type: 'string', enum: ['send', 'claim', 'release', 'capability', 'done'] },
+          to: { type: 'string' },
+          kind: { type: 'string' },
+          subject: { type: 'string' },
+          body: { type: 'string' },
+          keepBaton: { type: 'boolean' },
+          paths: { type: 'array', items: { type: 'string' } },
+          why: { type: 'string' },
+          id: { type: 'string' },
+          timeoutMs: { type: 'number' }
+        },
+        required: ['type']
+      }
+    },
+    done: { type: 'boolean' },
+    note: { type: 'string' }
+  },
+  required: ['actions', 'done']
+};
+
 export function buildWakePrompt(seat: string, messages: BrainMessage[]): string {
   const lines = [
     `Seat: ${seat}`,
@@ -71,7 +111,7 @@ export function buildWakePrompt(seat: string, messages: BrainMessage[]): string 
 
 /**
  * Parse model text into a plan. Malformed output becomes a safe empty plan with an error note
- * rather than a throw — a brain that dies on bad model text is the stall we are removing.
+ * rather than a throw â€” a brain that dies on bad model text is the stall we are removing.
  */
 export function parsePlan(text: string): { plan: AgentPlan; malformed: boolean } {
   const trimmed = text.trim();
@@ -128,7 +168,7 @@ function isAction(value: unknown): value is BrainAction {
 /**
  * Message kinds that are pure courtesy. Sending one does not answer a task.
  *
- * Kept in step with the runner's `ackKinds`, which drops wakes carrying only these — the two
+ * Kept in step with the runner's `ackKinds`, which drops wakes carrying only these â€” the two
  * rules are the same idea seen from opposite ends: a receipt neither earns a reply nor counts
  * as one.
  */
@@ -140,7 +180,7 @@ export type PlanFailure = { action: string; detail: string };
 /**
  * Did a bus tool refuse this call?
  *
- * `cliBusClient` never throws — a failing call returns `{ error }` so one bad tool cannot kill
+ * `cliBusClient` never throws â€” a failing call returns `{ error }` so one bad tool cannot kill
  * a wake. That is right, but it means a discarded return value is a SILENTLY discarded failure.
  */
 function toolFailure(result: unknown): string | undefined {
@@ -156,8 +196,8 @@ function toolFailure(result: unknown): string | undefined {
  *
  * The first version awaited every tool call and threw the result away. A seat then addressed a
  * report to a seat that does not exist, the harness answered
- * `403 unknown_seat: Recipient orchestrator is not a registered seat`, and the brain — never
- * having looked — reported `done`. The audit it had been asked for was simply gone, and the log
+ * `403 unknown_seat: Recipient orchestrator is not a registered seat`, and the brain â€” never
+ * having looked â€” reported `done`. The audit it had been asked for was simply gone, and the log
  * said the wake succeeded.
  *
  * Returning the failures lets the caller do the only correct thing: tell the model its send did
@@ -242,7 +282,7 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
       /**
        * Seats this brain may address, learned from the bus rather than guessed.
        *
-       * Without it a model invents plausible names — one addressed a report to `orchestrator`,
+       * Without it a model invents plausible names â€” one addressed a report to `orchestrator`,
        * the harness answered `403 unknown_seat`, and the report was lost. Nothing in the prompt
        * had ever told it which seats exist.
        */
@@ -308,7 +348,7 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
         const prompt = `${correction}${rosterLine ? `${rosterLine}\n\n` : ''}${base}`;
         let reply: ModelReply | ChainReply;
         try {
-          reply = await provider.ask(prompt, { systemPrompt, sessionId });
+          reply = await provider.ask(prompt, { systemPrompt, sessionId, responseSchema: PLAN_SCHEMA });
         } catch (error) {
           const detail = (error as Error)?.message ?? String(error);
           log('provider-threw', { seat, detail: detail.slice(0, 200) });
@@ -324,7 +364,7 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
           log('provider-exhausted', { seat, attempts: chain.attempts });
           const plan = receiptPlan(seat, messages);
           await executeTrackedPlan(plan);
-          // exhausted:true is the runner signal for onExhausted → reassignBaton (5af3b1c).
+          // exhausted:true is the runner signal for onExhausted â†’ reassignBaton (5af3b1c).
           return {
             done: true,
             exhausted: true,
@@ -353,7 +393,7 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
             try {
               repair = await provider.ask(
                 'Your previous reply was not valid JSON. Reply again with ONLY the JSON plan object.',
-                { systemPrompt, sessionId }
+                { systemPrompt, sessionId, responseSchema: PLAN_SCHEMA }
               );
             } catch (error) {
               const detail = (error as Error)?.message ?? String(error);
@@ -412,7 +452,7 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
                 `These actions were REFUSED by the bus and did NOT happen: ${detail}\n` +
                 `Valid seats are: ${knownSeats.join(', ')}. Fix the addressing or arguments and ` +
                 `reply with ONLY the corrected JSON plan.`,
-                { systemPrompt, sessionId }
+                { systemPrompt, sessionId, responseSchema: PLAN_SCHEMA }
               );
               if (!retry.isError && retry.text.trim()) {
                 const corrected = parsePlan(retry.text);
@@ -482,3 +522,4 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
 export const agentBrainFactory = (provider: ModelProvider): BrainFactory => {
   return ({ seat, log }) => createAgentBrain({ seat, provider, log });
 };
+

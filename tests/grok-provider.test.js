@@ -63,6 +63,20 @@ test('a pretty-printed JSON answer is extracted, not returned whole', () => {
   assert.deepEqual(extractGrokAnswer(real), { text: 'pong' });
 });
 
+test('a schema-constrained reply is unwrapped, not mistaken for prose', () => {
+  // Live shape from `grok -p ... --json-schema`. The answer is itself JSON, wrapped in the
+  // CLI's usual envelope. Slicing from the first brace to the END of the document lands
+  // mid-structure and fails, dropping the reply to the raw-text fallback - which downstream
+  // reads as "the model returned prose" when it had in fact complied exactly.
+  const plan = '{"actions":[{"type":"send","to":"hymlock","kind":"report","subject":"x","body":"y"}],"done":true}';
+  const envelope = JSON.stringify({ text: plan, stopReason: 'end_turn', sessionId: '019f' }, null, 2);
+
+  const out = extractGrokAnswer(envelope);
+  assert.equal(out.error, undefined);
+  assert.deepEqual(JSON.parse(out.text), JSON.parse(plan),
+    'the inner PLAN must survive, not the envelope around it');
+});
+
 test('the parser handles the other shapes the CLI can emit', () => {
   assert.equal(extractGrokAnswer('{"text":"one line"}').text, 'one line');
   assert.equal(extractGrokAnswer('plain text answer').text, 'plain text answer');

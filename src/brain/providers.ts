@@ -24,10 +24,30 @@ export type ModelReply = {
   isError: boolean;
 };
 
+export type AskOptions = {
+  systemPrompt?: string;
+  sessionId?: string;
+  model?: string;
+  timeoutMs?: number;
+  /**
+   * JSON Schema the reply should match. A **hint**, not a contract.
+   *
+   * Providers that can constrain decoding honour it; the rest ignore it and the caller parses
+   * as before, so this never becomes a vendor branch in the brain. The brain says what shape it
+   * wants; each provider does as much about that as it can.
+   *
+   * Added because the grok seat spent every wake narrating its intent in prose — "I'll identify
+   * the code commit and report findings" — instead of emitting the plan. It was authenticated,
+   * billing its own vendor, and contributing nothing. Asking harder in the prompt had already
+   * failed; xAI's CLI can enforce the shape, so it should.
+   */
+  responseSchema?: unknown;
+};
+
 export type ModelProvider = {
   readonly kind: ProviderKind;
   /** One prompt, one reply. Continuation is via `sessionId` when supported. */
-  ask(prompt: string, options?: { systemPrompt?: string; sessionId?: string; model?: string; timeoutMs?: number }): Promise<ModelReply>;
+  ask(prompt: string, options?: AskOptions): Promise<ModelReply>;
   /** Cheap check that this provider can actually run. Never throws. */
   probe(): Promise<{ ok: boolean; detail: string }>;
 };
@@ -528,8 +548,15 @@ export function extractGrokAnswer(stdout: string): { text: string; error?: strin
 
   const start = trimmed.indexOf('{');
   if (start >= 0) {
+    // Parse the LARGEST balanced span, not from the first brace to the end. Under
+    // `--json-schema` the CLI wraps the answer in its usual envelope AND the answer is itself
+    // JSON, so a naive slice can end mid-structure and fail, dropping the whole reply to the
+    // raw-text fallback - which reads downstream as "the model returned prose" when it did
+    // exactly what was asked.
+    const end = trimmed.lastIndexOf('}');
+    const span = end > start ? trimmed.slice(start, end + 1) : trimmed.slice(start);
     try {
-      const whole = fromObject(JSON.parse(trimmed.slice(start)) as Record<string, unknown>);
+      const whole = fromObject(JSON.parse(span) as Record<string, unknown>);
       if (whole.text || whole.error) return whole;
     } catch { /* not one document - try JSONL below */ }
   }
@@ -619,9 +646,13 @@ export function grokProvider(options: GrokProviderOptions = {}): ModelProvider {
         : { ok: false, detail: `grok not usable: command not found (${command})` };
     },
 
-    async ask(prompt, { systemPrompt = '', timeoutMs = options.timeoutMs ?? 600_000 } = {}) {
+    async ask(prompt, { systemPrompt = '', timeoutMs = options.timeoutMs ?? 600_000, responseSchema } = {}) {
       const args = ['-p', systemPrompt ? `${systemPrompt}\n\n---\n\n${prompt}` : prompt,
                     '--output-format', 'json'];
+      // Constrain decoding when the caller says what shape it needs. This is the whole reason
+      // the grok seat can be trusted with structured work: the CLI enforces the schema, so
+      // "reply with only JSON" stops being a request the model may decline.
+      if (responseSchema) args.push('--json-schema', JSON.stringify(responseSchema));
       if (options.model) args.push('--model', options.model);
 
       const { code, stdout, stderr } = await run(args, timeoutMs);
