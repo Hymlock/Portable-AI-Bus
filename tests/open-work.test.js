@@ -78,9 +78,9 @@ test('open work does NOT survive an exhausted chain', async () => {
   assert.equal(turns, 1, 'exhaustion ends the continuation, whatever `done` says');
 });
 
-test('open work does NOT survive a capped wake', async () => {
-  // A brain that just burned its entire per-wake budget is the last thing to hand another turn
-  // to immediately.
+test('a RUNNER budget breach does not earn another turn', async () => {
+  // A brain that burned its entire per-wake tool budget is the last thing to hand another turn
+  // to immediately. The runner's own cap sets done:true, which is what stops it.
   const bus = quietBus(task);
   let turns = 0;
   const brain = {
@@ -93,7 +93,28 @@ test('open work does NOT survive a capped wake', async () => {
 
   await runBrain({ seat: 'grok', brain, bus: bus.client, maxWakes: 6, listenSeconds: 300, budgetPerWake: 3 });
 
-  assert.equal(turns, 1, 'a capped wake must not immediately earn another one');
+  assert.equal(turns, 1, 'a budget breach must not immediately earn another wake');
+});
+
+test('a BRAIN that ran out of its own rounds DOES continue', async () => {
+  // The distinction that cost an audit. Two caps look alike in the log and mean opposite things.
+  // A brain reporting `done:false, capped:true` has honest unfinished work - the worker seat's
+  // own note read "Audit is open" - and refusing to continue it stranded the seat entirely.
+  const bus = quietBus(task);
+  let turns = 0;
+  const brain = {
+    async takeTurn() {
+      turns += 1;
+      return turns < 3
+        ? { done: false, capped: true, note: 'max-rounds' }
+        : { done: true, note: 'finished' };
+    }
+  };
+
+  await runBrain({ seat: 'worker', brain, bus: bus.client, maxWakes: 3, listenSeconds: 300 });
+
+  assert.equal(turns, 3, 'running out of rounds bounds a WAKE, not the work');
+  assert.equal(bus.calls.listen, 0, 'and it must not wait for mail to resume');
 });
 
 test('the log says whether a seat is continuing, so a watcher can tell work from a stall', async () => {

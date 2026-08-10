@@ -101,26 +101,61 @@ function isAction(value: unknown): value is BrainAction {
     type === 'capability' || type === 'done';
 }
 
-export async function executePlan(tools: BrainTools, plan: AgentPlan): Promise<void> {
+/** What went wrong while carrying out a plan, in the model's own terms. */
+export type PlanFailure = { action: string; detail: string };
+
+/**
+ * Did a bus tool refuse this call?
+ *
+ * `cliBusClient` never throws — a failing call returns `{ error }` so one bad tool cannot kill
+ * a wake. That is right, but it means a discarded return value is a SILENTLY discarded failure.
+ */
+function toolFailure(result: unknown): string | undefined {
+  if (!result || typeof result !== 'object') return undefined;
+  const record = result as Record<string, unknown>;
+  if (typeof record.error === 'string') return record.error;
+  if (typeof record.refused === 'string') return record.refused;
+  return undefined;
+}
+
+/**
+ * Carry out a plan, and REPORT what failed.
+ *
+ * The first version awaited every tool call and threw the result away. A seat then addressed a
+ * report to a seat that does not exist, the harness answered
+ * `403 unknown_seat: Recipient orchestrator is not a registered seat`, and the brain — never
+ * having looked — reported `done`. The audit it had been asked for was simply gone, and the log
+ * said the wake succeeded.
+ *
+ * Returning the failures lets the caller do the only correct thing: tell the model its send did
+ * not land, and keep the work open instead of closing it.
+ */
+export async function executePlan(tools: BrainTools, plan: AgentPlan): Promise<PlanFailure[]> {
+  const failures: PlanFailure[] = [];
+  const note = (action: string, result: unknown) => {
+    const detail = toolFailure(result);
+    if (detail) failures.push({ action, detail });
+  };
+
   for (const action of plan.actions) {
     switch (action.type) {
       case 'send':
-        await tools.send({
+        note(`send to ${action.to}`, await tools.send({
           to: action.to,
           kind: action.kind ?? 'note',
           subject: action.subject,
           body: action.body,
           keepBaton: action.keepBaton
-        });
+        }));
         break;
       case 'claim':
-        await tools.claim(action.paths, action.why);
+        note('claim', await tools.claim(action.paths, action.why));
         break;
       case 'release':
-        await tools.release(action.paths);
+        note('release', await tools.release(action.paths));
         break;
       case 'capability':
-        await tools.runCapability(action.id, action.timeoutMs);
+        note(`capability ${action.id}`, await tools.runCapability(action.id, action.timeoutMs));
         break;
       case 'done':
         break;
@@ -128,6 +163,7 @@ export async function executePlan(tools: BrainTools, plan: AgentPlan): Promise<v
         break;
     }
   }
+  return failures;
 }
 
 /**
@@ -154,7 +190,10 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
     seat,
     provider,
     systemPrompt = DEFAULT_SYSTEM,
-    maxRounds = 3,
+    // Raised from 3. Three rounds is enough to acknowledge and stop, which is exactly what two
+    // seats did when handed multi-step audits, and not enough to investigate anything. Running
+    // out of rounds now returns `done: false`, so this bounds a WAKE rather than the work.
+    maxRounds = 12,
     log = () => {}
   } = options;
 
@@ -167,6 +206,23 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
       let lastNote = '';
       let servedBy: string | undefined;
 
+      /**
+       * Seats this brain may address, learned from the bus rather than guessed.
+       *
+       * Without it a model invents plausible names — one addressed a report to `orchestrator`,
+       * the harness answered `403 unknown_seat`, and the report was lost. Nothing in the prompt
+       * had ever told it which seats exist.
+       */
+      let knownSeats: string[] = [];
+      try {
+        const status = await tools.status() as { agents?: unknown };
+        if (Array.isArray(status?.agents)) {
+          knownSeats = status.agents.filter((a): a is string => typeof a === 'string');
+        }
+      } catch {
+        // A roster we could not read is not worth failing a wake over; the prompt just omits it.
+      }
+
       const exhaustionNote = (reply: ChainReply) =>
         `chain-exhausted:attempts=${(reply.attempts ?? [])
           .map((a: { kind: string; reason?: string }) => `${a.kind}:${a.reason ?? 'error'}`)
@@ -178,8 +234,14 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
           : base;
       };
 
+      const rosterLine = knownSeats.length
+        ? `Seats that exist on this bus: ${knownSeats.join(', ')}. Address mail ONLY to these; ` +
+          'any other name is refused and your message is lost.'
+        : '';
+
       for (let round = 0; round < maxRounds; round += 1) {
-        const prompt = buildWakePrompt(seat, messages);
+        const base = buildWakePrompt(seat, messages);
+        const prompt = rosterLine ? `${rosterLine}\n\n${base}` : base;
         let reply: ModelReply | ChainReply;
         try {
           reply = await provider.ask(prompt, { systemPrompt, sessionId });
@@ -261,17 +323,56 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
           return { done: true, note: 'malformed-output' };
         }
 
-        await executePlan(tools, plan);
+        const failures = await executePlan(tools, plan);
         // Provider identity is orchestration evidence, not model prose. Always retain it even
         // when the model supplies a friendly note of its own.
         lastNote = durableNote(plan.note);
+
+        if (failures.length > 0) {
+          // A refused tool call is NOT a completed turn. Tell the model exactly what the bus
+          // said and give it another round, because the alternative is what already happened
+          // once: a report addressed to a seat that does not exist, silently discarded, and a
+          // wake that logged success.
+          log('plan-actions-failed', { seat, failures });
+          const detail = failures.map((f) => `${f.action}: ${f.detail}`).join('; ');
+          lastNote = durableNote(`action-failed: ${detail}`.slice(0, 200));
+          if (round + 1 < maxRounds) {
+            try {
+              const retry = await provider.ask(
+                `These actions were REFUSED by the bus and did NOT happen: ${detail}\n` +
+                `Valid seats are: ${knownSeats.join(', ')}. Fix the addressing or arguments and ` +
+                `reply with ONLY the corrected JSON plan.`,
+                { systemPrompt, sessionId }
+              );
+              if (!retry.isError && retry.text.trim()) {
+                const corrected = parsePlan(retry.text);
+                if (!corrected.malformed) {
+                  const stillFailing = await executePlan(tools, corrected.plan);
+                  if (stillFailing.length === 0) {
+                    lastNote = durableNote(corrected.plan.note ?? 'recovered after refused action');
+                    if (corrected.plan.done !== false) return { done: true, note: lastNote };
+                  }
+                }
+              }
+            } catch (error) {
+              log('provider-threw', { seat, phase: 'action-repair', detail: String((error as Error)?.message).slice(0, 200) });
+            }
+          }
+          // Unfinished on purpose: the runner gives an open seat another turn.
+          return { done: false, note: lastNote };
+        }
+
         if (plan.done !== false) {
           return { done: true, note: lastNote };
         }
         // Model asked to continue; loop with same mail context (tool results are side effects).
       }
 
-      return { done: true, note: lastNote || 'max-rounds', capped: true };
+      // Out of ROUNDS, not out of work. `done: false` is the honest answer - the model asked to
+      // continue and we stopped it - so the runner schedules another turn rather than treating a
+      // half-finished audit as delivered. `capped` stays for the log; the runner's own budget
+      // breach is a different thing and still returns done:true.
+      return { done: false, note: lastNote || 'max-rounds', capped: true };
     }
   };
 }

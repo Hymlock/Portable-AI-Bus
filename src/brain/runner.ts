@@ -215,11 +215,16 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
         }
       }
 
-      // Carry "unfinished" into the next iteration, but NOT past an exhausted chain or a capped
-      // wake. A seat with no provider left cannot continue by trying harder, and a brain that
-      // just burned its whole budget is the last thing to hand another turn to immediately -
-      // both would spin at full speed on a problem they cannot solve.
-      hasOpenWork = result.done === false && !result.exhausted && !result.capped;
+      // Carry "unfinished" into the next iteration, but never past an exhausted chain: a seat
+      // with no provider left cannot continue by trying harder, and would spin at full speed on
+      // a problem no number of turns can solve.
+      //
+      // `capped` is deliberately NOT a blocker here, and the distinction cost an audit. There
+      // are two different caps. A brain that runs out of its own ROUNDS reports
+      // `done: false, capped: true` - honest unfinished work, and refusing to continue it
+      // stranded a seat whose own note read "Audit is open". The runner's own budget breach is
+      // the dangerous one, and it is already excluded because that path sets `done: true`.
+      hasOpenWork = result.done === false && !result.exhausted;
 
       log('wake-complete', {
         seat,
