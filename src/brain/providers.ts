@@ -588,6 +588,12 @@ export function extractGrokAnswer(stdout: string): { text: string; error?: strin
     if (value.type === 'error' && typeof value.message === 'string') {
       return { text: '', error: value.message };
     }
+    // With --json-schema Grok may emit the structured answer directly, without a `text`
+    // envelope. Treating this as an unknown event falls through to the original ConPTY bytes,
+    // undoing `undoTerminalStringWraps` and making a valid long plan malformed again.
+    if (Array.isArray(value.actions) && typeof value.done === 'boolean') {
+      return { text: JSON.stringify(value) };
+    }
     for (const key of ['text', 'result', 'response', 'content', 'message']) {
       const candidate = value[key];
       if (typeof candidate === 'string' && candidate.trim()) return { text: candidate };
@@ -844,4 +850,3 @@ export function resolveChain(
   const { chainProviders } = require('./chain') as typeof import('./chain');
   return chainProviders(configs.map((config) => resolveProvider(config)), chainOptions);
 }
-

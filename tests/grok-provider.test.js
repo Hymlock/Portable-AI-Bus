@@ -145,6 +145,20 @@ test('ConPTY visual wraps inside a long Grok JSON string are reversed', () => {
   assert.deepEqual(JSON.parse(extractGrokAnswer(stream).text), JSON.parse(plan));
 });
 
+test('a direct structured plan is retained after ConPTY wraps its body string', () => {
+  // The CLI also emits the schema result directly, with no outer `text` field. Previously the
+  // scanner cleaned this object, failed to recognise it as an answer, then returned the dirty
+  // original stream from the fallback path.
+  const plan = JSON.stringify({
+    actions: [{ type: 'send', to: 'codex', kind: 'report', subject: 'probe', body: 'Y'.repeat(400) }],
+    done: true
+  });
+  const bodyStart = plan.indexOf('Y'.repeat(400));
+  const wrapped = `${plan.slice(0, bodyStart + 90)}\r\n${plan.slice(bodyStart + 90)}`;
+
+  assert.deepEqual(JSON.parse(extractGrokAnswer(wrapped).text), JSON.parse(plan));
+});
+
 test('an error object anywhere in the stream wins over a later answer', () => {
   // "Not signed in" must never be masked by a trailing object, or the chain keeps a dead link.
   const stream = [
