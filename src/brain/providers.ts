@@ -658,7 +658,15 @@ export function extractGrokAnswer(stdout: string): { text: string; error?: strin
         if (!parsed.text || parsed.text === text) break;
         text = parsed.text;
       } catch {
-        break;
+        // Grok can place more than one schema-valid plan inside the envelope's `text` field:
+        // a progress plan immediately followed by the final report (`}{`, no delimiter). Run
+        // that nested stream through the same object scanner and retain its last answer. This
+        // mirrors the top-level JSONL rule and prevents an early progress object from hiding the
+        // substantive report. Stop if extraction made no progress to avoid recursive churn.
+        const nested = extractGrokAnswer(inner);
+        if (nested.error) return nested;
+        if (!nested.text || nested.text === text) break;
+        text = nested.text;
       }
     }
     return { text };

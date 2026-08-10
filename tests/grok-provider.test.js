@@ -159,6 +159,22 @@ test('a direct structured plan is retained after ConPTY wraps its body string', 
   assert.deepEqual(JSON.parse(extractGrokAnswer(wrapped).text), JSON.parse(plan));
 });
 
+test('nested progress and final plans select the final substantive answer', () => {
+  // Captured live from Grok: the CLI envelope held two schema-valid objects with no delimiter.
+  // The first says done:false; the second carries the report. Parsing the concatenation as one
+  // object rejects both and starts a paid repair loop.
+  const progress = JSON.stringify({
+    actions: [{ type: 'claim', paths: ['README.md'], why: 'reading' }], done: false
+  });
+  const report = JSON.stringify({
+    actions: [{ type: 'send', to: 'codex', kind: 'report', subject: 'proof', body: 'verified' }],
+    done: true
+  });
+  const envelope = JSON.stringify({ text: progress + report, stopReason: 'end_turn' }, null, 2);
+
+  assert.deepEqual(JSON.parse(extractGrokAnswer(envelope).text), JSON.parse(report));
+});
+
 test('an error object anywhere in the stream wins over a later answer', () => {
   // "Not signed in" must never be masked by a trailing object, or the chain keeps a dead link.
   const stream = [
