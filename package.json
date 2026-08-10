@@ -15,6 +15,7 @@
     "scripts/bus-processes.js",
     "scripts/bus-console.js",
     "scripts/bus-tick.js",
+    "scripts/bus-supervise.js",
     "scripts/build-distribution.js",
     "node_modules/**",
     "providers/**",
@@ -418,5 +419,14 @@
   "bundledDependencies": [
     "@anthropic-ai/sdk",
     "node-pty"
-  ]
+  ],
+  "bin": {
+    "portable-ai-bus": "scripts/bus-up.js",
+    "bus-up": "scripts/bus-up.js",
+    "bus-tick": "scripts/bus-tick.js",
+    "bus-supervise": "scripts/bus-supervise.js",
+    "bus-mailbox": "dist/mailbox.js",
+    "bus-worker": "dist/worker-client.js",
+    "bus-harness": "dist/harness.js"
+  }
 }
