@@ -63,6 +63,56 @@ restarted because v0.2 does not install a service supervisor.
 
 Initialization preserves pre-existing repository files. Only files actually created by the bus enter its ownership ledger; user-modified managed files are preserved on reinitialize and remove. Destructive lifecycle operations require an HMAC-checked ownership ledger outside the repository, reject junction/symlink escapes, serialize through a cross-process workspace lock, and recover interrupted install or suspend state. The in-repo manifest is descriptive, not destructive authority.
 
+## Model providers: install and sign-in
+
+A seat needs a **model** behind it. This section is what someone on a fresh machine needs, and
+every command below was run and verified on 2026-08-10.
+
+**None of them is required.** A chain falls through to the next link, so one missing or
+signed-out vendor degrades a seat instead of stopping it. Install as many as you want seats to
+be independent of — with all three, no single vendor's outage or spent wallet can stop the bus.
+
+**API keys are optional everywhere.** Each CLI authenticates against a subscription you already
+pay for; `ANTHROPIC_API_KEY` / `XAI_API_KEY` are opt-in fallbacks, never prerequisites.
+
+| Vendor | Install | Sign in | Verify |
+|---|---|---|---|
+| **Anthropic** (`cli`) | Claude Code CLI | existing Claude subscription | `claude --version` |
+| **OpenAI** (`codex`) | ships **inside** the ChatGPT VS Code extension | `codex login` | `codex login status` → `Logged in using ChatGPT` |
+| **xAI** (`grok`) | `npm i -g @xai-official/grok` | `grok login` (browser) or `grok login --device-code` | `grok --version` |
+
+`grok login` needs a **SuperGrok** or **X Premium+** subscription. Signed out, the link fails as
+`auth` and the chain moves on — the seat keeps working on another vendor.
+
+### Two Windows traps that make a present CLI look missing
+
+Both cost real debugging time; the resolvers handle them, but know them before you conclude a
+CLI is not installed.
+
+- **Node 24 cannot spawn a `.cmd` shim at all** (EINVAL, deliberate hardening). npm installs
+  `claude` and `grok` as shims, so spawning the name you type in a terminal fails with an error
+  that reads exactly like "not installed".
+- **The real binaries are not where the shim is.** `grok`'s npm entry is a *trampoline* that
+  execs `~/.grok/bin/grok.exe`; Claude Code's real executable lives under
+  `%APPDATA%\npm\node_modules\@anthropic-ai\claude-code\bin\`; Codex's is inside the VS Code
+  extension directory and is **never on PATH**. Searching PATH alone reports "not installed"
+  for a CLI that is present *and signed in*.
+
+Override detection with `CODEX_CLI_PATH` or `GROK_CLI_PATH` if your layout differs.
+
+### Check what a seat can actually reach
+
+Each brain logs its chain at startup, and every reply records **which link served it** — so
+"grok answered" is evidence, not an assumption:
+
+```
+{"event":"provider-chain","ok":true,"detail":"3/3 link(s) usable: grok=ok, codex=ok, cli=ok"}
+{"seat":"grok","event":"wake-complete","note":"servedBy=grok"}
+```
+
+Read them at `<bus root>/.ai-bus/runtime/brain-<seat>.log`. If a seat you expect to be on its
+own vendor logs `servedBy=cli`, it is falling through — and billing someone else's wallet.
+
 ## Providers
 
 Configured in `providers/providers.json` (staged into `.ai-bus/providers/`):
