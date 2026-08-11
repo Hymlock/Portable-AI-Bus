@@ -13,8 +13,10 @@ async function main() {
   const repo = path.resolve(__dirname, '..');
   const root = path.resolve(option('--root', process.cwd()));
   const workdir = path.resolve(option('--workdir', root));
-  const consoleSeat = option('--console', 'codex');
-  const brains = option('--brains', 'claude,codex,grok').split(',').map((item) => item.trim()).filter(Boolean);
+  // Same defaults as bus-up: the console seat is driven by its live interface and gets no brain.
+  // A restart that quietly re-seats a claude brain undoes the cleanup by itself.
+  const consoleSeat = option('--console', 'claude');
+  const brains = option('--brains', 'codex,grok').split(',').map((item) => item.trim()).filter(Boolean);
   const brainFile = path.resolve(option('--brain', path.join(repo, 'brains', 'agent-seat.js')));
   const leaseTimeoutMs = Math.max(1, Number(option('--lease-timeout-s', '120'))) * 1000;
   if (!fs.statSync(root, { throwIfNoEntry: false })?.isDirectory()) throw new Error(`--root is not a directory: ${root}`);

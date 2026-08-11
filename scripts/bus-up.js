@@ -40,8 +40,15 @@ function option(name, fallback) {
 const defaultRoot = path.basename(REPO) === '.ai-bus' ? path.dirname(REPO) : process.cwd();
 const root = path.resolve(option('--root', defaultRoot));
 const workdir = path.resolve(option('--workdir', root));
-const consoleSeat = option('--console', 'codex');
-const brainSeats = option('--brains', 'claude,codex,grok').split(',').map((s) => s.trim()).filter(Boolean);
+// Defaults describe the normal shape: the chat interface pilots from the `claude` seat and holds
+// the baton, so `claude` gets NO brain - it is already driven. Only the seats with nobody live
+// behind them need a wake loop.
+//
+// The old defaults were `--console codex --brains claude,codex,grok`, which seated a redundant
+// claude brain beside the chat interface AND made codex both console and brain. Any restart that
+// omitted the flags rebuilt exactly the shape we had just cleaned up.
+const consoleSeat = option('--console', 'claude');
+const brainSeats = option('--brains', 'codex,grok').split(',').map((s) => s.trim()).filter(Boolean);
 const brainFile = path.resolve(option('--brain', path.join(REPO, 'brains', 'agent-seat.js')));
 const allSeats = [...new Set([consoleSeat, ...brainSeats])];
 
