@@ -1,14 +1,9 @@
 # Provider authentication
 
-Provider login belongs to the provider, not to a Bus seat. A seat uses an ordered chain of
-providers, and the **default** chains cross vendor boundaries, so one subscription running out
-does not stop a seat that is using a default chain.
-
-> **This is not enforced, and the gap matters.** `brains/agent-seat.js` validates that a chain
-> contains at least two *distinct provider kinds* — not two distinct vendors or billing
-> accounts. `PORTABLE_AI_BUS_PROVIDER_CHAIN=oauth,api` passes that check and is **entirely
-> Anthropic**, so exhausting one account stops the seat. If you override the chain, cross a
-> vendor boundary yourself, and confirm it with `servedBy` in `brain-<seat>.log`.
+Provider login belongs to the provider represented by the Bus seat. Identity and billing are
+enforced together: `grok` may use only xAI, `codex` only OpenAI, and `claude` only Anthropic.
+A missing, signed-out, or exhausted vendor stops that seat visibly. It is illegal for a named
+brain to fall through to another vendor and spend that vendor's credits under the wrong name.
 
 ## No-key routes
 
@@ -37,9 +32,8 @@ workspace `npm install` is needed.
 
 OpenAI and xAI document API-key authentication for their SDKs, not SDK reuse of coding-CLI OAuth.
 Their no-key Bus route is therefore the authenticated `codex` or `grok` CLI. API-key environment
-variables remain optional operator-selected fallbacks; the default chain does not require them.
+variables remain optional same-vendor authentication routes; the defaults do not require them.
 
-By default Claude leads with its CLI, Codex leads with Codex, and Grok leads with Grok; every
-chain immediately crosses to another vendor. Set
-`PORTABLE_AI_BUS_PROVIDER_CHAIN=codex,grok,cli,oauth,api` to override the order for every seat.
-At least two distinct entries are required by the packaged agent brain.
+Claude may order `cli`, `oauth`, and `api`, because all three are Anthropic routes. Codex accepts
+only `codex`; Grok accepts only `grok`. `PORTABLE_AI_BUS_PROVIDER_CHAIN` may reorder or narrow a
+seat's same-vendor routes, but a cross-vendor entry is rejected before the brain starts.

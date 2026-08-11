@@ -87,7 +87,7 @@ Hymlock approved the direction, so this is no longer a recommendation. What ship
 | `brain/runner.ts` | **the wake loop** — drain, wake, act, loop. Never exits on `done` |
 | `brain/bus-client.ts` | binds the runner to the harness **in process**, via `waitForMailbox` / `callSeatTool` |
 | `brain/cli.ts` | staged as `.ai-bus/bin/brain/cli.js`; long-lived wake runner plus echo brain |
-| `brains/agent-seat.js` | packaged project-neutral brain with a required cross-vendor provider chain |
+| `brains/agent-seat.js` | packaged project-neutral brain with seat/vendor identity enforcement |
 
 ```bash
 node .ai-bus/scripts/bus-up.js --root . --console grok
@@ -159,10 +159,11 @@ the agent**: a process we own, instead of a chat UI whose turn boundary we canno
 
 ---
 
-## Provider chains — a seat outlives any one vendor's quota
+## Provider chains — same-vendor transport failover without identity fraud
 
-*(Hymlock's constraint: "What I do not want is a required specific model seat such as the Codex
-CLI that only works with Codex, and if we run out of tokens on Codex our bus has stopped.")*
+The Bus can continue through other funded seats when one vendor is exhausted. The exhausted
+seat itself must not impersonate another model: Grok remains xAI, Codex remains OpenAI, and
+Claude remains Anthropic.
 
 `resolveProvider` let a seat **choose** a provider. That was not enough — a seat still dies when
 its one provider is exhausted. `resolveChain` lets a seat **degrade**:
@@ -175,7 +176,8 @@ const provider = resolveChain([
 ]);
 ```
 
-A seat backed by three links survives two of them being spent.
+A Claude seat may use several Anthropic authentication transports. Cross-vendor chains remain a
+library capability for explicitly neutral callers, but the packaged named-seat brain rejects them.
 
 ### Two distinctions that carry the design
 
@@ -187,18 +189,14 @@ trigger `reassignBaton`.
 **An empty answer is a failure.** A silent success and a broken provider are indistinguishable
 downstream, and misreading silence is the mistake this project has made repeatedly.
 
-### Falling through is the default, deliberately
+### Falling through is constrained by seat identity
 
-Any classified failure — `quota`, `rate-limit`, `auth`, `unavailable`, or an unrecognised
-`error` — advances to the next link. **Being wrong about the reason costs one extra attempt.
-Being wrong about whether to continue costs the seat.** `fallThroughOn` can narrow it where a
-request would fail identically everywhere.
+Within an allowed same-vendor chain, classified failures may advance to the next transport.
+When that vendor is exhausted, the seat reports exhaustion and can hand off the baton to another
+seat. It never silently consumes that other seat's wallet.
 
 Twelve tests, and the fall-through was **verified by sabotage**: replacing it with `break` turns
 three of them red.
 
-> **A gap this document should not hide.** The chain is validated for at least two distinct
-> provider *kinds*, not two distinct **vendors**. `PORTABLE_AI_BUS_PROVIDER_CHAIN=oauth,api`
-> satisfies the check and is entirely Anthropic, so a single exhausted account still stops that
-> seat — the exact failure the section above claims to prevent. Default chains do cross vendors;
-> overrides are on trust.
+The packaged brain validates every configured provider kind against the seat's vendor and fails
+closed on a mismatch. Tests cover all three defaults and adversarial cross-vendor overrides.

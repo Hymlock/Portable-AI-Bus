@@ -26,7 +26,7 @@ legally included in that payload.
 ## Install and initialize
 
 1. Install the VSIX with **Extensions: Install from VSIX...** or `code --install-extension`.
-2. Install Node.js 20+ and authenticate at least two provider CLIs; see `AUTH.md`.
+2. Install Node.js 20+ and authenticate each vendor whose named brain you will run; see `AUTH.md`.
 3. Open a trusted target workspace and run **Portable AI Bus: Initialize Workspace**.
 4. Put the release `devkit/` at `.ai-bus/toolchains/skse-devkit`, or set `SKSE_DEVKIT_ROOT`.
 5. Start from any provider session:
@@ -35,8 +35,8 @@ legally included in that payload.
    node .ai-bus/scripts/bus-up.js --root . --console claude
    ```
 
-   `codex` or `grok` is equally valid as `--console`. All three brains start by default and each
-   uses a cross-vendor chain.
+   `codex` or `grok` is equally valid as `--console`. The other two funded seats start as brains,
+   and each brain is restricted to the vendor its name represents.
 6. Run `node .ai-bus/bin/skse-devkit.js doctor --workspace .` and
    `node .ai-bus/bin/mailbox.js doctor` before assigning work.
 
@@ -44,10 +44,9 @@ legally included in that payload.
 
 - Stop brains and the harness before update. Install the newer VSIX with `--force`, reinitialize
   to refresh managed staged files, then restart `bus-up`.
-- Provider timeout/quota/auth failure falls through to **the next configured provider**. The
-  default chains cross vendor boundaries, but a custom chain is validated for distinct provider
-  *kinds*, not distinct vendors — `oauth,api` passes validation and is entirely Anthropic. Check
-  `servedBy` in `brain-<seat>.log` if you need proof a different vendor answered.
+- Provider timeout/quota/auth failure may fall through only to another authentication route for
+  the same vendor (Claude has `cli`, `oauth`, and `api`). Grok never falls through to Codex or
+  Claude, and Codex never falls through to Grok or Claude. Check `servedBy` for proof.
 - Whole-chain exhaustion is always **logged**; the baton moves only if the exhausted seat holds
   it, has a successor, is outside the five-minute cooldown, and the compare-and-move succeeds.
   Reassignment is conditional, not automatic.

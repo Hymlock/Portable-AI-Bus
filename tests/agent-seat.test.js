@@ -3,44 +3,42 @@ const assert = require('node:assert/strict');
 
 const { providerConfigs } = require('../brains/agent-seat.js');
 
-test('each built-in seat leads with its provider and immediately crosses vendors', () => {
-  assert.deepEqual(providerConfigs({}, 'claude').map((provider) => provider.kind).slice(0, 2),
-    ['cli', 'codex']);
-  assert.deepEqual(providerConfigs({}, 'codex').map((provider) => provider.kind).slice(0, 2),
-    ['codex', 'grok']);
-  assert.deepEqual(providerConfigs({}, 'grok').map((provider) => provider.kind).slice(0, 2),
-    ['grok', 'codex']);
+test('each named brain spends only its own vendor credits', () => {
+  assert.deepEqual(providerConfigs({}, 'claude').map((provider) => provider.kind),
+    ['cli', 'oauth', 'api']);
+  assert.deepEqual(providerConfigs({}, 'codex').map((provider) => provider.kind), ['codex']);
+  assert.deepEqual(providerConfigs({}, 'grok').map((provider) => provider.kind), ['grok']);
 });
 
-test('generic agent seat rejects every single-vendor chain, not merely duplicate kinds', () => {
+test('cross-vendor overrides are illegal for named brains', () => {
   assert.throws(
-    () => providerConfigs({ PORTABLE_AI_BUS_PROVIDER_CHAIN: 'codex' }, 'claude'),
-    /at least two distinct vendors.*OpenAI/
+    () => providerConfigs({ PORTABLE_AI_BUS_PROVIDER_CHAIN: 'grok,codex' }, 'grok'),
+    /Seat grok is bound to xAI.*codex=OpenAI/
   );
   assert.throws(
-    () => providerConfigs({ PORTABLE_AI_BUS_PROVIDER_CHAIN: 'oauth,api' }, 'claude'),
-    /at least two distinct vendors.*Anthropic/
+    () => providerConfigs({ PORTABLE_AI_BUS_PROVIDER_CHAIN: 'codex,cli' }, 'codex'),
+    /Seat codex is bound to OpenAI.*cli=Anthropic/
   );
   assert.throws(
-    () => providerConfigs({ PORTABLE_AI_BUS_PROVIDER_CHAIN: 'cli,oauth,api' }, 'grok'),
-    /at least two distinct vendors.*Anthropic/
+    () => providerConfigs({ PORTABLE_AI_BUS_PROVIDER_CHAIN: 'cli,grok' }, 'claude'),
+    /Seat claude is bound to Anthropic.*grok=xAI/
   );
 });
 
-test('an override with two vendor families remains valid', () => {
+test('same-vendor authentication fallbacks remain valid', () => {
   assert.deepEqual(
-    providerConfigs({ PORTABLE_AI_BUS_PROVIDER_CHAIN: 'oauth,codex' }, 'claude'),
-    [{ kind: 'oauth' }, { kind: 'codex' }]
+    providerConfigs({ PORTABLE_AI_BUS_PROVIDER_CHAIN: 'oauth,api,cli' }, 'claude'),
+    [{ kind: 'oauth' }, { kind: 'api' }, { kind: 'cli' }]
   );
+});
+
+test('unknown seat identities fail closed', () => {
+  assert.throws(() => providerConfigs({}, 'worker'), /Unknown funded seat: worker/);
 });
 
 test('model-backed providers receive the explicit repository workdir', () => {
   assert.deepEqual(
-    providerConfigs({ PORTABLE_AI_BUS_PROVIDER_CHAIN: 'grok,codex,oauth' }, 'grok', 'C:\\repo'),
-    [
-      { kind: 'grok', grok: { cwd: 'C:\\repo' } },
-      { kind: 'codex', codex: { cwd: 'C:\\repo' } },
-      { kind: 'oauth' }
-    ]
+    providerConfigs({ PORTABLE_AI_BUS_PROVIDER_CHAIN: 'grok' }, 'grok', 'C:\\repo'),
+    [{ kind: 'grok', grok: { cwd: 'C:\\repo' } }]
   );
 });

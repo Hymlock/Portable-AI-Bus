@@ -122,9 +122,10 @@ Initialization preserves pre-existing repository files. Only files actually crea
 A seat needs a **model** behind it. This section is what someone on a fresh machine needs, and
 every command below was run and verified on 2026-08-10.
 
-**None of them is required.** A chain falls through to the next link, so one missing or
-signed-out vendor degrades a seat instead of stopping it. Install as many as you want seats to
-be independent of — with all three, no single vendor's outage or spent wallet can stop the bus.
+Install and authenticate the vendor for every named brain you intend to run. A Grok brain uses
+xAI, a Codex brain uses OpenAI, and a Claude brain uses Anthropic. If that vendor is unavailable,
+the seat reports exhaustion and stops; it never spends a different vendor's credits while still
+claiming the original seat identity.
 
 **API keys are optional everywhere.** Each CLI authenticates against a subscription you already
 pay for; `ANTHROPIC_API_KEY` / `XAI_API_KEY` are opt-in fallbacks, never prerequisites.
@@ -135,8 +136,8 @@ pay for; `ANTHROPIC_API_KEY` / `XAI_API_KEY` are opt-in fallbacks, never prerequ
 | **OpenAI** (`codex`) | ships **inside** the ChatGPT VS Code extension | `codex login` | `codex login status` → `Logged in using ChatGPT` |
 | **xAI** (`grok`) | `npm i -g @xai-official/grok` | `grok login` (browser) or `grok login --device-code` | `grok --version` |
 
-`grok login` needs a **SuperGrok** or **X Premium+** subscription. Signed out, the link fails as
-`auth` and the chain moves on — the seat keeps working on another vendor.
+`grok login` needs a **SuperGrok** or **X Premium+** subscription. Signed out, the Grok seat fails
+visibly as `auth`; it does not fall through to Codex or Claude.
 
 ### Two Windows traps that make a present CLI look missing
 
@@ -156,16 +157,16 @@ Override detection with `CODEX_CLI_PATH` or `GROK_CLI_PATH` if your layout diffe
 
 ### Check what a seat can actually reach
 
-Each brain logs its chain at startup, and every reply records **which link served it** — so
+Each brain logs its provider at startup, and every reply records **which vendor served it** — so
 "grok answered" is evidence, not an assumption:
 
 ```
-{"event":"provider-chain","ok":true,"detail":"3/3 link(s) usable: grok=ok, codex=ok, cli=ok"}
+{"event":"provider-chain","ok":true,"detail":"1/1 link(s) usable: grok=ok"}
 {"seat":"grok","event":"wake-complete","note":"servedBy=grok"}
 ```
 
-Read them at `<bus root>/.ai-bus/runtime/brain-<seat>.log`. If a seat you expect to be on its
-own vendor logs `servedBy=cli`, it is falling through — and billing someone else's wallet.
+Read them at `<bus root>/.ai-bus/runtime/brain-<seat>.log`. A `servedBy` value that does not match
+the seat is a configuration defect; the packaged brain rejects such a chain before startup.
 
 ## Keeping the chat operator session awake
 

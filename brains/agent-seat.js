@@ -20,25 +20,34 @@ const VENDOR_BY_KIND = {
   grok: 'xAI'
 };
 const DEFAULT_CHAINS = {
-  claude: ['cli', 'codex', 'grok', 'oauth', 'api'],
-  codex: ['codex', 'grok', 'cli', 'oauth', 'api'],
-  grok: ['grok', 'codex', 'cli', 'oauth', 'api'],
-  default: ['codex', 'grok', 'cli', 'oauth', 'api']
+  claude: ['cli', 'oauth', 'api'],
+  codex: ['codex'],
+  grok: ['grok']
+};
+const VENDOR_BY_SEAT = {
+  claude: 'Anthropic',
+  codex: 'OpenAI',
+  grok: 'xAI'
 };
 
 function providerConfigs(env = process.env, seat = 'default', workdir) {
+  const seatVendor = VENDOR_BY_SEAT[seat];
+  if (!seatVendor) {
+    throw new Error(`Unknown funded seat: ${seat}. Expected one of ${Object.keys(VENDOR_BY_SEAT).join(', ')}.`);
+  }
   const requested = (env.PORTABLE_AI_BUS_PROVIDER_CHAIN || '')
     .split(',').map((value) => value.trim().toLowerCase()).filter(Boolean);
-  const kinds = requested.length > 0 ? requested : (DEFAULT_CHAINS[seat] || DEFAULT_CHAINS.default);
+  const kinds = requested.length > 0 ? requested : DEFAULT_CHAINS[seat];
   const invalid = kinds.filter((kind) => !SUPPORTED_KINDS.has(kind));
   if (invalid.length > 0) {
     throw new Error(`Unsupported PORTABLE_AI_BUS_PROVIDER_CHAIN entries: ${invalid.join(', ')}`);
   }
-  const vendors = new Set(kinds.map((kind) => VENDOR_BY_KIND[kind]));
-  if (vendors.size < 2) {
+  const wrongVendor = kinds.filter((kind) => VENDOR_BY_KIND[kind] !== seatVendor);
+  if (wrongVendor.length > 0) {
     throw new Error(
-      `A bus seat provider chain must contain at least two distinct vendors; ` +
-      `${kinds.join(',')} resolves only to ${[...vendors].join(',')}.`
+      `Seat ${seat} is bound to ${seatVendor}; refusing cross-vendor provider(s): ` +
+      `${wrongVendor.map((kind) => `${kind}=${VENDOR_BY_KIND[kind]}`).join(', ')}. ` +
+      `A named brain may not spend another vendor's credits.`
     );
   }
   return kinds.map((kind) => {
