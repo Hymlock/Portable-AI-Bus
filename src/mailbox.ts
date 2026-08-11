@@ -250,7 +250,40 @@ export class MailboxStore {
     return this.withLock(async () => {
       const alreadyInitialized = await this.exists(this.paths.statePath);
       const existing = await this.loadStateUnsafe();
-      const normalizedAgents = this.uniqueAgents([...existing.agents, ...agents]);
+      // The roster PASSED IN is the roster - not an addition to whatever accumulated before.
+      // Union semantics made ghost seats permanent: once `hymlock` and `worker` were seated by a
+      // mistaken run, no later correct run could evict them, and reports piled up unread against a
+      // seat no human could read.
+      //
+      // An EMPTY list means "do not touch the roster", never "retire everyone". `init` with no
+      // --agents is a real thing operators type by accident, and it must stay harmless.
+      const normalizedAgents = agents.length === 0
+        ? this.uniqueAgents(existing.agents)
+        : this.uniqueAgents(agents);
+      if (agents.length > 0) {
+        const retiring = existing.agents.filter((agent) => !normalizedAgents.includes(agent));
+        // Retiring a seat mid-flight would orphan its claims and let another seat edit the same
+        // file. Refuse and make the operator resolve it deliberately.
+        const encumbered = retiring.filter((agent) => (existing.claims[agent] ?? []).length > 0);
+        if (encumbered.length > 0) {
+          const detail = encumbered
+            .map((agent) => `${agent} (${(existing.claims[agent] ?? []).map((claim) => claim.path).join(', ')})`)
+            .join('; ');
+          throw new Error(
+            `Refusing to retire seat(s) still holding claims: ${detail}. `
+            + 'Release those claims first, then re-run init.'
+          );
+        }
+        if (retiring.includes(existing.baton?.holder ?? '')) {
+          throw new Error(
+            `Refusing to retire ${existing.baton?.holder}: it currently holds the baton. `
+            + 'Reassign the baton first, then re-run init.'
+          );
+        }
+        for (const agent of retiring) {
+          delete existing.claims[agent];
+        }
+      }
       const next = {
         ...existing,
         agents: normalizedAgents,
@@ -279,8 +312,8 @@ export class MailboxStore {
   async send(input: SendInput): Promise<BusMessage> {
     return this.withLock(async () => {
       const state = await this.loadStateUnsafe();
-      this.assertAgent(input.from, 'sender');
-      this.assertAgent(input.to, 'recipient');
+      this.assertSeated(state, input.from, 'sender');
+      this.assertSeated(state, input.to, 'recipient');
       if (!input.subject.trim()) {
         throw new Error('Message subject must not be empty.');
       }
@@ -421,6 +454,7 @@ export class MailboxStore {
 
     return this.withLock(async () => {
       const state = await this.loadStateUnsafe();
+      this.assertSeated(state, input.agent, 'agent');
       for (const [other, claims] of Object.entries(state.claims)) {
         if (other === input.agent) {
           continue;
@@ -448,7 +482,6 @@ export class MailboxStore {
       }
       held.sort((left, right) => left.path.localeCompare(right.path));
       state.claims[input.agent] = held;
-      state.agents = this.uniqueAgents([...state.agents, input.agent]);
       await this.writeStateUnsafe(state);
       await this.appendLineUnsafe(
         `\n- **claim** \`${input.agent}\` -> ${requested.join(', ')} (${input.why?.trim() || ''})\n`
@@ -729,7 +762,6 @@ export class MailboxStore {
       };
       state.completions.push(event);
       state.completions = state.completions.slice(-100);
-      state.agents = this.uniqueAgents([...state.agents, input.actor]);
       if (shouldHalt) {
         state.halted = true;
         state.stopReason = `${input.scope} completed by ${input.actor}: ${summary}`;
@@ -1076,6 +1108,23 @@ export class MailboxStore {
   private assertAgent(agent: string, label: string) {
     if (!agent || !/^[a-zA-Z0-9_.-]+$/.test(agent)) {
       throw new Error(`Invalid ${label}: ${agent || '<empty>'}`);
+    }
+  }
+
+  /**
+   * A seat is a funded actor, declared by `init`. Acting must never be a way to become one.
+   *
+   * This checks membership; `assertAgent` above only checks that the NAME is well formed, which
+   * is why five seats accumulated in a three-vendor bus - every well-formed name that claimed or
+   * sent was quietly added to the roster.
+   */
+  private assertSeated(state: MailboxState, agent: string, label: string) {
+    this.assertAgent(agent, label);
+    if (!state.agents.includes(agent)) {
+      throw new Error(
+        `${agent} is not a seat (${label}). Seated: ${state.agents.join(', ')}. `
+        + 'Seats are declared by init, not created by acting.'
+      );
     }
   }
 

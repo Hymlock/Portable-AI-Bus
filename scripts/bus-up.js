@@ -45,6 +45,20 @@ const brainSeats = option('--brains', 'claude,codex,grok').split(',').map((s) =>
 const brainFile = path.resolve(option('--brain', path.join(REPO, 'brains', 'agent-seat.js')));
 const allSeats = [...new Set([consoleSeat, ...brainSeats])];
 
+// A brain exists to give a seat a wake loop when nothing live is driving it. The console seat is
+// ALREADY driven - by the chat interface holding it - so giving it a brain too starts a second
+// driver on the same vendor wallet, doubling that vendor's concurrency for no gain. That is how a
+// `claude` brain ended up running beside the claude chat interface, contending for the same link
+// (repeated link-failed) and producing the only console-window flash measured on 2026-08-11.
+if (brainSeats.includes(consoleSeat)) {
+  console.error(
+    `Refusing to start: --console ${consoleSeat} is also in --brains. The console seat is driven by`
+    + ` its live interface and must not also get a brain.\n`
+    + `  try: --console ${consoleSeat} --brains ${brainSeats.filter((s) => s !== consoleSeat).join(',') || '<other seats>'}`
+  );
+  process.exit(2);
+}
+
 const log = (line) => console.log(line);
 
 /**
