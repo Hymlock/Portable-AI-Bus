@@ -40,15 +40,17 @@ function option(name, fallback) {
 const defaultRoot = path.basename(REPO) === '.ai-bus' ? path.dirname(REPO) : process.cwd();
 const root = path.resolve(option('--root', defaultRoot));
 const workdir = path.resolve(option('--workdir', root));
-// Defaults describe the normal shape: the chat interface pilots from the `claude` seat and holds
-// the baton, so `claude` gets NO brain - it is already driven. Only the seats with nobody live
-// behind them need a wake loop.
+// The three funded vendors. ANY of them can be the pilot - whichever one is holding the chat
+// interface - and the other two spin up as brains. So the brain list is DERIVED from who is
+// piloting rather than hardcoded, and there are never more than two brains.
 //
-// The old defaults were `--console codex --brains claude,codex,grok`, which seated a redundant
-// claude brain beside the chat interface AND made codex both console and brain. Any restart that
-// omitted the flags rebuilt exactly the shape we had just cleaned up.
+// The old defaults were `--console codex --brains claude,codex,grok`: a redundant brain beside
+// the chat interface, plus codex as both console and brain. Hardcoding `codex,grok` instead
+// would only have been right while claude happens to be the pilot.
+const FUNDED_SEATS = ['claude', 'codex', 'grok'];
 const consoleSeat = option('--console', 'claude');
-const brainSeats = option('--brains', 'codex,grok').split(',').map((s) => s.trim()).filter(Boolean);
+const brainSeats = option('--brains', FUNDED_SEATS.filter((seat) => seat !== consoleSeat).join(','))
+  .split(',').map((s) => s.trim()).filter(Boolean);
 const brainFile = path.resolve(option('--brain', path.join(REPO, 'brains', 'agent-seat.js')));
 const allSeats = [...new Set([consoleSeat, ...brainSeats])];
 
@@ -62,6 +64,18 @@ if (brainSeats.includes(consoleSeat)) {
     `Refusing to start: --console ${consoleSeat} is also in --brains. The console seat is driven by`
     + ` its live interface and must not also get a brain.\n`
     + `  try: --console ${consoleSeat} --brains ${brainSeats.filter((s) => s !== consoleSeat).join(',') || '<other seats>'}`
+  );
+  process.exit(2);
+}
+
+// Three funded vendors, one of them piloting, so at most two brains. A third brain can only mean
+// one wallet is driving two seats at once - which is what the retired `worker` seat did on codex's
+// wallet, silently doubling that vendor's concurrency.
+const MAX_BRAINS = FUNDED_SEATS.length - 1;
+if (brainSeats.length > MAX_BRAINS) {
+  console.error(
+    `Refusing to start: ${brainSeats.length} brains requested (${brainSeats.join(', ')}), but at most`
+    + ` ${MAX_BRAINS} can be active - one vendor pilots the chat interface and the other two get brains.`
   );
   process.exit(2);
 }

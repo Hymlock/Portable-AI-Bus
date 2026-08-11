@@ -13,10 +13,13 @@ async function main() {
   const repo = path.resolve(__dirname, '..');
   const root = path.resolve(option('--root', process.cwd()));
   const workdir = path.resolve(option('--workdir', root));
-  // Same defaults as bus-up: the console seat is driven by its live interface and gets no brain.
-  // A restart that quietly re-seats a claude brain undoes the cleanup by itself.
+  // Same rule as bus-up: any funded vendor can pilot the chat interface, and the OTHER TWO spin
+  // up as brains. Derived, not hardcoded - a fixed pair would only be right while one particular
+  // seat happens to be piloting. bus-up enforces the ceiling; this must not disagree with it.
+  const FUNDED_SEATS = ['claude', 'codex', 'grok'];
   const consoleSeat = option('--console', 'claude');
-  const brains = option('--brains', 'codex,grok').split(',').map((item) => item.trim()).filter(Boolean);
+  const brains = option('--brains', FUNDED_SEATS.filter((seat) => seat !== consoleSeat).join(','))
+    .split(',').map((item) => item.trim()).filter(Boolean);
   const brainFile = path.resolve(option('--brain', path.join(repo, 'brains', 'agent-seat.js')));
   const leaseTimeoutMs = Math.max(1, Number(option('--lease-timeout-s', '120'))) * 1000;
   if (!fs.statSync(root, { throwIfNoEntry: false })?.isDirectory()) throw new Error(`--root is not a directory: ${root}`);
