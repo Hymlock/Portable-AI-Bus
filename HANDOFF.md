@@ -3,6 +3,18 @@
 Written by the `claude` seat at 96% of its session limit. Everything below is committed; the
 working tree is clean. Read this top to bottom before starting anything.
 
+> **Live update (2026-08-11, Policy Rung 0):** the controlled two-seat topology was restored
+> with Codex as the chat/operator and a single real Grok/xAI brain. A bounded health wake passed
+> (`servedBy=grok`), and the Grok listener re-armed after the work. The longer implementation
+> wake exposed two still-open Bus defects: Grok repeatedly produced nested/malformed plans during
+> report repair (`done-without-report`), and it edited `src/output_manager.py` after Codex had
+> claimed that path. The resulting Ensouled changes were independently reviewed and tested before
+> commit, but the Bus itself does not yet enforce filesystem claims at edit time. Treat claims as
+> coordination plus commit-time protection, not a write lock. Do not infer provider-credit state
+> from the recorded `grok:error` on that wake: the operator deliberately terminated the stuck
+> provider process. The completed Ensouled achievement is recorded in Bus completion
+> `76c34b86-21ad-431d-b6b0-a33c2a6ec6e3` with commits `fe9294a` and `16b1076`.
+
 > **Update after `ece4b57` (2026-08-10):** both blocking defects below are resolved. Workspace
 > removal preserves operator-owned `.ai-bus/toolchains/`, and provider-chain overrides now
 > require two distinct vendors rather than two spellings for one vendor. The same reliability
