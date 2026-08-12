@@ -75,6 +75,25 @@ test('parsePlan unwraps provider answer envelopes at the final safety boundary',
   assert.equal(parsed.plan.actions[0].type, 'send');
 });
 
+test('parsePlan takes the last valid plan from concatenated provider envelopes', () => {
+  const progress = JSON.stringify({
+    actions: [{ type: 'send', to: 'codex', kind: 'progress', subject: 'working', body: 'still auditing' }],
+    done: false
+  });
+  const report = JSON.stringify({
+    actions: [{ type: 'send', to: 'codex', kind: 'report', subject: 'audit', body: 'PASS' }],
+    done: true
+  });
+  const leakedStream = `${JSON.stringify({ text: progress })}\r\n${JSON.stringify({ text: report })}`;
+
+  const parsed = parsePlan(leakedStream);
+
+  assert.equal(parsed.malformed, false);
+  assert.equal(parsed.plan.done, true);
+  assert.equal(parsed.plan.actions.length, 1);
+  assert.equal(parsed.plan.actions[0].kind, 'report');
+});
+
 test('parsePlan rejects type-only tool actions before they reach the Bus', () => {
   const missingId = parsePlan('{"actions":[{"type":"capability"}],"done":true}');
   assert.equal(missingId.malformed, true);

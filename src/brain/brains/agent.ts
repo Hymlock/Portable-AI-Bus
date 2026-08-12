@@ -135,8 +135,43 @@ export function buildWakePrompt(seat: string, messages: BrainMessage[]): string 
  * Parse model text into a plan. Malformed output becomes a safe empty plan with an error note
  * rather than a throw â€” a brain that dies on bad model text is the stall we are removing.
  */
+function planFromJsonStream(text: string, depth = 0): Partial<AgentPlan> | undefined {
+  if (depth >= 12) return undefined;
+  let best: Partial<AgentPlan> | undefined;
+  let objectStart = -1;
+  let braces = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
+    if (escaped) { escaped = false; continue; }
+    if (character === '\\' && inString) { escaped = true; continue; }
+    if (character === '"') { inString = !inString; continue; }
+    if (inString) continue;
+    if (character === '{') {
+      if (braces === 0) objectStart = index;
+      braces += 1;
+    } else if (character === '}' && braces > 0) {
+      braces -= 1;
+      if (braces !== 0 || objectStart < 0) continue;
+      try {
+        const candidate = JSON.parse(text.slice(objectStart, index + 1)) as Record<string, unknown>;
+        if (Array.isArray(candidate.actions)) best = candidate as Partial<AgentPlan>;
+        for (const key of ['text', 'result', 'response', 'content', 'message']) {
+          const nested = candidate[key];
+          if (typeof nested !== 'string' || !nested.trim()) continue;
+          const plan = planFromJsonStream(nested, depth + 1);
+          if (plan) best = plan;
+        }
+      } catch { /* keep scanning the provider stream */ }
+      objectStart = -1;
+    }
+  }
+  return best;
+}
+
 export function parsePlan(text: string): { plan: AgentPlan; malformed: boolean } {
-  let trimmed = text.trim();
+  const trimmed = text.trim();
   if (!trimmed) {
     return { plan: { actions: [], done: true, note: 'empty-model-output' }, malformed: true };
   }
@@ -147,32 +182,11 @@ export function parsePlan(text: string): { plan: AgentPlan; malformed: boolean }
   // unnecessary repair call. Peel only known answer fields, with a hard bound, until the
   // object itself has an actions array. This also covers nested CLI/SDK transports without
   // weakening action validation below.
-  for (let depth = 0; depth < 12; depth += 1) {
-    const start = trimmed.indexOf('{');
-    const end = trimmed.lastIndexOf('}');
-    if (start < 0 || end <= start) {
-      return { plan: { actions: [], done: true, note: 'no-json-object' }, malformed: true };
-    }
-    try {
-      const candidate = JSON.parse(trimmed.slice(start, end + 1)) as Record<string, unknown>;
-      if (Array.isArray(candidate.actions)) break;
-      const nested = ['text', 'result', 'response', 'content', 'message']
-        .map((key) => candidate[key])
-        .find((value): value is string => typeof value === 'string' && value.trim().length > 0);
-      if (!nested) break;
-      trimmed = nested.trim();
-    } catch {
-      break;
-    }
-  }
-
-  const start = trimmed.indexOf('{');
-  const end = trimmed.lastIndexOf('}');
-  if (start < 0 || end <= start) {
+  const raw = planFromJsonStream(trimmed);
+  if (!raw) {
     return { plan: { actions: [], done: true, note: 'no-json-object' }, malformed: true };
   }
   try {
-    const raw = JSON.parse(trimmed.slice(start, end + 1)) as Partial<AgentPlan>;
     const rawActions = Array.isArray(raw.actions) ? raw.actions : [];
     // Normalise BEFORE filtering, and keep the normalised objects. `isAction` is a type guard,
     // so filtering alone would return the originals - validation would accept `reason` and
