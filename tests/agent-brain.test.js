@@ -131,6 +131,36 @@ test('buildWakePrompt is vendor-neutral (no provider tooling names)', () => {
   assert.equal(/anthropic|openai|xai|api[_ ]?key|claude-code|output-format/i.test(prompt), false);
 });
 
+test('the copyable system-prompt example sends only to an addressable live seat', async () => {
+  const { api, sent } = tools();
+  api.status = async () => ({ agents: ['claude', 'codex', 'grok'] });
+  let exampleRecipient;
+  const provider = {
+    kind: 'test',
+    async ask(_prompt, options) {
+      const start = options.systemPrompt.indexOf('{"actions":[');
+      const end = options.systemPrompt.indexOf(' Action field requirements', start);
+      assert.ok(start >= 0 && end > start, 'system prompt must contain a copyable JSON plan example');
+      const example = options.systemPrompt.slice(start, end);
+      const plan = JSON.parse(example);
+      exampleRecipient = plan.actions[0].to;
+      return { text: example, isError: false };
+    },
+    async probe() { return { ok: true, detail: 'test' }; }
+  };
+  const brain = createAgentBrain({ seat: 'codex', provider });
+
+  const result = await brain.takeTurn({
+    seat: 'codex', reason: 'mail', messages: [msg(2)], tools: api, budget: 10, log: () => {}
+  });
+
+  assert.equal(result.done, true);
+  assert.ok(['claude', 'codex', 'grok'].includes(exampleRecipient),
+    'the authored example recipient must come from the live roster, before routing repair');
+  assert.equal(sent.length, 1);
+  assert.ok(['claude', 'codex', 'grok'].includes(sent[0].to));
+});
+
 test('agent brain executes a model plan via tools (happy path)', async () => {
   const plan = JSON.stringify({
     actions: [

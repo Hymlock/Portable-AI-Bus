@@ -35,16 +35,26 @@ export type AgentBrainOptions = {
   log?: (event: string, data?: unknown) => void;
 };
 
-const DEFAULT_SYSTEM = [
+const buildDefaultSystem = (exampleRecipient: string) => [
   'You are a bus seat agent. You receive mail and decide actions.',
-  'Reply with ONLY a JSON object (no markdown fences) of the form:',
-  '{"actions":[{"type":"send","to":"<seat>","kind":"ack","subject":"...","body":"..."}],"done":true,"note":"..."}',
-  'Exact action schemas:',
-  'send={"type":"send","to":"seat","kind":"ack|report|finding|note","subject":"text","body":"text","keepBaton":true|false};',
-  'claim={"type":"claim","paths":["relative/path"],"why":"text"};',
-  'release={"type":"release","paths":["relative/path"]};',
-  'capability={"type":"capability","id":"bus.doctor","timeoutMs":60000};',
-  'done={"type":"done","note":"text"}. Never omit required fields.',
+  'Reply with ONLY a JSON object (no markdown fences). This example is valid and may be copied:',
+  JSON.stringify({
+    actions: [{
+      type: 'send',
+      to: exampleRecipient,
+      kind: 'ack',
+      subject: 'Message received',
+      body: 'I received the message and am working on it.'
+    }],
+    done: true,
+    note: 'Acknowledged.'
+  }),
+  'Action field requirements (descriptions, not copyable JSON):',
+  'send requires string fields type, to, subject, and body; kind may be ack, report, finding, or note; keepBaton is an optional boolean.',
+  'claim requires type, a non-empty paths string array, and a non-empty why string.',
+  'release requires type and may include a non-empty paths string array.',
+  'capability requires type and id, and may include a positive integer timeoutMs.',
+  'done requires type and may include a note string. Never omit required fields.',
   'Acknowledge each incoming message at most once with a short receipt before other work; never repeat an acknowledgement on a repair or continuation round.',
   // Without this line an agentic CLI reaches for a shell it does not have and ABORTS the whole
   // reply. Measured: the same inspection task, changing only the system prompt -
@@ -425,7 +435,7 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
   const {
     seat,
     provider,
-    systemPrompt = DEFAULT_SYSTEM,
+    systemPrompt,
     // Raised from 3. Three rounds is enough to acknowledge and stop, which is exactly what two
     // seats did when handed multi-step audits, and not enough to investigate anything. Running
     // out of rounds now returns `done: false`, so this bounds a WAKE rather than the work.
@@ -473,6 +483,12 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
       } catch {
         // Same rule: not knowing is survivable, failing the wake over it is not.
       }
+
+      // Keep the prompt's copyable plan addressable. A literal `<seat>` here was copied by a
+      // live model on three wakes, then rejected by the closed roster. The current seat is a
+      // safe fallback when status is temporarily unavailable because it is necessarily the seat
+      // executing this wake.
+      const effectiveSystemPrompt = systemPrompt ?? buildDefaultSystem(knownSeats[0] ?? seat);
 
       const exhaustionNote = (reply: ChainReply) =>
         `chain-exhausted:attempts=${(reply.attempts ?? [])
@@ -557,7 +573,7 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
           .join('\n\n');
         let reply: ModelReply | ChainReply;
         try {
-          reply = await provider.ask(prompt, { systemPrompt, sessionId, responseSchema: PLAN_SCHEMA });
+          reply = await provider.ask(prompt, { systemPrompt: effectiveSystemPrompt, sessionId, responseSchema: PLAN_SCHEMA });
         } catch (error) {
           const detail = (error as Error)?.message ?? String(error);
           log('provider-threw', { seat, detail: detail.slice(0, 200) });
@@ -603,7 +619,7 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
             try {
               repair = await provider.ask(
                 'Your previous reply was not valid JSON. Reply again with ONLY the JSON plan object.',
-                { systemPrompt, sessionId, responseSchema: PLAN_SCHEMA }
+                { systemPrompt: effectiveSystemPrompt, sessionId, responseSchema: PLAN_SCHEMA }
               );
             } catch (error) {
               const detail = (error as Error)?.message ?? String(error);
@@ -667,7 +683,7 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
                 `These actions were REFUSED by the bus and did NOT happen: ${detail}\n` +
                 `Valid seats are: ${knownSeats.join(', ')}. Fix the addressing or arguments and ` +
                 `reply with ONLY the corrected JSON plan.`,
-                { systemPrompt, sessionId, responseSchema: PLAN_SCHEMA }
+                { systemPrompt: effectiveSystemPrompt, sessionId, responseSchema: PLAN_SCHEMA }
               );
               if (!retry.isError && retry.text.trim()) {
                 const corrected = parsePlan(retry.text);
