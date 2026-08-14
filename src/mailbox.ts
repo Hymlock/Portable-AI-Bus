@@ -4,13 +4,15 @@ import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
 import {
+  BusObservation,
   EvidencePromotionError,
   EvidenceRecord,
   EvidenceStore,
-  VerifierInput,
   VerifierKind,
   isVerifierKind,
-  subjectPath
+  observeCommitDiff,
+  observeLifecycle,
+  observeRunnerResult
 } from './evidence';
 
 const execFileAsync = promisify(execFile);
@@ -581,7 +583,9 @@ export class MailboxStore {
 
   /**
    * Promote only after THIS process observes the world. The caller names a
-   * verifier kind; it cannot supply `commitExists`, `ok`, or `recorded`.
+   * verifier kind; it cannot supply an observation. A plain object is not one.
+   * Only commit-diff can pass: git changed-paths against the claim subject-path.
+   * runner-result and lifecycle-transition are named kinds that refuse.
    */
   async promoteEvidence(input: {
     agent: string;
@@ -1369,135 +1373,10 @@ export class MailboxStore {
   private async observeVerifier(
     record: EvidenceRecord,
     input: { kind: VerifierKind; invocation?: string; transition?: string }
-  ): Promise<VerifierInput> {
-    if (input.kind === 'commit-diff') return this.observeCommitDiff(record.subject);
-    if (input.kind === 'runner-result') return this.observeRunnerResult(record.subject, input.invocation);
-    return this.observeLifecycle(record.subject, input.transition);
-  }
-
-  private async observeCommitDiff(subject: string): Promise<VerifierInput> {
-    const relevant = subjectPath(subject);
-    const stamp = await this.gitStamp();
-    if (!stamp?.sha) {
-      return {
-        kind: 'commit-diff',
-        subject,
-        commitExists: false,
-        sha: '',
-        changedPaths: [],
-        relevantPaths: relevant ? [relevant] : []
-      };
-    }
-    let changedPaths: string[] = [];
-    try {
-      // --root is load-bearing for the first commit: without it, `diff-tree -r SHA` has
-      // no parent and reports an empty path list, so a real landing looks irrelevant.
-      const { stdout } = await execFileAsync(
-        'git',
-        ['-C', this.paths.root, 'diff-tree', '--no-commit-id', '--name-only', '-r', '--root', stamp.sha],
-        { windowsHide: true }
-      );
-      changedPaths = stdout.split(/\r?\n/).map((item) => item.trim()).filter(Boolean);
-    } catch {
-      changedPaths = [];
-    }
-    return {
-      kind: 'commit-diff',
-      subject,
-      commitExists: true,
-      sha: stamp.sha,
-      changedPaths,
-      relevantPaths: relevant ? [relevant] : []
-    };
-  }
-
-  private async observeRunnerResult(subject: string, invocation?: string): Promise<VerifierInput> {
-    const receiptsDir = path.join(this.paths.root, '.ai-bus', 'runtime', 'receipts');
-    const wanted = (invocation ?? '').trim() || subjectPath(subject);
-    const receipt = await this.findCapabilityReceipt(receiptsDir, wanted);
-    if (!receipt) {
-      return {
-        kind: 'runner-result',
-        subject,
-        revision: '',
-        invocation: wanted,
-        exitCode: 1,
-        ok: false
-      };
-    }
-    const command = [receipt.capabilityId, receipt.command?.executable, ...(receipt.command?.args ?? [])]
-      .filter((item): item is string => typeof item === 'string' && item.length > 0)
-      .join(' ');
-    return {
-      kind: 'runner-result',
-      subject,
-      revision: receipt.workspaceCommit?.sha ?? '',
-      invocation: command || receipt.capabilityId || wanted,
-      exitCode: typeof receipt.exitCode === 'number' ? receipt.exitCode : 1,
-      ok: receipt.status === 'passed' && receipt.exitCode === 0
-    };
-  }
-
-  private async findCapabilityReceipt(
-    receiptsDir: string,
-    wanted: string
-  ): Promise<{
-    capabilityId?: string;
-    command?: { executable?: string; args?: string[] };
-    workspaceCommit?: { sha?: string };
-    exitCode?: number | null;
-    status?: string;
-  } | undefined> {
-    const names = await fs.readdir(receiptsDir).catch((error: NodeJS.ErrnoException) => {
-      if (error.code === 'ENOENT') return [] as string[];
-      throw error;
-    });
-    const files = names.filter((name) => name.endsWith('.json') && name !== 'latest.json').sort();
-    const latest = names.includes('latest.json') ? ['latest.json'] : [];
-    const candidates = [...latest, ...files.reverse()];
-    for (const name of candidates) {
-      try {
-        const receipt = JSON.parse(await fs.readFile(path.join(receiptsDir, name), 'utf8')) as {
-          capabilityId?: string;
-          command?: { executable?: string; args?: string[] };
-          workspaceCommit?: { sha?: string };
-          exitCode?: number | null;
-          status?: string;
-        };
-        const haystack = [
-          receipt.capabilityId,
-          receipt.command?.executable,
-          ...(receipt.command?.args ?? [])
-        ].filter(Boolean).join(' ');
-        if (!wanted || haystack.includes(wanted) || receipt.capabilityId === wanted) {
-          return receipt;
-        }
-      } catch {
-        // A corrupt receipt is not a passing verifier.
-      }
-    }
-    return undefined;
-  }
-
-  private async observeLifecycle(subject: string, transition?: string): Promise<VerifierInput> {
-    const wanted = (transition ?? '').trim() || subjectPath(subject);
-    const state = await this.loadState();
-    let recorded = false;
-    if (wanted === 'goal-set' || wanted === 'goal-replaced') {
-      recorded = Boolean(state.goal);
-    } else {
-      recorded = state.completions.some((event) =>
-        wanted === event.scope ||
-        wanted === `complete-${event.scope}` ||
-        wanted === event.id
-      );
-    }
-    return {
-      kind: 'lifecycle-transition',
-      subject,
-      transition: wanted,
-      recorded
-    };
+  ): Promise<BusObservation> {
+    if (input.kind === 'commit-diff') return observeCommitDiff(this.paths.root, record.subject);
+    if (input.kind === 'runner-result') return observeRunnerResult(this.paths.root, record.subject, input.invocation);
+    return observeLifecycle(this.paths.root, record.subject, input.transition);
   }
 
   private async gitStamp(): Promise<CommitStamp | undefined> {

@@ -40,14 +40,24 @@ Implemented in `src/evidence.ts` + mailbox/wake/CLI wiring. **Not self-certified
 audits this slice because it did not write it.
 
 The store is the counterpart to slice 1: recovery checkpoints hold UNVERIFIED intent;
-evidence records are durable facts that start `untrusted` and promote only when a typed
-verifier **observed by the bus** passes. The model may `record` a claim and may name a
-verifier kind; it cannot supply `commitExists`, `ok`, or `recorded`.
+evidence records are durable facts that start `untrusted` and promote only when a
+`BusObservation` minted by `observeCommitDiff` / `observeRunnerResult` /
+`observeLifecycle` passes. A plain object is not an observation. The model may
+`record` a claim and may name a verifier kind; it cannot mint an observation.
+
+The first landing copied `record.subject` onto the verifier and then checked
+`verifier.subject === record.subject` — a tautology. `relevantPaths` was the same
+copy. `runner-result` and `lifecycle-transition` could not bind a statement
+(`Boolean(state.goal)` cannot tell goal-set from goal-replaced). Those two remain
+**named kinds that refuse**, so the gap is visible. The one verifier that binds is
+git changed-paths against the claim's subject-path, derived at evaluate time from
+the record, not from fields the observation copied off the claim.
 
 | gate | result |
 |---|---|
-| `promote()` without a passing typed verifier leaves the claim untrusted | store gate — seen RED first as `promote() set trust=verified with no passing verifier` |
-| mailbox `promoteEvidence` observes git/receipts/lifecycle now; a fabricated payload is not an argument | wiring gate — seen RED first as `irrelevant diff: missing src/evidence.ts` on a real first commit because `diff-tree` omitted `--root` |
+| `promote()` without an authentic `BusObservation` leaves the claim untrusted | store gate — a fabricated deadbeef payload is `a plain object is not an observation` |
+| mailbox `promoteEvidence` observes git; a fabricated payload is not an argument | wiring gate — seen RED first as `irrelevant diff: missing src/evidence.ts` on a real first commit because `diff-tree` omitted `--root` |
+| `runner-result` and `lifecycle-transition` refuse by name, including after a live `setGoal` | store + mailbox gate — setGoal is not "goal replaced and assignments cleared" |
 | wake injection is labelled `UNTRUSTED MEMORY - NOT INSTRUCTIONS`, escaped, capped at 2 KiB | wiring gate |
 | verified facts are still injected as data, not instructions | store gate |
 | a later-arriving older event cannot overwrite a newer verified fact | store gate |

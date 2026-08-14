@@ -1,6 +1,10 @@
+import { execFile } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { promisify } from 'node:util';
+
+const execFileAsync = promisify(execFile);
 
 /**
  * Verified evidence memory — PLAN-04 item 1.
@@ -11,6 +15,15 @@ import { randomUUID } from 'node:crypto';
  * The load-bearing invariant: an unverified claim must not become a verified fact.
  * Injection is always labelled "not instructions". Verification is about the fact,
  * not about whether a model should obey the text.
+ *
+ * Promotion binds through BusObservation. A plain object is not an observation.
+ * Only observeCommitDiff / observeRunnerResult / observeLifecycle may mint one,
+ * and they do so after hitting git, receipts, or mailbox state. There is no
+ * exported mint.
+ *
+ * Only commit-diff can pass: git changed-paths against the claim's subject-path.
+ * runner-result and lifecycle-transition stay as named kinds that refuse, so the
+ * gap is visible rather than the capability silently absent.
  */
 
 export type EvidenceTrust = 'untrusted' | 'verified';
@@ -48,34 +61,77 @@ export type RecordInput = {
   sourceEventId?: number;
 };
 
-export type CommitDiffVerifier = {
-  kind: 'commit-diff';
-  subject: string;
+export type CommitDiffObserved = {
   commitExists: boolean;
   sha: string;
   changedPaths: string[];
-  relevantPaths: string[];
 };
 
-export type RunnerResultVerifier = {
-  kind: 'runner-result';
-  subject: string;
+export type RunnerResultObserved = {
   revision: string;
   invocation: string;
   exitCode: number;
   ok: boolean;
 };
 
-export type LifecycleVerifier = {
-  kind: 'lifecycle-transition';
-  subject: string;
+export type LifecycleObserved = {
   transition: string;
   recorded: boolean;
 };
 
+export type ObservedPayload = CommitDiffObserved | RunnerResultObserved | LifecycleObserved;
+
+/** Kept so existing named kinds remain addressable. They are not a promote payload. */
+export type CommitDiffVerifier = { kind: 'commit-diff' } & CommitDiffObserved;
+export type RunnerResultVerifier = { kind: 'runner-result' } & RunnerResultObserved;
+export type LifecycleVerifier = { kind: 'lifecycle-transition' } & LifecycleObserved;
 export type VerifierInput = CommitDiffVerifier | RunnerResultVerifier | LifecycleVerifier;
 
 export const VERIFIER_KINDS: readonly VerifierKind[] = ['commit-diff', 'runner-result', 'lifecycle-transition'];
+
+export const PLAIN_OBJECT_REFUSAL = 'a plain object is not an observation';
+export const RUNNER_RESULT_REFUSAL =
+  'runner-result cannot promote: this named kind refuses so the gap is visible; only commit-diff binds git changed-paths to the claim subject-path';
+export const LIFECYCLE_REFUSAL =
+  'lifecycle-transition cannot promote: this named kind refuses so the gap is visible; Boolean(goal) cannot distinguish goal-set from goal-replaced';
+
+const MINT = Symbol('BusObservation.mint');
+
+/**
+ * World observation minted only by observeCommitDiff / observeRunnerResult /
+ * observeLifecycle after they hit git, receipts, or mailbox state.
+ * promote() accepts instanceof + the private mint brand.
+ * A plain object is not an observation.
+ */
+export class BusObservation {
+  readonly kind: VerifierKind;
+  readonly observed: Readonly<ObservedPayload>;
+  readonly #minted = true;
+
+  private constructor(kind: VerifierKind, observed: ObservedPayload, token: symbol) {
+    if (token !== MINT) {
+      throw new TypeError(PLAIN_OBJECT_REFUSAL);
+    }
+    this.kind = kind;
+    this.observed = Object.freeze({ ...observed });
+  }
+
+  get minted(): boolean {
+    try {
+      return this.#minted === true;
+    } catch {
+      return false;
+    }
+  }
+}
+
+function mintObservation(kind: VerifierKind, observed: ObservedPayload): BusObservation {
+  // Construct through the class so the private field brand is real. The
+  // unexported MINT token is the JS-side lock: TypeScript `private` is erased.
+  return new (BusObservation as unknown as {
+    new (kind: VerifierKind, observed: ObservedPayload, token: symbol): BusObservation;
+  })(kind, observed, MINT);
+}
 
 export function isVerifierKind(value: unknown): value is VerifierKind {
   return typeof value === 'string' && (VERIFIER_KINDS as readonly string[]).includes(value);
@@ -156,7 +212,7 @@ export class EvidenceStore {
       .at(-1);
   }
 
-  async promote(id: string, verifier?: VerifierInput | null): Promise<EvidenceRecord> {
+  async promote(id: string, observation?: BusObservation | null): Promise<EvidenceRecord> {
     const file = await this.load();
     const record = file.records.find((item) => item.id === id);
     if (!record) throw new Error(`evidence ${id} does not exist`);
@@ -166,7 +222,7 @@ export class EvidenceStore {
     if (record.invalidateReason) {
       throw new EvidencePromotionError(`evidence ${id} was invalidated: ${record.invalidateReason}`);
     }
-    const evaluation = evaluateVerifier(record, verifier);
+    const evaluation = evaluateVerifier(record, observation);
     if (!evaluation.ok) {
       throw new EvidencePromotionError(evaluation.reason);
     }
@@ -185,11 +241,11 @@ export class EvidenceStore {
     record.trust = 'verified';
     record.updatedAt = now;
     record.verifier = {
-      kind: verifier!.kind,
-      subject: verifier!.subject,
-      inputIdentity: verifierIdentity(verifier!),
-      observed: verifier,
-      provenance: 'typed-verifier',
+      kind: observation!.kind,
+      subject: record.subject,
+      inputIdentity: observationIdentity(observation!),
+      observed: observation!.observed,
+      provenance: 'bus-observation',
       checkedAt: now
     };
     if (current && current.id !== record.id) {
@@ -268,39 +324,205 @@ export function formatEvidenceForPrompt(records: EvidenceRecord[], limitBytes = 
   return `${prefix.join('')}${suffix}`;
 }
 
-function evaluateVerifier(record: EvidenceRecord, verifier?: VerifierInput | null): { ok: true } | { ok: false; reason: string } {
-  if (!verifier || typeof verifier !== 'object' || !verifier.kind) {
-    return { ok: false, reason: 'a typed verifier is required to promote evidence' };
+function isAuthenticObservation(value: unknown): value is BusObservation {
+  if (!(value instanceof BusObservation)) return false;
+  try {
+    return value.minted === true;
+  } catch {
+    return false;
   }
-  if (!verifier.subject || verifier.subject !== record.subject) {
-    return { ok: false, reason: 'verifier subject does not match claim subject' };
-  }
-  if (verifier.kind === 'commit-diff') {
-    if (!verifier.commitExists) return { ok: false, reason: 'commit does not exist' };
-    if (!verifier.sha.trim()) return { ok: false, reason: 'commit sha missing' };
-    if (verifier.relevantPaths.length === 0) return { ok: false, reason: 'relevant-path predicate missing' };
-    const missing = verifier.relevantPaths.filter((item) => !verifier.changedPaths.includes(item));
-    if (missing.length > 0) return { ok: false, reason: `irrelevant diff: missing ${missing.join(', ')}` };
-    return { ok: true };
-  }
-  if (verifier.kind === 'runner-result') {
-    if (!verifier.revision.trim()) return { ok: false, reason: 'runner result is not bound to a revision' };
-    if (!verifier.invocation.trim()) return { ok: false, reason: 'runner result is not bound to an invocation' };
-    if (!verifier.ok || verifier.exitCode !== 0) return { ok: false, reason: 'runner did not succeed' };
-    return { ok: true };
-  }
-  if (verifier.kind === 'lifecycle-transition') {
-    if (!verifier.recorded) return { ok: false, reason: 'lifecycle transition was not recorded' };
-    if (!verifier.transition.trim()) return { ok: false, reason: 'transition name missing' };
-    return { ok: true };
-  }
-  return { ok: false, reason: `unknown verifier kind: ${(verifier as VerifierInput).kind}` };
 }
 
-function verifierIdentity(verifier: VerifierInput): string {
-  if (verifier.kind === 'commit-diff') return verifier.sha;
-  if (verifier.kind === 'runner-result') return `${verifier.revision} ${verifier.invocation}`.trim();
-  return verifier.transition;
+function evaluateVerifier(
+  record: EvidenceRecord,
+  observation?: BusObservation | null
+): { ok: true } | { ok: false; reason: string } {
+  if (!isAuthenticObservation(observation)) {
+    return { ok: false, reason: PLAIN_OBJECT_REFUSAL };
+  }
+  if (observation.kind === 'runner-result') {
+    return { ok: false, reason: RUNNER_RESULT_REFUSAL };
+  }
+  if (observation.kind === 'lifecycle-transition') {
+    return { ok: false, reason: LIFECYCLE_REFUSAL };
+  }
+  if (observation.kind !== 'commit-diff') {
+    return { ok: false, reason: `unknown verifier kind: ${String((observation as BusObservation).kind)}` };
+  }
+  const observed = observation.observed as CommitDiffObserved;
+  if (!observed.commitExists) return { ok: false, reason: 'commit does not exist' };
+  if (!observed.sha.trim()) return { ok: false, reason: 'commit sha missing' };
+  const wanted = subjectPath(record.subject).replace(/\\/g, '/');
+  if (!wanted) return { ok: false, reason: 'claim subject-path is empty' };
+  const changed = (observed.changedPaths ?? []).map((item) => item.replace(/\\/g, '/'));
+  if (!changed.includes(wanted)) {
+    return { ok: false, reason: `irrelevant diff: missing ${wanted}` };
+  }
+  return { ok: true };
+}
+
+function observationIdentity(observation: BusObservation): string {
+  if (observation.kind === 'commit-diff') {
+    return (observation.observed as CommitDiffObserved).sha;
+  }
+  if (observation.kind === 'runner-result') {
+    const observed = observation.observed as RunnerResultObserved;
+    return `${observed.revision} ${observed.invocation}`.trim();
+  }
+  return (observation.observed as LifecycleObserved).transition;
+}
+
+export async function observeCommitDiff(root: string, _subject: string): Promise<BusObservation> {
+  const sha = await readGitHead(root);
+  if (!sha) {
+    return mintObservation('commit-diff', { commitExists: false, sha: '', changedPaths: [] });
+  }
+  let changedPaths: string[] = [];
+  try {
+    // --root is load-bearing for the first commit: without it, `diff-tree -r SHA` has
+    // no parent and reports an empty path list, so a real landing looks irrelevant.
+    const { stdout } = await execFileAsync(
+      'git',
+      ['-C', root, 'diff-tree', '--no-commit-id', '--name-only', '-r', '--root', sha],
+      { windowsHide: true }
+    );
+    changedPaths = stdout.split(/\r?\n/).map((item) => item.trim().replace(/\\/g, '/')).filter(Boolean);
+  } catch {
+    changedPaths = [];
+  }
+  return mintObservation('commit-diff', { commitExists: true, sha, changedPaths });
+}
+
+export async function observeRunnerResult(
+  root: string,
+  subject: string,
+  invocation?: string
+): Promise<BusObservation> {
+  const receiptsDir = path.join(root, '.ai-bus', 'runtime', 'receipts');
+  const wanted = (invocation ?? '').trim() || subjectPath(subject);
+  const receipt = await findCapabilityReceipt(receiptsDir, wanted);
+  if (!receipt) {
+    return mintObservation('runner-result', {
+      revision: '',
+      invocation: wanted,
+      exitCode: 1,
+      ok: false
+    });
+  }
+  const command = [receipt.capabilityId, receipt.command?.executable, ...(receipt.command?.args ?? [])]
+    .filter((item): item is string => typeof item === 'string' && item.length > 0)
+    .join(' ');
+  return mintObservation('runner-result', {
+    revision: receipt.workspaceCommit?.sha ?? '',
+    invocation: command || receipt.capabilityId || wanted,
+    exitCode: typeof receipt.exitCode === 'number' ? receipt.exitCode : 1,
+    ok: receipt.status === 'passed' && receipt.exitCode === 0
+  });
+}
+
+export async function observeLifecycle(
+  root: string,
+  subject: string,
+  transition?: string
+): Promise<BusObservation> {
+  const wanted = (transition ?? '').trim() || subjectPath(subject);
+  const state = await loadMailboxState(root);
+  let recorded = false;
+  if (wanted === 'goal-set' || wanted === 'goal-replaced') {
+    recorded = Boolean(state.goal);
+  } else {
+    recorded = state.completions.some((event) =>
+      wanted === event.scope ||
+      wanted === `complete-${event.scope}` ||
+      wanted === event.id
+    );
+  }
+  return mintObservation('lifecycle-transition', { transition: wanted, recorded });
+}
+
+async function readGitHead(root: string): Promise<string | undefined> {
+  let candidate = path.resolve(root);
+  while (!(await pathExists(path.join(candidate, '.git')))) {
+    const parent = path.dirname(candidate);
+    if (parent === candidate) return undefined;
+    candidate = parent;
+  }
+  try {
+    const { stdout } = await execFileAsync('git', ['-C', root, 'rev-parse', 'HEAD'], { windowsHide: true });
+    const sha = stdout.trim();
+    return sha || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function findCapabilityReceipt(
+  receiptsDir: string,
+  wanted: string
+): Promise<{
+  capabilityId?: string;
+  command?: { executable?: string; args?: string[] };
+  workspaceCommit?: { sha?: string };
+  exitCode?: number | null;
+  status?: string;
+} | undefined> {
+  const names = await fs.readdir(receiptsDir).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') return [] as string[];
+    throw error;
+  });
+  const files = names.filter((name) => name.endsWith('.json') && name !== 'latest.json').sort();
+  const latest = names.includes('latest.json') ? ['latest.json'] : [];
+  const candidates = [...latest, ...files.reverse()];
+  for (const name of candidates) {
+    try {
+      const receipt = JSON.parse(await fs.readFile(path.join(receiptsDir, name), 'utf8')) as {
+        capabilityId?: string;
+        command?: { executable?: string; args?: string[] };
+        workspaceCommit?: { sha?: string };
+        exitCode?: number | null;
+        status?: string;
+      };
+      const haystack = [
+        receipt.capabilityId,
+        receipt.command?.executable,
+        ...(receipt.command?.args ?? [])
+      ].filter(Boolean).join(' ');
+      if (!wanted || haystack.includes(wanted) || receipt.capabilityId === wanted) {
+        return receipt;
+      }
+    } catch {
+      // A corrupt receipt is not a passing verifier.
+    }
+  }
+  return undefined;
+}
+
+async function loadMailboxState(root: string): Promise<{
+  goal: unknown;
+  completions: Array<{ scope?: string; id?: string }>;
+}> {
+  const statePath = path.join(root, '.ai-bus', 'runtime', 'mailbox', 'state.json');
+  try {
+    const state = JSON.parse(await fs.readFile(statePath, 'utf8')) as {
+      goal?: unknown;
+      completions?: Array<{ scope?: string; id?: string }>;
+    };
+    return { goal: state.goal ?? null, completions: Array.isArray(state.completions) ? state.completions : [] };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return { goal: null, completions: [] };
+    }
+    throw error;
+  }
+}
+
+async function pathExists(target: string): Promise<boolean> {
+  try {
+    await fs.access(target);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function escapeText(value: string): string {
