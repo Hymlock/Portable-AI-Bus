@@ -78,6 +78,72 @@ not the same as re-measuring them in production.
 
 **PLAN 01 closes** on the code, with the limit above recorded rather than argued away.
 
+---
+
+# PLAN 02/03 — the transport outage (same day, afternoon)
+
+Closing PLAN 01 did not leave a working bus. Fixing the wake path exposed a second class of fault
+below it: **every provider call was being mangled or stalled by the process transport.** All of it
+was mechanical, and none of it was model behaviour — which matters, because the seats had been
+blamed for it all day.
+
+| commit | what was actually wrong |
+|---|---|
+| `221eafe` | `pty.spawn` used `cols:120, rows:40`. ConPTY passes bytes cleanly until output fills the **visible screen buffer** (120×40 = 4800), then scrolling injects CR/LF every 122 bytes — *inside quoted JSON strings*. grok's 53 KB, 56 KB and 60 KB reports were shredded; its 163-byte acks always arrived. Data moved off the PTY to a file; ConPTY kept only as process host so console grandchildren stay hidden. |
+| `5367202` | A dead child was not detected, so it cost the full 600 s backstop. Now 180 ms, while a genuinely slow 3 s child is still not reaped early. |
+| `526a587` | Wrapper commands (`.cmd`/`.ps1`) could not launch at all: the capture wrapper called `child_process.spawn` with no `shell`, which Node has refused for `.cmd`/`.bat` since the CVE-2024-27980 fix. Returned 255 in ~118 ms. |
+| `71d2ae3` | grok's CLI was **upgraded**. `-p` is an alias for `--single <PROMPT>` and consumes the next token, so the schema must precede it. Without a headless flag the CLI opens its Build TUI and waits for keystrokes until the backstop. |
+| `b13e734` | PowerShell 5.1 mangles embedded double quotes passing to a native exe, so `--json-schema` arrived as `{type:...` and was rejected at column 2. Wrappers now launch through `cmd.exe /c` with `\"` escaping. |
+| `a1931d1` | Message bodies were silently truncated at 4,000 chars when the wake prompt was built. Now marked with the omitted byte count and the durable mailbox path. |
+| `64b3d45`, `81809dc`, `f853181` | The prompt-budget ceiling; see below. |
+
+## The diagnosis that was wrong three times
+
+Recorded because the pattern cost more than any single bug:
+
+- **"The `<seat>` placeholder explains the malformed events."** It explained **one of 98**.
+- **"The supervisor wedged for six hours."** It had not; a planner tool call was blocked on a
+  permission prompt and nothing was being sent.
+- **"We hand every provider a TTY, so CLIs start interactive."** Measured: `isTTY=undefined`.
+  Retracted before it caused a transport rewrite.
+- **"The argv ceiling took both seats off the bus."** The ceiling is real and reproducible at 40,000
+  characters, but sampling the live processes gave command lines of 4,735 and 5,545 bytes. Withdrawn
+  in `81809dc`.
+
+Two were right (the viewport, the CLI upgrade); two were wrong. Every correction came from running
+the thing and reading the bytes, never from further reasoning.
+
+## AUDIT 06 — planner-as-auditor, and what it found
+
+grok's balance was exhausted (`402 Payment Required`, confirmed once its arguments finally reached
+the API), so the auditor assignment moved to `claude`. **Less independent than grok's would have
+been, and recorded as such.** Method: surgical source-only reverts, tests kept.
+
+A first attempt used `git revert`, which removed each fix **and its tests together** — green proved
+nothing, and the test count dropping 312 → 310 is what exposed it. `git checkout <commit>^ -- <src>`
+is the method.
+
+- `b13e734` and `71d2ae3` — **real gates.** Reverting either source file fails a specific test.
+- `64b3d45` — **no gate at all.** Reverting 12 KiB → 32 KiB left the suite green, because every
+  truncation test used a body larger than any candidate limit.
+- Writing the missing gate **failed at 12 KiB**, revealing that the limit is per *field* while a
+  wake carries both a message and open work: a saturated prompt reached ~24.6 KB. Now **8 KiB**.
+- Two truncation tests asserted `/8 UTF-8 bytes omitted/` while the true count at 12 KiB was
+  `20488` — which contains that substring. **Passing by regex accident.**
+  `WAKE_FIELD_LIMIT_BYTES` is now exported and the expectation derived.
+
+## Still open
+
+- **grok is out of credits**, not broken. Nothing here restores it; every technical fault it was
+  blamed for is fixed. Its own "I am out of providers" message was correct about its state and
+  wrong about its evidence, and the planner dismissed it.
+- **A stalled provider call starves the listen loop** — a seat that cannot answer also cannot
+  receive, and accumulates unread work while reporting a healthy provider chain.
+- **A restarted brain does not drain retained mail** until new mail arrives.
+- **`node-pty` is fragile under concurrent `npm install`** — destroyed three times in one day via
+  `EBUSY` on `conpty.node`, leaving a half-deleted module and "ConPTY unavailable" on every call.
+  Stop the brains, remove `node_modules/.node-pty-*`, then install.
+
 ## Design decisions that survived challenge
 
 - **PID-based lease release rejected.** A PID is not a liveness identity; `a029fca` settled that
