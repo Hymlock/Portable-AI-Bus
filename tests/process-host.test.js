@@ -1,18 +1,45 @@
 const assert = require('node:assert/strict');
+const { spawnSync } = require('node:child_process');
 const { EventEmitter } = require('node:events');
+const fs = require('node:fs');
 const test = require('node:test');
 
 const { runProcess, stripAnsi } = require('../dist/brain/process-host');
+
+test('Windows process host preserves output after the ConPTY viewport scrolls', {
+  skip: process.platform !== 'win32'
+}, async () => {
+  const expected = 'A'.repeat(5_000);
+  const result = runWindowsProcessHostProbe("process.stdout.write('A'.repeat(5000))");
+
+  assert.equal(result.code, 0);
+  assert.equal(result.stdout, expected);
+});
+
+test('Windows process host preserves and parses single-line JSON larger than 64 KiB', {
+  skip: process.platform !== 'win32'
+}, async () => {
+  const expected = JSON.stringify({ text: 'x'.repeat(70_000) });
+  const result = runWindowsProcessHostProbe(
+    "process.stdout.write(JSON.stringify({text:'x'.repeat(70000)}))"
+  );
+
+  assert.equal(result.code, 0);
+  assert.equal(result.stdout, expected);
+  assert.deepEqual(JSON.parse(result.stdout), JSON.parse(expected));
+});
 
 test('Windows process host uses headless ConPTY and strips terminal controls', async () => {
   let received;
   const fakePty = {
     spawn(command, args, options) {
-      received = { command, args, options };
+      const request = JSON.parse(fs.readFileSync(args[2], 'utf8'));
+      received = { command, args, options, request };
       let dataListener;
       let exitListener;
       queueMicrotask(() => {
-        dataListener('\u001b[?9001h\u001b]0;claude\u0007{\"result\":\"PONG\"}\r\n\u001b[?25h');
+        fs.writeFileSync(args[3], '{"result":"PONG"}\r\n');
+        dataListener('\u001b[?9001h\u001b[?25h');
         exitListener({ exitCode: 0 });
       });
       return {
@@ -30,8 +57,10 @@ test('Windows process host uses headless ConPTY and strips terminal controls', a
   }, { platform: 'win32', loadPty: () => fakePty });
 
   assert.deepEqual(result, { code: 0, stdout: '{"result":"PONG"}\r\n', stderr: '' });
-  assert.equal(received.command, process.execPath);
-  assert.deepEqual(received.args, ['-p', 'PONG']);
+  assert.equal(received.command, process.execPath, 'the capture wrapper remains in ConPTY');
+  assert.equal(received.args[0], '-e');
+  assert.equal(received.request.command, process.execPath);
+  assert.deepEqual(received.request.args, ['-p', 'PONG']);
   assert.equal(received.options.useConpty, true);
   assert.equal(received.options.cwd, 'C:\\scratch');
   assert.equal(received.options.env.TRACE, 'yes');
@@ -82,9 +111,10 @@ test('ConPTY timeout kills the process and returns code 124', async () => {
   const result = await runProcess(process.execPath, [], { timeoutMs: 5 }, {
     platform: 'win32',
     loadPty: () => ({
-      spawn() {
+      spawn(_command, args) {
+        fs.writeFileSync(args[3], '\u001b[31mpartial\u001b[0m');
         return {
-          onData(listener) { listener('\u001b[31mpartial\u001b[0m'); },
+          onData() {},
           onExit() {},
           kill() { killed = true; }
         };
@@ -99,3 +129,23 @@ test('ConPTY timeout kills the process and returns code 124', async () => {
 test('stripAnsi handles CSI and OSC commands emitted by ConPTY clients', () => {
   assert.equal(stripAnsi('\u001b[2Jbefore\u001b]0;title\u0007after\u001b[?25h'), 'beforeafter');
 });
+
+function runWindowsProcessHostProbe(providerScript) {
+  const probe = `
+    const { runProcess } = require('./dist/brain/process-host');
+    runProcess(process.execPath, ['-e', ${JSON.stringify(providerScript)}], { timeoutMs: 10000 })
+      .then((result) => {
+        process.stdout.write(JSON.stringify(result));
+        process.exit(0);
+      });
+  `;
+  const completed = spawnSync(process.execPath, ['-e', probe], {
+    cwd: process.cwd(),
+    encoding: 'utf8',
+    timeout: 20_000,
+    windowsHide: true,
+    maxBuffer: 1024 * 1024
+  });
+  assert.equal(completed.status, 0, completed.stderr || completed.error?.message);
+  return JSON.parse(completed.stdout);
+}

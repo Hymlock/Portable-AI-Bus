@@ -1,5 +1,6 @@
 import { spawn as nodeSpawn } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 export type ProcessResult = {
@@ -140,10 +141,28 @@ async function runConPty(
     return { code: -1, stdout: '', stderr: `Command not found: ${command}` };
   }
 
+  let captureDir: string;
+  try {
+    captureDir = fs.mkdtempSync(path.join(os.tmpdir(), 'portable-ai-bus-process-'));
+    fs.writeFileSync(
+      path.join(captureDir, 'request.json'),
+      JSON.stringify({ command: executable, args }),
+      'utf8'
+    );
+  } catch (error) {
+    return { code: -1, stdout: '', stderr: `ConPTY capture setup failed: ${errorMessage(error)}` };
+  }
+
+  const requestPath = path.join(captureDir, 'request.json');
+  const outputPath = path.join(captureDir, 'output.bin');
+
   return new Promise((resolve) => {
     let child: PtyProcess;
     try {
-      child = pty.spawn(executable, args, {
+      // Keep the provider in the headless pseudoconsole process tree, but redirect its data stream
+      // to a file. ConPTY mutates long output after its visible viewport scrolls, so it must not be
+      // used as a byte transport. The short wrapper's PTY output is reserved for launch diagnostics.
+      child = pty.spawn(process.execPath, ['-e', conPtyCaptureWrapper, requestPath, outputPath], {
         name: 'xterm-256color',
         cols: 120,
         rows: 40,
@@ -152,28 +171,77 @@ async function runConPty(
         useConpty: true
       });
     } catch (error) {
+      removeCaptureDir(captureDir);
       resolve({ code: -1, stdout: '', stderr: `ConPTY spawn failed: ${errorMessage(error)}` });
       return;
     }
 
-    let output = '';
+    let diagnostic = '';
     let settled = false;
     let timer: NodeJS.Timeout | undefined;
     const finish = (result: ProcessResult) => {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
+      removeCaptureDir(captureDir);
       resolve(result);
     };
-    child.onData((data) => { output += data; });
+    child.onData((data) => { diagnostic += data; });
     child.onExit(({ exitCode }) => {
-      finish({ code: exitCode, stdout: stripAnsi(output), stderr: '' });
+      let output = '';
+      try {
+        output = fs.readFileSync(outputPath, 'utf8');
+      } catch (error) {
+        finish({
+          code: exitCode || -1,
+          stdout: '',
+          stderr: stripAnsi(diagnostic) || `ConPTY capture read failed: ${errorMessage(error)}`
+        });
+        return;
+      }
+      finish({ code: exitCode, stdout: stripAnsi(output), stderr: stripAnsi(diagnostic) });
     });
     timer = setTimeout(() => {
+      let output = '';
+      try { output = fs.readFileSync(outputPath, 'utf8'); } catch { /* no output yet */ }
       finish({ code: 124, stdout: stripAnsi(output), stderr: 'Process timed out.' });
       try { child.kill(); } catch { /* already exited */ }
     }, options.timeoutMs);
   });
+}
+
+const conPtyCaptureWrapper = String.raw`
+const childProcess = require('node:child_process');
+const fs = require('node:fs');
+const request = JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
+const output = fs.openSync(process.argv[2], 'w');
+let child;
+let finished = false;
+function finish(code, error) {
+  if (finished) return;
+  finished = true;
+  try { fs.closeSync(output); } catch {}
+  if (error) process.stderr.write(String(error && error.message || error));
+  process.exit(Number.isInteger(code) ? code : 255);
+}
+try {
+  child = childProcess.spawn(request.command, request.args, {
+    cwd: process.cwd(),
+    env: process.env,
+    windowsHide: true,
+    stdio: ['ignore', output, output]
+  });
+} catch (error) {
+  finish(255, error);
+}
+if (child) {
+  child.once('error', (error) => finish(255, error));
+  child.once('exit', (code) => finish(code));
+}
+`;
+
+function removeCaptureDir(directory: string): void {
+  try { fs.rmSync(directory, { recursive: true, force: true }); } catch { /* best-effort cleanup */ }
 }
 
 function resolveWindowsExecutable(
