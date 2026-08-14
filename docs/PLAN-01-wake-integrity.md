@@ -92,9 +92,25 @@ not the same as re-measuring them in production.
 
 ## Known open
 
-- **The envelope class** — 75 of 97 malformed events. `parsePlan` has no `undoTerminalStringWraps`;
-  `extractGrokAnswer` does. All evidence is from one seat, whose provider runs through node-pty
-  ConPTY — which crashed outright (`AttachConsole failed`) and killed an audit mid-flight.
+- **The envelope class.** Two claims that stood here were **wrong**, corrected by the auditor's
+  recovered design (see below):
+  - *"`parsePlan` has no `undoTerminalStringWraps`; `extractGrokAnswer` does"* recited AUDIT 01 and
+    stopped being true at `e7dff47`. Verified: `agent.ts:226` is
+    `planFromJsonStream(undoTerminalStringWraps(trimmed))`. The running tree is the **opposite** of
+    that sentence, deliberately.
+  - *"75 of 97"* conflated classes. True leaked envelopes at AUDIT 02 were **63** (31 pretty + 29
+    escaped + 2 cli-stderr + 1 placeholder). The 12 bare-plan-prefix and 3 empty-cancelled are
+    different classes.
+- **The corruption is in the transport, not only the wrapping.** Events 99 and 100 (53,361 and
+  56,454 bytes, snapshotted to `.ai-bus/malformed-event-{99,100}-*.txt`) show raw CR/LF inserted
+  **inside quoted strings at a 123-byte interval**, first wrap always at offset 4683. After
+  `undoTerminalStringWraps` removes 744 CR/LF bytes, `JSON.parse` still fails on odd-backslash
+  damage around `C:\\Users` — 8 wraps land immediately after a backslash. A dangling-slash heal was
+  written and run against both originals: it does not recover them. **These documents are not
+  parser-recoverable, and inventing bytes is not a parser.**
+- **The 19 prose events are a provider-flag problem that is already fixed.** They are the oldest
+  slice; `5d1a710` added `PLAN_SCHEMA` and `--json-schema`, and the log switches from prose to
+  envelopes after it. Not a parse branch, not a retry.
 - **Seat memory** — each wake is a fresh model session. Measured cost: the DELTA D, G and H briefs
   were re-sent three or four times each. Prior art: `D:\Projects\Cwars` reconstructive memory.
 - **`bus-up.js:127`** hardcodes `--max-rounds 550`; it only survives because `ensureInitialized`
