@@ -132,6 +132,34 @@ is the method.
   `20488` — which contains that substring. **Passing by regex accident.**
   `WAKE_FIELD_LIMIT_BYTES` is now exported and the expectation derived.
 
+## `760c17c` — stalled calls no longer starve delivery
+
+A brain would report `provider-chain: healthy`, then a real call would run long and the seat would
+**receive nothing** until the backstop. Unread climbed 5 → 6 → 7 while the seat reported `grok=ok`.
+Every "deaf brain" restarted on 2026-08-14 was this, and it was misdiagnosed three times before it
+was measured.
+
+Fixed by running a cursor-based, abortable receive lifecycle alongside each provider wake, with
+distinct `seat-listening` / `provider-thinking` / `provider-stalled` / `provider-exited` / late-mail
+events so a healthy provider chain can no longer masquerade as participation. **316 tests.**
+
+The hazard attached to the approval held: acknowledgement still commits **exactly the batch
+presented before the model call**, so mail arriving during thinking stays unread for the next wake.
+Fixing deafness by reintroducing silent loss was the obvious way to get this wrong.
+
+**Audit status: INCONCLUSIVE, and recorded as such.** Reverting all three source files made the
+suite **hang past ten minutes** rather than fail with a red assertion. A hang is consistent with the
+gate binding — a delivery test waiting forever for mail that never arrives is the defect reproducing
+— but it is **not** a red assertion and is not claimed as one. Codex's own RED evidence and 316 green
+stand; independent revert-to-red on this commit was not achieved.
+
+Two process notes from that attempt, both mistakes worth not repeating:
+
+- **The revert was done in the LIVE TREE.** When the command timed out, three reverted source files
+  were left staged. It was caught on the next check and restored, but a crash at that moment would
+  have left the repo silently broken. grok used a **git worktree** for exactly this reason.
+- **A hang is a worse failure mode than a red.** It costs ten minutes and proves less.
+
 ## Still open
 
 - **grok is out of credits**, not broken. Nothing here restores it; every technical fault it was
