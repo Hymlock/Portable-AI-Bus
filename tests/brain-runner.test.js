@@ -218,6 +218,68 @@ function oneReply(text) {
   };
 }
 
+test('mail retained while a brain is down is presented on its first restarted wake without a trigger', async () => {
+  const retained = {
+    seq: 89, from: 'claude', to: 'codex', kind: 'task',
+    subject: 'arrived while down', body: 'drain me on restart'
+  };
+  const fixture = transactionalBus(retained);
+  const presented = [];
+  const restartedBrain = {
+    name: 'restarted',
+    async takeTurn(context) {
+      presented.push(...context.messages);
+      return { done: true, note: 'retained mail processed' };
+    }
+  };
+
+  // No enqueue and no synthetic listen result occurs after runBrain starts. The only wake source
+  // is the unread record that predates this runner process.
+  await runBrain({ seat: 'codex', brain: restartedBrain, bus: fixture.client, maxWakes: 1 });
+
+  assert.deepEqual(presented.map((message) => message.seq), [89],
+    'startup must reconcile the durable unread inbox before waiting for a new arrival');
+  assert.equal(fixture.unread.length, 0);
+  assert.equal(fixture.acknowledgements, 1);
+});
+
+test('a committed message is not presented again after the brain restarts', async () => {
+  const task = {
+    seq: 90, from: 'claude', to: 'codex', kind: 'task',
+    subject: 'consume once', body: 'do not replay me'
+  };
+  const fixture = transactionalBus(task);
+  const firstWake = [];
+  await runBrain({
+    seat: 'codex', bus: fixture.client, maxWakes: 1,
+    brain: {
+      name: 'first-process',
+      async takeTurn(context) {
+        firstWake.push(...context.messages);
+        return { done: true, note: 'committed' };
+      }
+    }
+  });
+
+  const restartedWake = [];
+  await runBrain({
+    seat: 'codex', bus: fixture.client, maxWakes: 1,
+    brain: {
+      name: 'restarted-process',
+      async takeTurn(context) {
+        restartedWake.push(...context.messages);
+        return { done: true };
+      }
+    }
+  });
+
+  assert.deepEqual(firstWake.map((message) => message.seq), [90]);
+  assert.deepEqual(restartedWake, [],
+    'restart reconciliation must use unread state, not indiscriminately replay mailbox history');
+  assert.equal(fixture.acknowledgements, 1,
+    'only the process that was actually presented the message may commit it');
+});
+
 test('a malformed model wake leaves its input unread, while a usable plan consumes it', async () => {
   const task = { seq: 91, from: 'claude', to: 'codex', kind: 'task', subject: 'audit', body: 'inspect it' };
 
