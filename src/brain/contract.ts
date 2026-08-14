@@ -99,6 +99,12 @@ export type WakeResult = {
    * The runner normally commits a transactional inbox read after the turn succeeds.
    */
   retainMessages?: boolean;
+  /**
+   * Work is valid but cannot proceed until an external condition changes (for example, a
+   * path claim is held by another seat). Blocked mail remains unread without consuming the
+   * poison-message retry budget.
+   */
+  blocked?: boolean;
 };
 
 export type Brain = {

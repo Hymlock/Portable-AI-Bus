@@ -43,6 +43,10 @@ export type RunnerOptions = {
   maxWakes?: number;
   /** Failed deliveries allowed for one message before it is parked. */
   maxMessageAttempts?: number;
+  /** Delay between continuation wakes while an external claim remains blocked. */
+  blockedBackoffMs?: number;
+  /** Injected by tests so blocked-backoff coverage does not sleep in real time. */
+  sleep?: (milliseconds: number) => Promise<void>;
   /**
    * Message kinds that are pure courtesy: they inform, and they never need an answer.
    *
@@ -92,6 +96,8 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
     listenSeconds = DEFAULT_LISTEN_SECONDS,
     maxWakes,
     maxMessageAttempts = DEFAULT_MAX_MESSAGE_ATTEMPTS,
+    blockedBackoffMs = 30_000,
+    sleep = (milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)),
     ackKinds = DEFAULT_ACK_KINDS,
     thinkWhenIdle = false,
     log = () => {},
@@ -99,6 +105,9 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
   } = options;
   if (!Number.isSafeInteger(maxMessageAttempts) || maxMessageAttempts < 1) {
     throw new Error('maxMessageAttempts must be a positive integer');
+  }
+  if (!Number.isSafeInteger(blockedBackoffMs) || blockedBackoffMs < 0) {
+    throw new Error('blockedBackoffMs must be a non-negative integer');
   }
   const isAck = (message: BrainMessage) =>
     ackKinds.includes(String((message as { kind?: unknown }).kind ?? '').trim().toLowerCase());
@@ -259,7 +268,7 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
             log('message-retry-cleared', { seat, seq: message.seq, attempts });
           }
         }
-      } else if (messages.length > 0 && transactional) {
+      } else if (messages.length > 0 && transactional && result.blocked !== true) {
         for (const message of messages) {
           const attempts = (failedAttempts.get(message.seq) ?? 0) + 1;
           failedAttempts.set(message.seq, attempts);
@@ -317,6 +326,14 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
         continuing: hasOpenWork,
         note: result.note
       });
+
+      // Retained mail makes listen return immediately, so a blocked claim needs its own wake
+      // boundary delay. Without it, each continuation asks the provider again at full speed
+      // while another seat legitimately holds the path.
+      if (result.blocked && blockedBackoffMs > 0 && !stopped) {
+        log('wake-blocked-backoff', { seat, milliseconds: blockedBackoffMs, note: result.note });
+        await sleep(blockedBackoffMs);
+      }
 
       // NOTE: `result.done` is deliberately NOT a reason to leave this loop. It means this
       // wake's work finished. The agent is still alive and still owns the seat.

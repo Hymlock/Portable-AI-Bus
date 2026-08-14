@@ -32,6 +32,8 @@ export type AgentBrainOptions = {
   systemPrompt?: string;
   /** Max model round-trips inside one wake (tool loop). */
   maxRounds?: number;
+  /** Test/runtime override for the bounded claim-conflict retry schedule. */
+  executePlanOptions?: ExecutePlanOptions;
   log?: (event: string, data?: unknown) => void;
 };
 
@@ -322,7 +324,20 @@ function isAction(value: unknown): value is BrainAction {
 const RECEIPT_KINDS = new Set(['ack', 'receipt', 'ping']);
 
 /** What went wrong while carrying out a plan, in the model's own terms. */
-export type PlanFailure = { action: string; detail: string };
+export type PlanFailure = {
+  action: string;
+  detail: string;
+  status?: number;
+  code?: string;
+  retriable?: boolean;
+  holder?: string;
+  path?: string;
+};
+
+export type ExecutePlanOptions = {
+  claimRetryDelaysMs?: number[];
+  sleep?: (milliseconds: number) => Promise<void>;
+};
 
 /**
  * Did a bus tool refuse this call?
@@ -330,12 +345,22 @@ export type PlanFailure = { action: string; detail: string };
  * `cliBusClient` never throws â€” a failing call returns `{ error }` so one bad tool cannot kill
  * a wake. That is right, but it means a discarded return value is a SILENTLY discarded failure.
  */
-function toolFailure(result: unknown): string | undefined {
+function toolFailure(result: unknown): PlanFailure | undefined {
   if (!result || typeof result !== 'object') return undefined;
   const record = result as Record<string, unknown>;
-  if (typeof record.error === 'string') return record.error;
-  if (typeof record.refused === 'string') return record.refused;
-  return undefined;
+  const detail = typeof record.error === 'string'
+    ? record.error
+    : typeof record.refused === 'string'
+      ? record.refused
+      : undefined;
+  if (!detail) return undefined;
+  return {
+    action: '',
+    detail,
+    ...(Number.isInteger(record.status) ? { status: Number(record.status) } : {}),
+    ...(typeof record.code === 'string' ? { code: record.code } : {}),
+    ...(typeof record.retriable === 'boolean' ? { retriable: record.retriable } : {})
+  };
 }
 
 /**
@@ -353,13 +378,24 @@ function toolFailure(result: unknown): string | undefined {
 export async function executePlan(
   tools: BrainTools,
   plan: AgentPlan,
-  routing: { seats?: string[]; fallbackTo?: string } = {}
+  routing: { seats?: string[]; fallbackTo?: string } = {},
+  options: ExecutePlanOptions = {}
 ): Promise<PlanFailure[]> {
   const failures: PlanFailure[] = [];
-  const note = (action: string, result: unknown) => {
-    const detail = toolFailure(result);
-    if (detail) failures.push({ action, detail });
+  const failureFor = (action: string, result: unknown, path?: string) => {
+    const failure = toolFailure(result);
+    if (!failure) return undefined;
+    failure.action = action;
+    if (path) failure.path = path;
+    if (failure.code === 'claim_conflict') {
+      const holder = /(?:^|:\s)([^\s:]+) already holds\s/i.exec(failure.detail)?.[1];
+      if (holder) failure.holder = holder;
+    }
+    return failure;
   };
+  const claimRetryDelaysMs = options.claimRetryDelaysMs ?? [250, 1_000];
+  const sleep = options.sleep ?? ((milliseconds: number) =>
+    new Promise<void>((resolve) => setTimeout(resolve, milliseconds)));
 
   /**
    * Deliver to a real seat, even when the model names one that does not exist.
@@ -390,25 +426,57 @@ export async function executePlan(
     switch (action.type) {
       case 'send': {
         const { to, problem } = resolveRecipient(action.to);
-        if (problem) failures.push({ action: `send to ${action.to}`, detail: problem });
-        note(`send to ${to}`, await tools.send({
+        const failure = failureFor(`send to ${to}`, await tools.send({
           to,
           kind: action.kind ?? 'note',
           subject: action.subject,
           body: action.body,
           keepBaton: action.keepBaton
         }));
+        if (failure) {
+          failures.push(failure);
+          return failures;
+        }
+        // Recipient fallback is a completed delivery, not a refused tool call. Record the
+        // addressing defect only after the report has safely reached the assigning seat.
+        if (problem) {
+          failures.push({ action: `send to ${action.to}`, detail: problem });
+          return failures;
+        }
         break;
       }
-      case 'claim':
-        note('claim', await tools.claim(action.paths, action.why));
+      case 'claim': {
+        let failure = failureFor('claim', await tools.claim(action.paths, action.why), action.paths.join(', '));
+        for (const delay of claimRetryDelaysMs) {
+          if (failure?.status !== 409 || failure.code !== 'claim_conflict' || failure.retriable !== true) break;
+          await sleep(delay);
+          failure = failureFor('claim', await tools.claim(action.paths, action.why), action.paths.join(', '));
+        }
+        if (failure) {
+          failures.push(failure);
+          return failures;
+        }
         break;
-      case 'release':
-        note('release', await tools.release(action.paths));
+      }
+      case 'release': {
+        const failure = failureFor('release', await tools.release(action.paths));
+        if (failure) {
+          failures.push(failure);
+          return failures;
+        }
         break;
-      case 'capability':
-        note(`capability ${action.id}`, await tools.runCapability(action.id, action.timeoutMs));
+      }
+      case 'capability': {
+        const failure = failureFor(
+          `capability ${action.id}`,
+          await tools.runCapability(action.id, action.timeoutMs)
+        );
+        if (failure) {
+          failures.push(failure);
+          return failures;
+        }
         break;
+      }
       case 'done':
         break;
       default:
@@ -446,6 +514,7 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
     // seats did when handed multi-step audits, and not enough to investigate anything. Running
     // out of rounds now returns `done: false`, so this bounds a WAKE rather than the work.
     maxRounds = 12,
+    executePlanOptions,
     log = () => {}
   } = options;
 
@@ -558,11 +627,39 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
         const failures = await executePlan(tools, filtered, {
           seats: knownSeats,
           fallbackTo: messages.find((m) => knownSeats.includes(m.from))?.from ?? 'hymlock'
-        });
+        }, executePlanOptions);
         if (attemptedReceipt && !failures.some((failure) => failure.action.startsWith('send to '))) {
           receiptSent = true;
         }
         return failures;
+      };
+      const actionFailureResult = (failures: PlanFailure[]): WakeResult => {
+        const conflict = failures.find((failure) =>
+          failure.status === 409 && failure.code === 'claim_conflict' && failure.retriable === true
+        );
+        if (conflict) {
+          const holder = conflict.holder ?? 'another seat';
+          const claimPath = conflict.path ?? 'the requested path';
+          const note = durableNote(`claim blocked: ${holder} holds ${claimPath}`.slice(0, 200));
+          log('plan-action-blocked', {
+            seat,
+            action: conflict.action,
+            status: conflict.status,
+            code: conflict.code,
+            holder,
+            path: claimPath,
+            detail: conflict.detail
+          });
+          return { done: false, retainMessages: true, blocked: true, note };
+        }
+
+        log('plan-actions-failed', { seat, failures });
+        const detail = failures.map((failure) => `${failure.action}: ${failure.detail}`).join('; ');
+        return {
+          done: false,
+          retainMessages: true,
+          note: durableNote(`action-failed: ${detail}`.slice(0, 200))
+        };
       };
 
       for (let round = 0; round < maxRounds; round += 1) {
@@ -651,7 +748,8 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
             if (!repair.isError && repair.text.trim()) {
               const second = parsePlan(repair.text);
               if (!second.malformed) {
-                await executeTrackedPlan(second.plan);
+                const repairFailures = await executeTrackedPlan(second.plan);
+                if (repairFailures.length > 0) return actionFailureResult(repairFailures);
                 if (second.plan.done !== false && wasAsked && !reportsTask(second.plan)) {
                   log('done-without-report', { seat, round, phase: 'malformed-repair' });
                   unreportedTask = true;
@@ -676,45 +774,10 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
         lastNote = durableNote(plan.note);
 
         if (failures.length > 0) {
-          // A refused tool call is NOT a completed turn. Tell the model exactly what the bus
-          // said and give it another round, because the alternative is what already happened
-          // once: a report addressed to a seat that does not exist, silently discarded, and a
-          // wake that logged success.
-          log('plan-actions-failed', { seat, failures });
-          const detail = failures.map((f) => `${f.action}: ${f.detail}`).join('; ');
-          lastNote = durableNote(`action-failed: ${detail}`.slice(0, 200));
-          if (round + 1 < maxRounds) {
-            try {
-              const retry = await provider.ask(
-                `These actions were REFUSED by the bus and did NOT happen: ${detail}\n` +
-                `Valid seats are: ${knownSeats.join(', ')}. Fix the addressing or arguments and ` +
-                `reply with ONLY the corrected JSON plan.`,
-                { systemPrompt: effectiveSystemPrompt, sessionId, responseSchema: PLAN_SCHEMA }
-              );
-              if (!retry.isError && retry.text.trim()) {
-                const corrected = parsePlan(retry.text);
-                if (!corrected.malformed) {
-                  const stillFailing = await executeTrackedPlan(corrected.plan);
-                  if (stillFailing.length === 0) {
-                    lastNote = durableNote(corrected.plan.note ?? 'recovered after refused action');
-                    if (corrected.plan.done !== false) {
-                      if (wasAsked && !reportsTask(corrected.plan)) {
-                        log('done-without-report', { seat, round, phase: 'action-repair' });
-                        unreportedTask = true;
-                        lastNote = durableNote('corrected plan omitted task report - continuing');
-                        continue;
-                      }
-                      return { done: true, note: lastNote };
-                    }
-                  }
-                }
-              }
-            } catch (error) {
-              log('provider-threw', { seat, phase: 'action-repair', detail: String((error as Error)?.message).slice(0, 200) });
-            }
-          }
-          // Unfinished on purpose: the runner gives an open seat another turn.
-          return { done: false, note: lastNote };
+          // A syntactically valid plan is not a provider-repair problem. Retain its mail at the
+          // action-completion boundary and fail fast so successful actions are never replayed
+          // inside this wake and dependent actions never run after a refusal.
+          return actionFailureResult(failures);
         }
 
         // DONE REQUIRES EVIDENCE. A seat handed a task may not declare itself finished without

@@ -1027,7 +1027,7 @@ function httpFailure(error: unknown) {
   if (error instanceof HarnessHttpError) return error;
   if (error instanceof InputValidationError) return new HarnessHttpError(400, 'invalid_request', error.message);
   if (error instanceof BusHaltedError) return new HarnessHttpError(423, 'bus_halted', error.message);
-  if (error instanceof ClaimConflictError) return new HarnessHttpError(409, 'claim_conflict', error.message);
+  if (error instanceof ClaimConflictError) return new HarnessHttpError(409, 'claim_conflict', error.message, true);
   if (error instanceof SyntaxError) return new HarnessHttpError(400, 'invalid_json', error.message);
   return new HarnessHttpError(500, 'internal_error', asMessage(error), true);
 }

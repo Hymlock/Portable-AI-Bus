@@ -451,10 +451,11 @@ async function requestJson(
     deadline.dispose();
   }
   if (!response.ok || value.ok !== true) {
-    const error = value.error as { code?: string; message?: string } | string | undefined;
+    const error = value.error as { code?: string; message?: string; retriable?: boolean } | string | undefined;
     const message = typeof error === 'string' ? error : error?.message;
     const code = typeof error === 'object' ? error?.code : undefined;
-    throw new HarnessRequestError(response.status, code, message ?? 'unknown error');
+    const retriable = typeof error === 'object' && error?.retriable === true;
+    throw new HarnessRequestError(response.status, code, message ?? 'unknown error', retriable);
   }
   return value;
 }
@@ -488,8 +489,14 @@ async function readBoundedJson(response: Response, maximumBytes: number): Promis
 }
 
 class HarnessRequestError extends Error {
-  constructor(readonly status: number, readonly code: string | undefined, message: string) {
+  constructor(
+    readonly status: number,
+    readonly code: string | undefined,
+    message: string,
+    readonly retriable = false
+  ) {
     super(`Harness request failed (${status}${code ? ` ${code}` : ''}): ${message}`);
+    this.name = 'HarnessRequestError';
   }
 }
 

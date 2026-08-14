@@ -274,6 +274,54 @@ test('a poison message is parked after its own bounded retry budget', async () =
   assert.match(parked.data.reason, /invalid plan/);
 });
 
+test('DELTA G: blocked work retains mail without spending poison attempts and carries openWork', async () => {
+  const task = { seq: 115, from: 'claude', to: 'codex', kind: 'task', subject: 'blocked', body: 'work' };
+  const fixture = transactionalBus(task);
+  const events = [];
+  const contexts = [];
+  const brain = {
+    name: 'blocked',
+    async takeTurn(context) {
+      contexts.push(context);
+      return {
+        done: false,
+        retainMessages: true,
+        blocked: true,
+        note: 'claim blocked: grok holds src/brain'
+      };
+    }
+  };
+
+  await runBrain({
+    seat: 'codex', brain, bus: fixture.client, maxWakes: 2, maxMessageAttempts: 1,
+    blockedBackoffMs: 1, sleep: async () => {},
+    log: (event, data) => events.push({ event, data })
+  });
+
+  assert.deepEqual(fixture.unread.map((message) => message.seq), [115]);
+  assert.equal(fixture.parked.length, 0, 'a busy claim is not poison input');
+  assert.equal(events.some((entry) => entry.event === 'message-retry'), false);
+  assert.equal(events.some((entry) => entry.event === 'message-parked'), false);
+  assert.equal(events.some((entry) => entry.event === 'wake-blocked-backoff'), true);
+  assert.equal(contexts[1].openWork, 'claim blocked: grok holds src/brain');
+});
+
+test('DELTA G: genuine action failure retains mail and follows bounded poison handling', async () => {
+  const task = { seq: 116, from: 'claude', to: 'codex', kind: 'task', subject: 'failure', body: 'work' };
+  const fixture = transactionalBus(task);
+  const brain = {
+    name: 'failed-action',
+    async takeTurn() {
+      return { done: false, retainMessages: true, note: 'action-failed: internal_error' };
+    }
+  };
+
+  await runBrain({ seat: 'codex', brain, bus: fixture.client, maxWakes: 2, maxMessageAttempts: 2 });
+
+  assert.equal(fixture.unread.length, 0);
+  assert.deepEqual(fixture.parked.map((message) => message.seq), [116]);
+});
+
 test('a message that fails then succeeds is not parked and its attempt counter resets', async () => {
   const transient = { seq: 112, from: 'claude', to: 'codex', kind: 'task', subject: 'transient', body: 'provider blip' };
   const fixture = transactionalBus(transient);

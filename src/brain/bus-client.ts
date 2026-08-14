@@ -69,8 +69,21 @@ export function cliBusClient(options: CliBusOptions): BusClient {
       // A failing bus call must never take the seat down with it. The runner survives a throw,
       // but a seat that dies mid-wake still looks attended while doing nothing, which is the
       // worst of the available failures.
-      log('bus-call-failed', { seat, name, error: (error as Error)?.message });
-      return { error: (error as Error)?.message ?? String(error) };
+      const failure = error as Error & { status?: unknown; code?: unknown; retriable?: unknown };
+      log('bus-call-failed', {
+        seat,
+        name,
+        error: failure?.message,
+        status: failure?.status,
+        code: failure?.code,
+        retriable: failure?.retriable
+      });
+      return {
+        error: failure?.message ?? String(error),
+        ...(Number.isInteger(failure?.status) ? { status: failure.status } : {}),
+        ...(typeof failure?.code === 'string' ? { code: failure.code } : {}),
+        ...(typeof failure?.retriable === 'boolean' ? { retriable: failure.retriable } : {})
+      };
     }
   }
 

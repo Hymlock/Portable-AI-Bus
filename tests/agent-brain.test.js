@@ -5,7 +5,8 @@ const {
   createAgentBrain,
   buildWakePrompt,
   parsePlan,
-  receiptPlan
+  receiptPlan,
+  executePlan
 } = require('../dist/brain/brains/agent.js');
 
 const msg = (seq, from = 'claude') => ({
@@ -60,6 +61,112 @@ test('parsePlan accepts bare JSON and rejects fences-without-object as malformed
   const prose = parsePlan('Sure, I will help with that.');
   assert.equal(prose.malformed, true);
   assert.equal(prose.plan.note, 'no-json-object');
+});
+
+test('DELTA G: persistent claim conflict is blocked, bounded, and fail-fast', async () => {
+  let claims = 0;
+  let sends = 0;
+  const failures = await executePlan({
+    async claim() {
+      claims += 1;
+      return {
+        error: 'grok already holds src/brain since now: audit',
+        status: 409,
+        code: 'claim_conflict',
+        retriable: true
+      };
+    },
+    async send() { sends += 1; return {}; },
+    async status() { return {}; },
+    async release() { return {}; },
+    async runCapability() { return {}; }
+  }, {
+    actions: [
+      { type: 'claim', paths: ['src/brain'], why: 'change it' },
+      { type: 'send', to: 'claude', subject: 'must not run', body: 'dependent' }
+    ],
+    done: true
+  }, {}, { claimRetryDelaysMs: [1, 2], sleep: async () => {} });
+
+  assert.equal(claims, 3, 'one attempt plus bounded retries');
+  assert.equal(sends, 0, 'later actions must not execute after a refused claim');
+  assert.equal(failures.length, 1);
+  assert.equal(failures[0].code, 'claim_conflict');
+  assert.equal(failures[0].status, 409);
+  assert.equal(failures[0].retriable, true);
+});
+
+test('DELTA G: transient claim conflict retries then executes following action exactly once', async () => {
+  let claims = 0;
+  let sends = 0;
+  const failures = await executePlan({
+    async claim() {
+      claims += 1;
+      return claims === 1
+        ? { error: 'grok already holds src/brain', status: 409, code: 'claim_conflict', retriable: true }
+        : {};
+    },
+    async send() { sends += 1; return {}; },
+    async status() { return {}; },
+    async release() { return {}; },
+    async runCapability() { return {}; }
+  }, {
+    actions: [
+      { type: 'claim', paths: ['src/brain'], why: 'change it' },
+      { type: 'send', to: 'claude', kind: 'report', subject: 'done', body: 'fixed' }
+    ],
+    done: true
+  }, {}, { claimRetryDelaysMs: [1], sleep: async () => {} });
+
+  assert.deepEqual(failures, []);
+  assert.equal(claims, 2);
+  assert.equal(sends, 1);
+});
+
+test('DELTA G: agent classifies a persistent 409 as blocked without provider repair', async () => {
+  let providerCalls = 0;
+  const events = [];
+  const plan = JSON.stringify({
+    actions: [
+      { type: 'claim', paths: ['src/brain'], why: 'change it' },
+      { type: 'send', to: 'claude', kind: 'report', subject: 'must not run', body: 'dependent' }
+    ],
+    done: true
+  });
+  const provider = {
+    kind: 'test',
+    async ask() { providerCalls += 1; return { text: plan, isError: false }; },
+    async probe() { return { ok: true, detail: 'test' }; }
+  };
+  const api = {
+    async status() { return { agents: ['claude', 'codex', 'grok'] }; },
+    async claim() {
+      return { error: 'grok already holds src/brain since now: audit', status: 409, code: 'claim_conflict', retriable: true };
+    },
+    async send() { throw new Error('dependent action must not execute'); },
+    async release() { return {}; },
+    async runCapability() { return {}; },
+    async listCapabilities() { return []; }
+  };
+  const brain = createAgentBrain({
+    seat: 'codex', provider,
+    executePlanOptions: { claimRetryDelaysMs: [1], sleep: async () => {} },
+    log: (event, data) => events.push({ event, data })
+  });
+
+  const result = await brain.takeTurn({
+    seat: 'codex', reason: 'mail',
+    messages: [{ ...msg(9), to: 'codex', kind: 'task' }],
+    tools: api, budget: 10, log: () => {}
+  });
+
+  assert.equal(providerCalls, 1, 'a valid plan is not sent back to the provider for repair');
+  assert.equal(result.done, false);
+  assert.equal(result.retainMessages, true);
+  assert.equal(result.blocked, true);
+  assert.match(result.note, /grok holds src\/brain/);
+  assert.equal(events.some((entry) => entry.event === 'plan-action-blocked'), true);
+  assert.equal(events.some((entry) => entry.event === 'plan-actions-failed'), false);
 });
 
 test('parsePlan unwraps provider answer envelopes at the final safety boundary', () => {

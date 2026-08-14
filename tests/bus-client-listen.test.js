@@ -90,6 +90,25 @@ test('brain send preserves explicit keepBaton false', async () => {
   assert.equal(calls[0].input.keepBaton, false);
 });
 
+test('DELTA G: cli bus tool preserves structured harness claim-conflict classification', async () => {
+  const client = cliBusClient({
+    root: 'C:/nowhere',
+    callSeatTool: async () => {
+      const error = new Error('Harness request failed (409 claim_conflict): grok already holds src/brain');
+      error.status = 409;
+      error.code = 'claim_conflict';
+      error.retriable = true;
+      throw error;
+    }
+  });
+
+  const result = await client.tools('codex').claim(['src/brain'], 'change it');
+  assert.equal(result.status, 409);
+  assert.equal(result.code, 'claim_conflict');
+  assert.equal(result.retriable, true);
+  assert.match(result.error, /grok.*src\/brain/);
+});
+
 test('real harness peek is non-destructive and acknowledgement commits only its complete page set', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'portable-ai-bus-client-harness-'));
   const credentialsDir = path.join(root, '.credentials');
@@ -115,6 +134,13 @@ test('real harness peek is non-destructive and acknowledgement commits only its 
     root,
     callSeatTool: (options, name, input) => callSeatTool({ ...options, credentialsDir }, name, input)
   });
+
+  await server.mailbox.claim({ agent: 'sender', paths: ['src/brain'], why: 'active edit' });
+  const conflict = await client.tools('worker').claim(['src/brain'], 'competing edit');
+  assert.equal(conflict.status, 409, 'HTTP status survives harness -> worker client -> brain client');
+  assert.equal(conflict.code, 'claim_conflict');
+  assert.equal(conflict.retriable, true);
+  assert.match(conflict.error, /sender.*src\/brain/);
 
   const presented = await client.peek('worker');
   assert.equal(presented.length, 6,
