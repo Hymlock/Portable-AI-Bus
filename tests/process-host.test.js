@@ -29,6 +29,25 @@ test('Windows process host preserves and parses single-line JSON larger than 64 
   assert.deepEqual(JSON.parse(result.stdout), JSON.parse(expected));
 });
 
+test('Windows process host observes a real no-output child exit promptly', {
+  skip: process.platform !== 'win32'
+}, () => {
+  const { result, elapsedMs } = runWindowsProcessHostTimedProbe('process.exit(23)', 10_000);
+
+  assert.ok(elapsedMs < 2_000, 'child exit must not wait for the ten-second backstop');
+  assert.equal(result.code, 23);
+  assert.match(result.stderr, /exited with code 23/);
+});
+
+test('Windows process host does not reap a real running child before it exits', {
+  skip: process.platform !== 'win32'
+}, () => {
+  const { result, elapsedMs } = runWindowsProcessHostTimedProbe('setTimeout(() => {}, 250)', 5_000);
+
+  assert.ok(elapsedMs >= 150, 'live child must be allowed to keep running');
+  assert.equal(result.code, 0);
+});
+
 test('Windows process host uses headless ConPTY and strips terminal controls', async () => {
   let received;
   const fakePty = {
@@ -39,6 +58,7 @@ test('Windows process host uses headless ConPTY and strips terminal controls', a
       let exitListener;
       queueMicrotask(() => {
         fs.writeFileSync(args[3], '{"result":"PONG"}\r\n');
+        fs.writeFileSync(args[4], JSON.stringify({ code: 0 }));
         dataListener('\u001b[?9001h\u001b[?25h');
         exitListener({ exitCode: 0 });
       });
@@ -123,7 +143,85 @@ test('ConPTY timeout kills the process and returns code 124', async () => {
   });
 
   assert.equal(killed, true);
-  assert.deepEqual(result, { code: 124, stdout: 'partial', stderr: 'Process timed out.' });
+  assert.deepEqual(result, {
+    code: 124,
+    stdout: 'partial',
+    stderr: 'Process timed out while the child was still running.'
+  });
+});
+
+test('ConPTY observes an exited provider promptly when node-pty loses its exit event', async () => {
+  const started = Date.now();
+  const result = await runProcess(process.execPath, [], { timeoutMs: 2_000 }, {
+    platform: 'win32',
+    loadPty: () => ({
+      spawn(_command, args) {
+        setTimeout(() => {
+          fs.closeSync(fs.openSync(args[3], 'w'));
+          fs.writeFileSync(args[4], JSON.stringify({ code: 23 }));
+        }, 10);
+        return {
+          onData() {},
+          onExit() {}, // Simulate node-pty losing the notification from its console agent.
+          kill() { throw new Error('an exited provider must not wait for or hit the backstop'); }
+        };
+      }
+    })
+  });
+
+  assert.ok(Date.now() - started < 500, 'dead provider should resolve before the backstop');
+  assert.deepEqual(result, {
+    code: 23,
+    stdout: '',
+    stderr: 'Provider process exited with code 23.'
+  });
+});
+
+test('ConPTY does not reap a genuinely running provider early', async () => {
+  let killed = false;
+  const started = Date.now();
+  const result = await runProcess(process.execPath, [], { timeoutMs: 120 }, {
+    platform: 'win32',
+    loadPty: () => ({
+      spawn() {
+        return {
+          pid: 4242,
+          onData() {},
+          onExit() {},
+          kill() { killed = true; }
+        };
+      }
+    }),
+    isProcessAlive: () => true
+  });
+
+  assert.ok(Date.now() - started >= 100, 'running provider must remain alive until the backstop');
+  assert.equal(killed, true);
+  assert.equal(result.code, 124);
+  assert.equal(result.stderr, 'Process timed out while the child was still running.');
+});
+
+test('ConPTY reports a dead host separately from a live-child timeout', async () => {
+  const result = await runProcess(process.execPath, [], { timeoutMs: 2_000 }, {
+    platform: 'win32',
+    loadPty: () => ({
+      spawn() {
+        return {
+          pid: 4242,
+          onData() {},
+          onExit() {},
+          kill() { throw new Error('dead host must not wait for the backstop'); }
+        };
+      }
+    }),
+    isProcessAlive: () => false
+  });
+
+  assert.deepEqual(result, {
+    code: -1,
+    stdout: '',
+    stderr: 'ConPTY host died before reporting provider exit.'
+  });
 });
 
 test('stripAnsi handles CSI and OSC commands emitted by ConPTY clients', () => {
@@ -131,11 +229,16 @@ test('stripAnsi handles CSI and OSC commands emitted by ConPTY clients', () => {
 });
 
 function runWindowsProcessHostProbe(providerScript) {
+  return runWindowsProcessHostTimedProbe(providerScript, 10_000).result;
+}
+
+function runWindowsProcessHostTimedProbe(providerScript, timeoutMs) {
   const probe = `
     const { runProcess } = require('./dist/brain/process-host');
-    runProcess(process.execPath, ['-e', ${JSON.stringify(providerScript)}], { timeoutMs: 10000 })
+    const started = Date.now();
+    runProcess(process.execPath, ['-e', ${JSON.stringify(providerScript)}], { timeoutMs: ${timeoutMs} })
       .then((result) => {
-        process.stdout.write(JSON.stringify(result));
+        process.stdout.write(JSON.stringify({ result, elapsedMs: Date.now() - started }));
         process.exit(0);
       });
   `;

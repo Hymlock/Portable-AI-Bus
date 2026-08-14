@@ -17,6 +17,7 @@ export type RunProcessOptions = {
 };
 
 type PtyProcess = {
+  pid?: number;
   onData(listener: (data: string) => void): unknown;
   onExit(listener: (event: { exitCode: number; signal?: number }) => void): unknown;
   kill(signal?: string): void;
@@ -57,6 +58,7 @@ export type ProcessHostDependencies = {
   platform?: NodeJS.Platform;
   loadPty?: () => PtyModule;
   spawn?: SpawnProcess;
+  isProcessAlive?: (pid: number) => boolean;
 };
 
 /** Check command reachability without spawning a short-lived console process. */
@@ -112,7 +114,13 @@ export async function runProcess(
 ): Promise<ProcessResult> {
   const platform = dependencies.platform ?? process.platform;
   if (platform === 'win32') {
-    return runConPty(command, args, options, dependencies.loadPty ?? loadNodePty);
+    return runConPty(
+      command,
+      args,
+      options,
+      dependencies.loadPty ?? loadNodePty,
+      dependencies.isProcessAlive ?? processIsAlive
+    );
   }
   return runSpawn(command, args, options, dependencies.spawn ?? (nodeSpawn as unknown as SpawnProcess));
 }
@@ -127,7 +135,8 @@ async function runConPty(
   command: string,
   args: string[],
   options: RunProcessOptions,
-  loadPty: () => PtyModule
+  loadPty: () => PtyModule,
+  isProcessAlive: (pid: number) => boolean
 ): Promise<ProcessResult> {
   let pty: PtyModule;
   try {
@@ -155,6 +164,7 @@ async function runConPty(
 
   const requestPath = path.join(captureDir, 'request.json');
   const outputPath = path.join(captureDir, 'output.bin');
+  const completionPath = path.join(captureDir, 'completion.json');
 
   return new Promise((resolve) => {
     let child: PtyProcess;
@@ -162,14 +172,18 @@ async function runConPty(
       // Keep the provider in the headless pseudoconsole process tree, but redirect its data stream
       // to a file. ConPTY mutates long output after its visible viewport scrolls, so it must not be
       // used as a byte transport. The short wrapper's PTY output is reserved for launch diagnostics.
-      child = pty.spawn(process.execPath, ['-e', conPtyCaptureWrapper, requestPath, outputPath], {
-        name: 'xterm-256color',
-        cols: 120,
-        rows: 40,
-        cwd: options.cwd ?? process.cwd(),
-        env: options.env ?? process.env,
-        useConpty: true
-      });
+      child = pty.spawn(
+        process.execPath,
+        ['-e', conPtyCaptureWrapper, requestPath, outputPath, completionPath],
+        {
+          name: 'xterm-256color',
+          cols: 120,
+          rows: 40,
+          cwd: options.cwd ?? process.cwd(),
+          env: options.env ?? process.env,
+          useConpty: true
+        }
+      );
     } catch (error) {
       removeCaptureDir(captureDir);
       resolve({ code: -1, stdout: '', stderr: `ConPTY spawn failed: ${errorMessage(error)}` });
@@ -179,32 +193,70 @@ async function runConPty(
     let diagnostic = '';
     let settled = false;
     let timer: NodeJS.Timeout | undefined;
+    let monitor: NodeJS.Timeout | undefined;
     const finish = (result: ProcessResult) => {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
+      if (monitor) clearInterval(monitor);
       removeCaptureDir(captureDir);
       resolve(result);
     };
+    const readOutput = () => {
+      try { return fs.readFileSync(outputPath, 'utf8'); } catch { return ''; }
+    };
+    const finishFromCompletion = (): boolean => {
+      let exitCode: number;
+      try {
+        const completion = JSON.parse(fs.readFileSync(completionPath, 'utf8')) as { code?: unknown };
+        if (!Number.isInteger(completion.code)) return false;
+        exitCode = completion.code as number;
+      } catch {
+        return false;
+      }
+      const output = stripAnsi(readOutput());
+      const launchDiagnostic = stripAnsi(diagnostic);
+      finish({
+        code: exitCode,
+        stdout: output,
+        stderr: launchDiagnostic || (!output && exitCode !== 0
+          ? `Provider process exited with code ${exitCode}.`
+          : '')
+      });
+      return true;
+    };
     child.onData((data) => { diagnostic += data; });
     child.onExit(({ exitCode }) => {
-      let output = '';
-      try {
-        output = fs.readFileSync(outputPath, 'utf8');
-      } catch (error) {
-        finish({
-          code: exitCode || -1,
-          stdout: '',
-          stderr: stripAnsi(diagnostic) || `ConPTY capture read failed: ${errorMessage(error)}`
-        });
-        return;
-      }
-      finish({ code: exitCode, stdout: stripAnsi(output), stderr: stripAnsi(diagnostic) });
+      if (finishFromCompletion()) return;
+      const output = stripAnsi(readOutput());
+      finish({
+        code: exitCode,
+        stdout: output,
+        stderr: stripAnsi(diagnostic) || (!output && exitCode !== 0
+          ? `ConPTY host exited with code ${exitCode} before reporting provider exit.`
+          : '')
+      });
     });
+    // node-pty's ConPTY exit event depends on its console-list helper. If that helper dies after
+    // the provider has already exited, the event can be lost forever. The wrapper therefore
+    // records provider completion out of band, and this monitor observes both that record and a
+    // wrapper which died before it could write one.
+    monitor = setInterval(() => {
+      if (finishFromCompletion()) return;
+      if (Number.isInteger(child.pid) && !isProcessAlive(child.pid as number)) {
+        finish({
+          code: -1,
+          stdout: stripAnsi(readOutput()),
+          stderr: stripAnsi(diagnostic) || 'ConPTY host died before reporting provider exit.'
+        });
+      }
+    }, 50);
     timer = setTimeout(() => {
-      let output = '';
-      try { output = fs.readFileSync(outputPath, 'utf8'); } catch { /* no output yet */ }
-      finish({ code: 124, stdout: stripAnsi(output), stderr: 'Process timed out.' });
+      finish({
+        code: 124,
+        stdout: stripAnsi(readOutput()),
+        stderr: 'Process timed out while the child was still running.'
+      });
       try { child.kill(); } catch { /* already exited */ }
     }, options.timeoutMs);
   });
@@ -215,6 +267,7 @@ const childProcess = require('node:child_process');
 const fs = require('node:fs');
 const request = JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
 const output = fs.openSync(process.argv[2], 'w');
+const completionPath = process.argv[3];
 let child;
 let finished = false;
 function finish(code, error) {
@@ -222,6 +275,13 @@ function finish(code, error) {
   finished = true;
   try { fs.closeSync(output); } catch {}
   if (error) process.stderr.write(String(error && error.message || error));
+  try {
+    const temporary = completionPath + '.tmp';
+    fs.writeFileSync(temporary, JSON.stringify({ code: Number.isInteger(code) ? code : 255 }));
+    fs.renameSync(temporary, completionPath);
+  } catch (completionError) {
+    process.stderr.write('Completion record failed: ' + String(completionError && completionError.message || completionError));
+  }
   process.exit(Number.isInteger(code) ? code : 255);
 }
 try {
@@ -242,6 +302,15 @@ if (child) {
 
 function removeCaptureDir(directory: string): void {
   try { fs.rmSync(directory, { recursive: true, force: true }); } catch { /* best-effort cleanup */ }
+}
+
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function resolveWindowsExecutable(
