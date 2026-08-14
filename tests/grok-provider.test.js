@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { resolveGrokCommand, resolveProvider, extractGrokAnswer } = require('../dist/brain/providers.js');
+const { parsePlan } = require('../dist/brain/brains/agent.js');
 const { chainProviders, classifyFailure } = require('../dist/brain/chain.js');
 
 const CAPTURED_MALFORMED = path.join(__dirname, 'fixtures', 'grok-malformed.txt');
@@ -122,14 +123,19 @@ test('a deeply wrapped structured reply reaches the plan instead of spending rep
   assert.deepEqual(JSON.parse(extractGrokAnswer(wrapped).text), JSON.parse(plan));
 });
 
-test('the three captured malformed logs retain the double-encoded Grok envelope evidence', () => {
-  const captures = fs.readFileSync(CAPTURED_MALFORMED, 'utf8').trim().split(/\r?\n/).map(JSON.parse);
+test('captured complete Grok documents parse, while genuinely truncated input does not', () => {
+  const captures = JSON.parse(fs.readFileSync(CAPTURED_MALFORMED, 'utf8'));
   assert.equal(captures.length, 3);
   for (const capture of captures) {
-    assert.equal(capture.event, 'malformed-plan');
-    assert.match(capture.snippet, /^\{\r\n  "text": "\{\s*\\"actions\\"/,
-      'fixture must preserve the escaped JSON string and CRLF envelope that failed live');
+    const extracted = extractGrokAnswer(capture.document);
+    const parsed = parsePlan(extracted.text);
+    assert.equal(parsed.malformed, false, `${capture.name} must reach a usable plan`);
   }
+  assert.equal(parsePlan(extractGrokAnswer(captures[2].document).text).plan.done, false,
+    'the completed third capture is a valid continuation plan, not malformed output');
+
+  const genuinelyTruncated = captures[2].document.slice(0, Math.floor(captures[2].document.length / 2));
+  assert.equal(parsePlan(extractGrokAnswer(genuinelyTruncated).text).malformed, true);
 });
 
 test('ConPTY visual wraps inside a long Grok JSON string are reversed', () => {
@@ -154,7 +160,9 @@ test('ConPTY visual wraps inside a long Grok JSON string are reversed', () => {
     '}'
   ].join('\r\n');
 
-  assert.deepEqual(JSON.parse(extractGrokAnswer(stream).text), JSON.parse(plan));
+  const parsed = parsePlan(extractGrokAnswer(stream).text);
+  assert.equal(parsed.malformed, false);
+  assert.deepEqual(parsed.plan.actions, JSON.parse(plan).actions);
 });
 
 test('a direct structured plan is retained after ConPTY wraps its body string', () => {
@@ -168,7 +176,9 @@ test('a direct structured plan is retained after ConPTY wraps its body string', 
   const bodyStart = plan.indexOf('Y'.repeat(400));
   const wrapped = `${plan.slice(0, bodyStart + 90)}\r\n${plan.slice(bodyStart + 90)}`;
 
-  assert.deepEqual(JSON.parse(extractGrokAnswer(wrapped).text), JSON.parse(plan));
+  const parsed = parsePlan(extractGrokAnswer(wrapped).text);
+  assert.equal(parsed.malformed, false);
+  assert.deepEqual(parsed.plan.actions, JSON.parse(plan).actions);
 });
 
 test('nested progress and final plans select the final substantive answer', () => {

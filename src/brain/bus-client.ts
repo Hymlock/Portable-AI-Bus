@@ -105,8 +105,29 @@ export function cliBusClient(options: CliBusOptions): BusClient {
     },
 
     async peek(seat) {
-      const result = await tool(seat, 'mailbox_inbox', { agent: seat, all: true });
-      return Array.isArray(result) ? (result as BrainMessage[]) : [];
+      const messages: BrainMessage[] = [];
+      let afterSeq = 0;
+      let expected: number | undefined;
+
+      // The harness deliberately pages tool results. The inbox response predates explicit page
+      // metadata, so the status unread count is the truncation hint. Follow afterSeq cursors
+      // until the complete snapshot is presented; mail arriving after this method returns is
+      // outside the batch and acknowledge() leaves it unread.
+      const status = await tool(seat, 'mailbox_status', {});
+      const unread = (status as { unread?: Record<string, unknown> })?.unread?.[seat];
+      if (Number.isSafeInteger(unread) && Number(unread) >= 0) expected = Number(unread);
+
+      while (expected === undefined || messages.length < expected) {
+        const result = await tool(seat, 'mailbox_inbox', { agent: seat, all: true, afterSeq });
+        if (!Array.isArray(result) || result.length === 0) break;
+        const page = result as BrainMessage[];
+        messages.push(...page);
+        const cursor = page.at(-1)?.seq;
+        if (!Number.isSafeInteger(cursor) || Number(cursor) <= afterSeq) break;
+        afterSeq = Number(cursor);
+        if (expected === undefined) break;
+      }
+      return messages;
     },
 
     async acknowledge(seat, count) {

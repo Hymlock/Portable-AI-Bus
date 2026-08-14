@@ -1,6 +1,11 @@
 const assert = require('node:assert/strict');
+const fs = require('node:fs/promises');
+const os = require('node:os');
+const path = require('node:path');
 const test = require('node:test');
 const { cliBusClient } = require('../dist/brain/bus-client.js');
+const { HarnessServer } = require('../dist/harness.js');
+const { callSeatTool } = require('../dist/worker-client.js');
 
 test('a long deadline is chunked into polls the harness will accept', async () => {
   // The harness caps one poll at 30s. Passing a 300s brain deadline straight through made every
@@ -83,4 +88,44 @@ test('brain send preserves explicit keepBaton false', async () => {
     to: 'codex', kind: 'ack', subject: 'handoff', body: 'your turn', keepBaton: false
   });
   assert.equal(calls[0].input.keepBaton, false);
+});
+
+test('real harness peek is non-destructive and acknowledgement commits only its complete page set', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'portable-ai-bus-client-harness-'));
+  const credentialsDir = path.join(root, '.credentials');
+  await fs.mkdir(path.join(root, '.ai-bus'), { recursive: true });
+  await fs.writeFile(
+    path.join(root, '.ai-bus', 'capabilities.json'),
+    JSON.stringify({ version: 1, capabilities: [] })
+  );
+  const server = new HarnessServer(root, { credentialsDir });
+  await server.mailbox.ensureInitialized(['sender', 'worker'], 50);
+  await server.start(0);
+  t.after(async () => {
+    await server.stop();
+    await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  });
+
+  for (let index = 1; index <= 6; index += 1) {
+    await server.mailbox.send({
+      from: 'sender', to: 'worker', subject: `message ${index}`, body: `body ${index}`
+    });
+  }
+  const client = cliBusClient({
+    root,
+    callSeatTool: (options, name, input) => callSeatTool({ ...options, credentialsDir }, name, input)
+  });
+
+  const presented = await client.peek('worker');
+  assert.equal(presented.length, 6,
+    'status unread count must drive through the harness four-message truncation boundary');
+  assert.equal((await server.mailbox.inbox('worker')).length, 6, 'peek must not acknowledge');
+
+  const late = await server.mailbox.send({
+    from: 'sender', to: 'worker', subject: 'late arrival', body: 'after the model batch was presented'
+  });
+  const acknowledged = await client.acknowledge('worker', presented.length);
+  assert.deepEqual(acknowledged.map((message) => message.seq), presented.map((message) => message.seq));
+  assert.deepEqual((await server.mailbox.inbox('worker')).map((message) => message.seq), [late.seq],
+    'mail arriving mid-turn must remain unread');
 });

@@ -170,6 +170,29 @@ function planFromJsonStream(text: string, depth = 0): Partial<AgentPlan> | undef
   return best;
 }
 
+/**
+ * Reverse terminal presentation wraps without changing model-authored JSON escapes.
+ *
+ * ConPTY can insert literal CR/LF bytes inside a quoted JSON string. Those bytes are invalid
+ * JSON; escaped `\n` is not. This belongs at the provider-neutral plan boundary because every
+ * terminal-backed provider can exhibit it and providers are not required to pre-extract an
+ * answer through any particular adapter.
+ */
+function undoTerminalStringWraps(input: string): string {
+  let output = '';
+  let inString = false;
+  let escaped = false;
+  for (let index = 0; index < input.length; index += 1) {
+    const character = input[index];
+    if (inString && (character === '\r' || character === '\n')) continue;
+    output += character;
+    if (escaped) { escaped = false; continue; }
+    if (character === '\\' && inString) { escaped = true; continue; }
+    if (character === '"') inString = !inString;
+  }
+  return output;
+}
+
 export function parsePlan(text: string): { plan: AgentPlan; malformed: boolean } {
   const trimmed = text.trim();
   if (!trimmed) {
@@ -182,7 +205,7 @@ export function parsePlan(text: string): { plan: AgentPlan; malformed: boolean }
   // unnecessary repair call. Peel only known answer fields, with a hard bound, until the
   // object itself has an actions array. This also covers nested CLI/SDK transports without
   // weakening action validation below.
-  const raw = planFromJsonStream(trimmed);
+  const raw = planFromJsonStream(undoTerminalStringWraps(trimmed));
   if (!raw) {
     return { plan: { actions: [], done: true, note: 'no-json-object' }, malformed: true };
   }
@@ -540,7 +563,7 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
           log('provider-threw', { seat, detail: detail.slice(0, 200) });
           const plan = receiptPlan(seat, messages);
           await executeTrackedPlan(plan);
-          return { done: true, note: `provider-threw:${detail.slice(0, 80)}` };
+          return { done: true, note: `provider-threw:${detail.slice(0, 80)}`, retainMessages: true };
         }
 
         const chain = reply as ChainReply;
@@ -558,7 +581,8 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
             // reports exhaustion without it, and reading .map on undefined killed the
             // wake - which the runner survived, but the seat then did no work while
             // looking attended. Degrade to a plain note instead.
-            note: exhaustionNote(chain)
+            note: exhaustionNote(chain),
+            retainMessages: true
           };
         }
 
@@ -566,7 +590,7 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
           log('provider-error-reply', { seat, text: reply.text.slice(0, 120) });
           const plan = receiptPlan(seat, messages);
           await executeTrackedPlan(plan);
-          return { done: true, note: 'provider-error-reply' };
+          return { done: true, note: 'provider-error-reply', retainMessages: true };
         }
 
         if (reply.sessionId) sessionId = reply.sessionId;
@@ -586,7 +610,7 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
               log('provider-threw', { seat, phase: 'repair', detail: detail.slice(0, 200) });
               const fallback = receiptPlan(seat, messages);
               await executeTrackedPlan(fallback);
-              return { done: true, note: `provider-threw:${detail.slice(0, 80)}` };
+              return { done: true, note: `provider-threw:${detail.slice(0, 80)}`, retainMessages: true };
             }
             const repairChain = repair as ChainReply;
             if (typeof repairChain.servedBy === 'string') servedBy = repairChain.servedBy;
@@ -595,7 +619,12 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
               log('provider-exhausted', { seat, phase: 'repair', attempts: repairChain.attempts });
               const fallback = receiptPlan(seat, messages);
               await executeTrackedPlan(fallback);
-              return { done: true, exhausted: true, note: exhaustionNote(repairChain) };
+              return {
+                done: true,
+                exhausted: true,
+                note: exhaustionNote(repairChain),
+                retainMessages: true
+              };
             }
             if (!repair.isError && repair.text.trim()) {
               const second = parsePlan(repair.text);

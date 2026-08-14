@@ -226,3 +226,43 @@ test('a malformed model wake leaves its input unread, while a usable plan consum
   assert.deepEqual(racingBus.unread.map((item) => item.seq), [92],
     'committing the presented batch must not consume mail that arrived during the model call');
 });
+
+test('every provider exit without a usable plan retains the presented batch', async () => {
+  const task = { seq: 101, from: 'claude', to: 'codex', kind: 'task', subject: 'retain me', body: 'work' };
+  const providers = [
+    { name: 'provider throw', provider: { kind: 'test', async ask() { throw new Error('transport died'); } } },
+    { name: 'error reply', provider: { kind: 'test', async ask() { return { text: 'failed', isError: true }; } } },
+    { name: 'empty reply', provider: { kind: 'test', async ask() { return { text: '', isError: false }; } } }
+  ];
+
+  for (const sample of providers) {
+    const fixture = transactionalBus(task);
+    const brain = createAgentBrain({ seat: 'codex', provider: sample.provider, maxRounds: 1 });
+    await runBrain({ seat: 'codex', brain, bus: fixture.client, maxWakes: 1 });
+    assert.deepEqual(fixture.unread.map((message) => message.seq), [101], sample.name);
+    assert.equal(fixture.acknowledgements, 0, sample.name);
+  }
+});
+
+test('a thrown takeTurn retains mail; a returned usable turn commits it', async () => {
+  const task = { seq: 102, from: 'claude', to: 'codex', kind: 'task', subject: 'transaction', body: 'work' };
+  const thrown = transactionalBus(task);
+  await runBrain({
+    seat: 'codex',
+    brain: { name: 'thrower', async takeTurn() { throw new Error('brain crashed'); } },
+    bus: thrown.client,
+    maxWakes: 1
+  });
+  assert.deepEqual(thrown.unread.map((message) => message.seq), [102]);
+  assert.equal(thrown.acknowledgements, 0);
+
+  const usable = transactionalBus(task);
+  await runBrain({
+    seat: 'codex',
+    brain: { name: 'usable', async takeTurn() { return { done: true }; } },
+    bus: usable.client,
+    maxWakes: 1
+  });
+  assert.equal(usable.unread.length, 0);
+  assert.equal(usable.acknowledgements, 1);
+});

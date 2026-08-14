@@ -209,6 +209,7 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
           // the next wake gets a fresh chance - an agent that dies on one bad message is the
           // stall we are removing, not a stall we should reintroduce here.
           summary.errors += 1;
+          result = { done: true, retainMessages: true };
           log('wake-error', { seat, error: (error as Error)?.message ?? String(error) });
         }
       }

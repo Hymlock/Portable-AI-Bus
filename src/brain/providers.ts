@@ -564,26 +564,6 @@ export function extractGrokAnswer(stdout: string): { text: string; error?: strin
   const trimmed = stdout.trim();
   if (!trimmed) return { text: '' };
 
-  // ConPTY is a terminal, not a byte pipe. Long `text` values are visually wrapped at the
-  // terminal width, which inserts raw CR/LF bytes *inside* the CLI's JSON string. JSON permits
-  // escaped `\n` there, never a literal newline, so removing only raw line breaks while inside
-  // a quoted string reverses terminal presentation without changing valid JSON semantics.
-  // Preserve escape state across the removed wrap: ConPTY can split immediately after `\`.
-  const undoTerminalStringWraps = (input: string): string => {
-    let output = '';
-    let inString = false;
-    let escaped = false;
-    for (let index = 0; index < input.length; index += 1) {
-      const ch = input[index];
-      if (inString && (ch === '\r' || ch === '\n')) continue;
-      output += ch;
-      if (escaped) { escaped = false; continue; }
-      if (ch === '\\' && inString) { escaped = true; continue; }
-      if (ch === '"') inString = !inString;
-    }
-    return output;
-  };
-
   const fromObject = (value: Record<string, unknown>): { text: string; error?: string } => {
     if (value.type === 'error' && typeof value.message === 'string') {
       return { text: '', error: value.message };
@@ -627,8 +607,7 @@ export function extractGrokAnswer(stdout: string): { text: string; error?: strin
         depth -= 1;
         if (depth === 0) {
           try {
-            const candidate = undoTerminalStringWraps(trimmed.slice(i, j + 1));
-            const parsed = fromObject(JSON.parse(candidate) as Record<string, unknown>);
+            const parsed = fromObject(JSON.parse(trimmed.slice(i, j + 1)) as Record<string, unknown>);
             if (parsed.error) return parsed;          // an error is decisive; stop at once
             if (parsed.text) best = parsed;            // otherwise keep the LAST answer seen
           } catch { /* not an object we understand; keep scanning */ }
@@ -651,7 +630,7 @@ export function extractGrokAnswer(stdout: string): { text: string; error?: strin
       const inner = text.trim();
       if (!inner.startsWith('{')) break;
       try {
-        const value = JSON.parse(undoTerminalStringWraps(inner)) as Record<string, unknown>;
+        const value = JSON.parse(inner) as Record<string, unknown>;
         if (Array.isArray(value.actions) && typeof value.done === 'boolean') break;
         const parsed = fromObject(value);
         if (parsed.error) return parsed;

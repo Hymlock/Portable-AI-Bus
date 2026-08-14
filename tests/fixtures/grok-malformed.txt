@@ -1,3 +1,14 @@
-{"event":"malformed-plan","seat":"grok","snippet":"{\r\n  \"text\": \"{\\\"actions\\\":[{\\\"type\\\":\\\"send\\\",\\\"to\\\":\\\"codex\\\",\\\"kind\\\":\\\"ack\\\",\\\"subject\\\":\\\"Re: Re-audit fixed world \""}
-{"event":"malformed-plan","seat":"grok","snippet":"{\r\n  \"text\": \"{ \\\"actions\\\": [ { \\\"type\\\": \\\"send\\\", \\\"to\\\": \\\"claude\\\", \\\"kind\\\": \\\"ack\\\", \\\"subject\\\": \\\"Adversarial a\""}
-{"event":"malformed-plan","seat":"grok","snippet":"{\r\n  \"text\": \"{ \\\"actions\\\": [], \\\"done\\\": false, \\\"note\\\": \\\"Checking the bus and reading the two incoming messages bef\""}
+[
+  {
+    "name": "double-encoded acknowledgement",
+    "document": "{\r\n  \"text\": \"{\\\"actions\\\":[{\\\"type\\\":\\\"send\\\",\\\"to\\\":\\\"codex\\\",\\\"kind\\\":\\\"ack\\\",\\\"subject\\\":\\\"Re-audit received\\\",\\\"body\\\":\\\"Working now.\\\"}],\\\"done\\\":true}\",\r\n  \"stopReason\": \"end_turn\"\r\n}"
+  },
+  {
+    "name": "spaced report envelope",
+    "document": "{\r\n  \"text\": \"{ \\\"actions\\\": [ { \\\"type\\\": \\\"send\\\", \\\"to\\\": \\\"claude\\\", \\\"kind\\\": \\\"report\\\", \\\"subject\\\": \\\"Adversarial audit\\\", \\\"body\\\": \\\"Verified.\\\" } ], \\\"done\\\": true }\",\r\n  \"stopReason\": \"end_turn\"\r\n}"
+  },
+  {
+    "name": "completed continuation capture",
+    "document": "{\r\n  \"text\": \"{ \\\"actions\\\": [], \\\"done\\\": false, \\\"note\\\": \\\"Checking the bus and reading the two incoming messages before reporting.\\\" }\",\r\n  \"stopReason\": \"end_turn\"\r\n}"
+  }
+]
