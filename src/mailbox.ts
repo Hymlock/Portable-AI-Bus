@@ -58,6 +58,8 @@ export type RecoveryCheckpoint = {
   updatedAt: string;
   closedAt?: string;
   closeReason?: string;
+  /** Previous assignment, when this checkpoint was inherited across a seat change. */
+  inheritedFrom?: string;
 };
 
 export type MailboxState = {
@@ -496,7 +498,12 @@ export class MailboxStore {
       const messages = await this.allMessagesUnsafe();
       const source = messages.find((message) => message.seq === workId);
       if (!source) throw new Error(`message #${workId} does not exist`);
-      if (source.to !== agent) throw new Error(`message #${workId} is addressed to ${source.to}, not ${agent}`);
+      const holdsInherited = (source.recoveryCheckpoints ?? []).some(
+        (item) => item.seat === agent && item.status === 'open'
+      );
+      if (source.to !== agent && !holdsInherited) {
+        throw new Error(`message #${workId} is addressed to ${source.to}, not ${agent}`);
+      }
       const at = nowIso();
       for (const message of messages) {
         if (message.seq === workId) continue;
@@ -614,6 +621,57 @@ export class MailboxStore {
       await this.atomicJson(file, message);
       return checkpoint;
     });
+  }
+
+  /**
+   * Move one seat's open recovery onto another seat, keeping the same workId.
+   *
+   * Checkpoints are assignments, not identities. A credit-loss baton move that left the
+   * successor unable to inherit #1321 is the failure this exists to close. History stays on
+   * the source message: the previous checkpoint is closed, not deleted.
+   */
+  private async inheritOpenRecoveryUnsafe(
+    from: string,
+    to: string,
+    reason: string
+  ): Promise<number | null> {
+    const messages = await this.allMessagesUnsafe();
+    const source = messages.find((message) =>
+      (message.recoveryCheckpoints ?? []).some((item) => item.seat === from && item.status === 'open')
+    );
+    const checkpoint = source?.recoveryCheckpoints?.find((item) => item.seat === from && item.status === 'open');
+    if (!source || !checkpoint) return null;
+
+    const at = nowIso();
+    for (const message of messages) {
+      if (message.seq === source.seq) continue;
+      if (this.closeCheckpoints(message, to, `superseded by inherited work #${source.seq}`, at)) {
+        const file = await this.findMessagePathUnsafe(message.seq);
+        if (file) await this.atomicJson(file, message);
+      }
+    }
+
+    checkpoint.status = 'closed';
+    checkpoint.closedAt = at;
+    checkpoint.updatedAt = at;
+    checkpoint.closeReason = `reassigned to ${to}: ${reason}`;
+    this.closeCheckpoints(source, to, `superseded by inherited work #${source.seq}`, at);
+    source.recoveryCheckpoints ??= [];
+    source.recoveryCheckpoints.push({
+      id: randomUUID(),
+      workId: source.seq,
+      seat: to,
+      status: 'open',
+      note: checkpoint.note,
+      actionReceipts: [...checkpoint.actionReceipts],
+      inheritedFrom: from,
+      openedAt: at,
+      updatedAt: at
+    });
+    const file = await this.findMessagePathUnsafe(source.seq);
+    if (!file) throw new Error(`message #${source.seq} disappeared during reassignment`);
+    await this.atomicJson(file, source);
+    return source.seq;
   }
 
   private closeCheckpoints(message: BusMessage, agent: string, reason: string, at = nowIso()) {
@@ -865,7 +923,7 @@ export class MailboxStore {
     staleAfterSeconds?: number;
     /** Operator override: skip the staleness guard. For a human who can see the truth. */
     force?: boolean;
-  }): Promise<{ moved: boolean; from: string | null; to: string; why: string }> {
+  }): Promise<{ moved: boolean; from: string | null; to: string; why: string; inheritedWorkId: number | null }> {
     const staleAfter = input.staleAfterSeconds ?? 300;
     return this.withLock(async () => {
       const state = await this.loadStateUnsafe();
@@ -878,11 +936,18 @@ export class MailboxStore {
           moved: false,
           from,
           to: input.to,
+          inheritedWorkId: null,
           why: `baton holder changed from expected ${input.expectedFrom} to ${from ?? '<nobody>'}; refusing stale failover`
         };
       }
       if (from === input.to) {
-        return { moved: false, from, to: input.to, why: `${input.to} already holds the baton` };
+        return {
+          moved: false,
+          from,
+          to: input.to,
+          inheritedWorkId: null,
+          why: `${input.to} already holds the baton`
+        };
       }
       const heldSeconds = state.baton
         ? (Date.now() - Date.parse(state.baton.since)) / 1000
@@ -892,6 +957,7 @@ export class MailboxStore {
           moved: false,
           from,
           to: input.to,
+          inheritedWorkId: null,
           why: `${from} has held the baton only ${Math.round(heldSeconds)}s (< ${staleAfter}s). ` +
                'Refusing: taking it from an active holder is a coup, not a failover. Use force ' +
                'only if you can see that the holder is genuinely unable to act.'
@@ -903,10 +969,14 @@ export class MailboxStore {
         reason: `reassigned from ${from ?? '<nobody>'} after ${Math.round(heldSeconds)}s: ${input.reason}`
       };
       await this.writeStateUnsafe(state);
+      const inheritedWorkId = from
+        ? await this.inheritOpenRecoveryUnsafe(from, input.to, input.reason)
+        : null;
       return {
         moved: true,
         from,
         to: input.to,
+        inheritedWorkId,
         why: state.baton.reason
       };
     });

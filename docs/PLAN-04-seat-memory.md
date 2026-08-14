@@ -1,12 +1,14 @@
 # PLAN 04 — Seat memory
 
 Status: **slice 1 implemented and audited** (`d74e8fe` + `951f218`). **Slice 2 (verified
-evidence memory) is implemented and not yet independently audited.** Durable same-seat
+evidence memory) is implemented at `b4cbd62` and not yet independently audited.** **Item 4
+(cross-seat reassignment) is implemented and not yet independently audited.** Durable same-seat
 recovery checkpoints now live on their source mailbox record (`workId` is its sequence). They retain
 closed history, supersede rather than expire, and atomically retain accepted-action receipts with
 unfinished intent. Startup retrieves only open checkpoints; injection is escaped, explicitly
-untrusted, and capped at 2 KiB inside the existing aggregate prompt budget. Cross-seat reassignment
-remains item 4. Ordering decided adversarially: memory built first
+untrusted, and capped at 2 KiB inside the existing aggregate prompt budget. A baton reassignment
+now transfers the previous holder's open checkpoint to the successor on the same workId.
+Ordering decided adversarially: memory built first
 would faithfully record a pipeline that was still discarding most of its long messages.
 
 ### Slice 1 audit — six gates
@@ -57,11 +59,30 @@ A stored model-authored observation is not accepted.
 
 Still open after this slice:
 
-- **item 4** — cross-seat reassignment. Checkpoints are still keyed `seat === agent` and
-  `openRecovery` refuses a message addressed to someone else, so a baton handoff cannot
-  inherit the previous holder's open work.
 - Independent audit of this slice.
 - Consolidation of an assignment's episodes (the Cwars gap).
+
+### Item 4 — cross-seat reassignment
+
+Implemented on top of slice 2. **Not self-certified.** The measured failure was a credit-loss
+baton move that left the successor unable to inherit Codex's open checkpoint on `#1321`:
+`openRecovery` refused because `message.to !== agent`, and a courtesy `handoff` mail would
+have bound a new workId even if that check were lifted.
+
+`reassignBaton` now transfers the previous holder's single open checkpoint onto the successor
+on the **same workId**, copying the note and action receipts. The previous checkpoint is
+closed (`reassigned to <seat>`) rather than deleted. A third seat still cannot open that
+work. A `handoff` message does not supersede inherited recovery.
+
+| gate | result |
+|---|---|
+| successor cannot inherit without reassignment | store gate — still refused as `addressed to <original>` |
+| baton reassignment transfers workId, note, and receipts | wiring gate |
+| previous checkpoint remains on the source message, closed | store gate |
+| a third seat cannot steal the inherited work | store gate |
+| successor continues the note without the original brief | runner gate |
+| inherited receipts still suppress replay | runner gate |
+| courtesy handoff does not change the inherited workId | runner gate |
 
 CLI: `mailbox record-evidence|promote-evidence|list-evidence`. Brain actions: `record`,
 `promote`. Harness tools: `mailbox_record_evidence`, `mailbox_promote_evidence`,

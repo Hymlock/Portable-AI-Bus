@@ -257,9 +257,19 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
       });
 
       let result: WakeResult = { done: true };
-      const workId = messages[0]?.seq ?? recovery?.workId;
-      if (messages[0] && bus.openRecovery) {
-        recovery = await bus.openRecovery(seat, messages[0].seq, openWork ?? messages[0].subject);
+      // A courtesy handoff is not new work. Binding recovery or workId to that message
+      // was how a successor lost the previous holder's open checkpoint (workId, note,
+      // receipts) the moment credit-loss moved the baton.
+      const incoming = messages[0];
+      const handoffLeavesInheritedWork = Boolean(
+        recovery &&
+        incoming &&
+        incoming.kind === 'handoff' &&
+        incoming.seq !== recovery.workId
+      );
+      const workId = handoffLeavesInheritedWork ? recovery!.workId : (incoming?.seq ?? recovery?.workId);
+      if (incoming && bus.openRecovery && !handoffLeavesInheritedWork) {
+        recovery = await bus.openRecovery(seat, incoming.seq, openWork ?? incoming.subject);
       }
       const evidenceWorkIds = [...new Set([
         ...messages.map((message) => message.seq),
