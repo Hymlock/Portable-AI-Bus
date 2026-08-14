@@ -182,3 +182,49 @@ test('a quota failure does NOT retry - the wallet will not refill in 15 seconds'
   assert.equal(calls, 1, 'quota is not retryable; retrying wastes time on a certainty');
   assert.equal(reply.servedBy, 'api');
 });
+
+test('a single-link chain retries one generic throw and can recover', async () => {
+  let calls = 0;
+  const flaky = {
+    kind: 'cli',
+    async ask() {
+      calls += 1;
+      if (calls === 1) throw new Error('ECONNRESET transient socket blip');
+      return { text: 'answered on the bounded retry', isError: false };
+    },
+    async probe() { return { ok: true, detail: '' }; }
+  };
+  const reply = await chainProviders([flaky]).ask('hello');
+
+  assert.equal(reply.text, 'answered on the bounded retry');
+  assert.equal(calls, 2);
+  assert.equal(reply.exhausted, false);
+});
+
+test('a single-link chain gives up after the bounded generic retry', async () => {
+  let calls = 0;
+  const broken = {
+    kind: 'cli',
+    async ask() { calls += 1; throw new Error('socket stays broken'); },
+    async probe() { return { ok: false, detail: '' }; }
+  };
+  const reply = await chainProviders([broken]).ask('hello');
+
+  assert.equal(calls, 2, 'the default is one retry, not an infinite loop');
+  assert.equal(reply.exhausted, true);
+  assert.equal(reply.attempts[0].detail, 'socket stays broken');
+});
+
+test('single-link auth, quota, and unavailable failures are not retried', async () => {
+  for (const detail of ['401 unauthorized', 'insufficient_quota', 'ENOENT command not found']) {
+    let calls = 0;
+    const provider = {
+      kind: 'cli',
+      async ask() { calls += 1; return { text: detail, isError: true }; },
+      async probe() { return { ok: false, detail }; }
+    };
+    const reply = await chainProviders([provider]).ask('hello');
+    assert.equal(calls, 1, `${detail} is an answer, not a transient generic blip`);
+    assert.equal(reply.exhausted, true);
+  }
+});

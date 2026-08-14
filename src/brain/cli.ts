@@ -91,6 +91,35 @@ function integerOption(argv: string[], name: string, fallback: number): number {
   return value;
 }
 
+/** Newest file timestamp is the version a long-lived brain actually loaded at startup. */
+export async function latestTreeMtimeMs(directory: string): Promise<number> {
+  const entries = await fs.readdir(directory, { withFileTypes: true }).catch(() => []);
+  let latest = 0;
+  for (const entry of entries) {
+    const item = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      latest = Math.max(latest, await latestTreeMtimeMs(item));
+    } else if (entry.isFile()) {
+      const stat = await fs.stat(item).catch(() => undefined);
+      latest = Math.max(latest, stat?.mtimeMs ?? 0);
+    }
+  }
+  return latest;
+}
+
+export async function recordLoadedCode(root: string, seat: string, distRoot = path.resolve(__dirname, '..')) {
+  const marker = {
+    pid: process.pid,
+    distRoot,
+    loadedDistMtimeMs: await latestTreeMtimeMs(distRoot),
+    recordedAt: new Date().toISOString()
+  };
+  const runtimeDir = path.join(root, '.ai-bus', 'runtime');
+  await fs.mkdir(runtimeDir, { recursive: true });
+  await fs.writeFile(path.join(runtimeDir, `brain-${seat}.code.json`), JSON.stringify(marker));
+  return marker;
+}
+
 /** An echo brain: acknowledges every message and reports nothing else. */
 export const echoBrain: BrainFactory = ({ seat }) => ({
   name: 'echo',
@@ -161,6 +190,13 @@ export async function main(argv: string[]): Promise<number> {
 
   const brain = await loadBrain(option(argv, '--brain'), seat, resolvedRoot, workdir);
   log('brain-loaded', { brain: brain.name, workdir });
+  try {
+    const marker = await recordLoadedCode(resolvedRoot, seat);
+    log('code-version-recorded', marker);
+  } catch (error) {
+    // Detection failure is visible but does not take a working brain off the bus.
+    log('code-version-marker-failed', { detail: (error as Error)?.message ?? String(error) });
+  }
 
   const stopSignal = new Promise<void>((resolve) => {
     const stop = () => resolve();

@@ -61,22 +61,57 @@ const maxRestarts = Number(option('--max-restarts', '5'));
 const brainFile = path.resolve(option('--brain', path.join(REPO, 'brains', 'agent-seat.js')));
 
 const restarts = new Map(seats.map((s) => [s, 0]));
+const staleWarnings = new Map();
 const stamp = () => new Date().toISOString().slice(11, 19);
 
+function latestTreeMtimeMs(directory) {
+  let latest = 0;
+  let entries;
+  try { entries = fs.readdirSync(directory, { withFileTypes: true }); } catch { return 0; }
+  for (const entry of entries) {
+    const item = path.join(directory, entry.name);
+    if (entry.isDirectory()) latest = Math.max(latest, latestTreeMtimeMs(item));
+    else if (entry.isFile()) {
+      try { latest = Math.max(latest, fs.statSync(item).mtimeMs); } catch { /* changed mid-sweep */ }
+    }
+  }
+  return latest;
+}
+
+function staleCodeWarning({ coordinationRoot, seat, pid, distRoot = DIST }) {
+  const markerFile = path.join(coordinationRoot, '.ai-bus', 'runtime', `brain-${seat}.code.json`);
+  let marker;
+  try { marker = JSON.parse(fs.readFileSync(markerFile, 'utf8')); } catch {
+    return `${seat} stale-code: running brain has no readable loaded-code marker`;
+  }
+  if (marker.pid !== pid) {
+    return `${seat} stale-code: loaded-code marker belongs to pid ${marker.pid ?? 'unknown'}, running pid is ${pid}`;
+  }
+  if (!samePath(marker.distRoot, distRoot)) {
+    return `${seat} stale-code: loaded dist ${marker.distRoot ?? 'unknown'}, expected ${distRoot}`;
+  }
+  const currentDistMtimeMs = latestTreeMtimeMs(distRoot);
+  if (!Number.isFinite(marker.loadedDistMtimeMs) || currentDistMtimeMs > marker.loadedDistMtimeMs) {
+    return `${seat} stale-code: dist changed after pid ${pid} loaded it ` +
+      `(loaded=${marker.loadedDistMtimeMs ?? 'unknown'}, current=${currentDistMtimeMs})`;
+  }
+  return undefined;
+}
+
 /** Seats with the exact live brain process this supervisor owns. */
-function liveSeats() {
+function liveBrains() {
   try {
-    return new Set(processesForRoot(listNodeProcesses(), root)
+    return new Map(processesForRoot(listNodeProcesses(), root)
       .filter((item) => item.type === 'brain'
         && samePath(item.workdir, workdir)
         && samePath(item.brain, brainFile))
-      .map((item) => item.seat)
-      .filter(Boolean));
+      .filter((item) => item.seat)
+      .map((item) => [item.seat, item]));
   } catch {
     // Fail CLOSED: an unreadable process list must not be read as "everything died", or the
     // supervisor becomes the outage it exists to prevent.
     console.log(`tick ${stamp()} process list unreadable - assuming all seats live`);
-    return new Set(seats);
+    return new Map(seats.map((seat) => [seat, { seat, assumedLive: true }]));
   }
 }
 
@@ -93,9 +128,18 @@ function startBrain(seat) {
 }
 
 function sweep() {
-  const live = liveSeats();
+  const live = liveBrains();
   for (const seat of seats) {
-    if (live.has(seat)) continue;
+    const running = live.get(seat);
+    if (running) {
+      if (!running.assumedLive) {
+        const warning = staleCodeWarning({ coordinationRoot: root, seat, pid: running.pid });
+        if (warning && staleWarnings.get(seat) !== warning) console.log(`tick ${stamp()} ${warning} - NOT restarting.`);
+        if (warning) staleWarnings.set(seat, warning);
+        else staleWarnings.delete(seat);
+      }
+      continue;
+    }
     const count = restarts.get(seat) ?? 0;
     if (count >= maxRestarts) {
       // Said once per sweep on purpose. A seat that cannot stay up is a problem for a human,
@@ -109,8 +153,12 @@ function sweep() {
   }
 }
 
-console.log(`supervising ${seats.join(', ')} every ${intervalMs / 1000}s (max ${maxRestarts} restarts each)`);
-console.log(`root ${root}`);
-console.log(`workdir ${workdir}`);
-sweep();
-setInterval(sweep, intervalMs);
+if (require.main === module) {
+  console.log(`supervising ${seats.join(', ')} every ${intervalMs / 1000}s (max ${maxRestarts} restarts each)`);
+  console.log(`root ${root}`);
+  console.log(`workdir ${workdir}`);
+  sweep();
+  setInterval(sweep, intervalMs);
+}
+
+module.exports = { latestTreeMtimeMs, staleCodeWarning };

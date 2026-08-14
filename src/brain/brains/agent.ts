@@ -453,7 +453,10 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
 
       const exhaustionNote = (reply: ChainReply) =>
         `chain-exhausted:attempts=${(reply.attempts ?? [])
-          .map((a: { kind: string; reason?: string }) => `${a.kind}:${a.reason ?? 'error'}`)
+          .map((a: { kind: string; reason?: string; detail?: string }) => {
+            const detail = a.detail?.replace(/\s+/g, ' ').trim().slice(0, 160);
+            return `${a.kind}:${a.reason ?? 'error'}${detail ? `(${detail})` : ''}`;
+          })
           .join(',') || 'unreported'}`;
       const durableNote = (note?: string) => {
         const base = note?.trim() || 'ok';

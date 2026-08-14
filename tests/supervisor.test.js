@@ -8,6 +8,7 @@ const { execFileSync } = require('node:child_process');
 const SUPERVISOR = path.join(__dirname, '..', 'scripts', 'bus-supervise.js');
 const BUS_UP = path.join(__dirname, '..', 'scripts', 'bus-up.js');
 const BUS_RESTART = path.join(__dirname, '..', 'scripts', 'bus-restart.js');
+const { staleCodeWarning } = require(SUPERVISOR);
 
 /**
  * The supervisor closes the one hole the architecture has admitted since day one: the runner
@@ -80,4 +81,30 @@ test('bus-restart replaces and verifies the supervisor with the rest of the runt
     'restart must stop the old monitor rather than leave a mismatched supervisor behind');
   assert.match(source, /supervisors\.length !== 1/,
     'restart is not verified unless exactly one configured supervisor came back');
+});
+
+test('it names a live seat whose loaded dist is older than dist on disk', () => {
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'portable-ai-bus-stale-code-'));
+  try {
+    const distRoot = path.join(fixture, 'dist');
+    const runtime = path.join(fixture, '.ai-bus', 'runtime');
+    fs.mkdirSync(path.join(distRoot, 'brain'), { recursive: true });
+    fs.mkdirSync(runtime, { recursive: true });
+    fs.writeFileSync(path.join(distRoot, 'brain', 'cli.js'), 'new build');
+    fs.writeFileSync(path.join(runtime, 'brain-codex.code.json'), JSON.stringify({
+      pid: 42, distRoot, loadedDistMtimeMs: 1
+    }));
+
+    const warning = staleCodeWarning({ coordinationRoot: fixture, seat: 'codex', pid: 42, distRoot });
+    assert.match(warning, /codex stale-code/);
+    assert.match(warning, /dist changed/);
+  } finally {
+    fs.rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+test('stale-code detection warns but never restarts', () => {
+  const source = fs.readFileSync(SUPERVISOR, 'utf8');
+  assert.match(source, /\$\{warning\} - NOT restarting\./,
+    'a code change mid-wake is hazardous; the supervisor must report it without surprise restart');
 });

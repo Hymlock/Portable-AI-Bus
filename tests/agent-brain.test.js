@@ -240,6 +240,8 @@ test('ATTACK: every provider exhausted — receipt + chain-exhausted note for ba
   assert.equal(result.done, true);
   assert.equal(result.exhausted, true, 'runner onExhausted / reassignBaton signal');
   assert.match(result.note || '', /chain-exhausted/);
+  assert.match(result.note || '', /insufficient_quota/,
+    'the durable exhaustion note must preserve enough detail to diagnose the failure');
   assert.equal(sent.length, 2, 'one receipt per message even when the chain is dead');
   assert.equal(sent.every((s) => s.kind === 'ack'), true);
 });

@@ -82,6 +82,8 @@ export type ChainOptions = {
    * the same ceiling - which is exactly what happened on the first live multi-brain run.
    */
   rateLimitRetries?: number;
+  /** Generic failures get one bounded second chance, but only when there is no fallback link. */
+  errorRetries?: number;
   /** Base backoff in ms; doubles each retry. */
   rateLimitBackoffMs?: number;
   /** Injected in tests so a backoff test does not actually sleep. */
@@ -110,6 +112,7 @@ export function chainProviders(links: ModelProvider[], options: ChainOptions = {
   const fallThroughOn = new Set(options.fallThroughOn ?? ALL_REASONS);
   const log = options.log ?? (() => {});
   const rateLimitRetries = options.rateLimitRetries ?? 2;
+  const errorRetries = options.errorRetries ?? 1;
   const backoffMs = options.rateLimitBackoffMs ?? 15_000;
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
 
@@ -121,7 +124,8 @@ export function chainProviders(links: ModelProvider[], options: ChainOptions = {
 
     for (const link of links) {
       let reply: ModelReply;
-      let attempt = 0;
+      let rateLimitAttempt = 0;
+      let errorAttempt = 0;
       // eslint-disable-next-line no-constant-condition
       while (true) {
       try {
@@ -129,11 +133,16 @@ export function chainProviders(links: ModelProvider[], options: ChainOptions = {
       } catch (error) {
         const detail = (error as Error)?.message ?? String(error);
         const reason = classifyFailure(detail);
-        if (reason === 'rate-limit' && attempt < rateLimitRetries) {
-          const wait = backoffMs * 2 ** attempt;
-          attempt += 1;
-          log('rate-limited-retrying', { kind: link.kind, attempt, waitMs: wait });
+        if (reason === 'rate-limit' && rateLimitAttempt < rateLimitRetries) {
+          const wait = backoffMs * 2 ** rateLimitAttempt;
+          rateLimitAttempt += 1;
+          log('rate-limited-retrying', { kind: link.kind, attempt: rateLimitAttempt, waitMs: wait });
           await sleep(wait);
+          continue;
+        }
+        if (links.length === 1 && reason === 'error' && errorAttempt < errorRetries) {
+          errorAttempt += 1;
+          log('error-retrying', { kind: link.kind, attempt: errorAttempt });
           continue;
         }
         attempts.push({ kind: link.kind, ok: false, reason, detail: detail.slice(0, 300) });
@@ -151,11 +160,16 @@ export function chainProviders(links: ModelProvider[], options: ChainOptions = {
       // to everything downstream, and silence is what this whole project keeps mis-reading.
       const detail = reply.text || 'provider reported an error';
       const reason = classifyFailure(detail);
-      if (reason === 'rate-limit' && attempt < rateLimitRetries) {
-        const wait = backoffMs * 2 ** attempt;
-        attempt += 1;
-        log('rate-limited-retrying', { kind: link.kind, attempt, waitMs: wait });
+      if (reason === 'rate-limit' && rateLimitAttempt < rateLimitRetries) {
+        const wait = backoffMs * 2 ** rateLimitAttempt;
+        rateLimitAttempt += 1;
+        log('rate-limited-retrying', { kind: link.kind, attempt: rateLimitAttempt, waitMs: wait });
         await sleep(wait);
+        continue;
+      }
+      if (links.length === 1 && reason === 'error' && errorAttempt < errorRetries) {
+        errorAttempt += 1;
+        log('error-retrying', { kind: link.kind, attempt: errorAttempt });
         continue;
       }
       attempts.push({ kind: link.kind, ok: false, reason, detail: detail.slice(0, 300) });
