@@ -52,6 +52,53 @@ test('a seat that says done:false gets another turn without waiting for mail', a
     'and must NOT block on a 300s listen between its own steps - that reads as a stall');
 });
 
+test('a continuation wake receives the note that described its open work', async () => {
+  const bus = quietBus(task);
+  const contexts = [];
+  const brain = {
+    async takeTurn(context) {
+      contexts.push(context);
+      return contexts.length === 1
+        ? { done: false, note: 'investigate DELTA D continuation memory' }
+        : { done: true, note: 'finished' };
+    }
+  };
+
+  await runBrain({ seat: 'grok', brain, bus: bus.client, maxWakes: 2, listenSeconds: 300 });
+
+  assert.equal(contexts[1].openWork, 'investigate DELTA D continuation memory');
+});
+
+test('completed work is not attached to a later unrelated wake', async () => {
+  const laterTask = [{ seq: 2, from: 'claude', to: 'grok', kind: 'task', subject: 'later', body: 'unrelated work' }];
+  const batches = [task, [], laterTask];
+  const contexts = [];
+  const bus = {
+    async listen() { return 'timeout'; },
+    async read() { return batches.shift() ?? []; },
+    tools() {
+      return {
+        async send() { return {}; }, async status() { return {}; },
+        async claim() { return {}; }, async release() { return {}; }, async runCapability() { return {}; }
+      };
+    }
+  };
+  const brain = {
+    async takeTurn(context) {
+      contexts.push(context);
+      return contexts.length === 1
+        ? { done: false, note: 'old task detail' }
+        : { done: true, note: 'finished' };
+    }
+  };
+
+  await runBrain({ seat: 'grok', brain, bus, maxWakes: 3, listenSeconds: 300 });
+
+  assert.equal(contexts[1].openWork, 'old task detail');
+  assert.equal(contexts[2].messages[0].subject, 'later');
+  assert.equal(contexts[2].openWork, undefined, 'a completed task must clear continuation context');
+});
+
 test('CONTROL: without done:false the same seat stops after one turn', async () => {
   // Proves the test detects the bug rather than passing by construction. A brain that always
   // reports finished must idle-skip, which is the behaviour that keeps a quiet bus cheap.

@@ -131,6 +131,16 @@ test('buildWakePrompt is vendor-neutral (no provider tooling names)', () => {
   assert.equal(/anthropic|openai|xai|api[_ ]?key|claude-code|output-format/i.test(prompt), false);
 });
 
+test('buildWakePrompt presents durable continuation context without inventing it on idle wakes', () => {
+  const continuation = buildWakePrompt('grok', [], 'investigate DELTA D continuation memory');
+  assert.match(continuation, /Open work from your previous wake:/);
+  assert.match(continuation, /investigate DELTA D continuation memory/);
+
+  const idle = buildWakePrompt('grok', []);
+  assert.doesNotMatch(idle, /Open work from your previous wake:/);
+  assert.doesNotMatch(idle, /investigate DELTA D continuation memory/);
+});
+
 test('the copyable system-prompt example sends only to an addressable live seat', async () => {
   const { api, sent } = tools();
   api.status = async () => ({ agents: ['claude', 'codex', 'grok'] });

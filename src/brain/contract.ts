@@ -33,6 +33,14 @@ export type WakeContext = {
   reason: WakeReason;
   /** Mail drained for this wake. May be empty on a timeout wake. */
   messages: BrainMessage[];
+  /**
+   * Durable summary supplied by the previous unfinished wake.
+   *
+   * Model sessions do not survive runner iterations. This is the explicit bridge that lets a
+   * continuation wake know what it said it was continuing after the assigning mail was consumed.
+   * Absent when there is no unfinished work.
+   */
+  openWork?: string;
   /** Bus tools, already bound to this seat. Calling them is how a brain acts. */
   tools: BrainTools;
   /** How many tool calls remain before the runner caps this wake. */
@@ -75,7 +83,10 @@ export type WakeResult = {
   done: boolean;
   /** Set by the runner when the budget ran out before the brain said it was done. */
   capped?: boolean;
-  /** Optional one-line summary for the runner's log. */
+  /**
+   * Optional one-line summary for the runner's log. When `done` is false, this is also the
+   * durable description supplied to the next continuation wake.
+   */
   note?: string;
   /**
    * Every provider in the chain is spent. NOT the same as an error: an error is a bad wake,

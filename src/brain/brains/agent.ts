@@ -121,15 +121,21 @@ export const PLAN_SCHEMA = {
   required: ['actions', 'done']
 };
 
-export function buildWakePrompt(seat: string, messages: BrainMessage[]): string {
+export function buildWakePrompt(seat: string, messages: BrainMessage[], openWork?: string): string {
   const lines = [
     `Seat: ${seat}`,
     `Incoming messages: ${messages.length}`,
     ''
   ];
-  if (messages.length === 0) {
+  if (openWork) {
+    lines.push('Open work from your previous wake:');
+    lines.push(openWork.slice(0, 4000));
+    lines.push('Continue that work. This context is durable; the assigning mail may already be consumed.');
+    lines.push('');
+  }
+  if (messages.length === 0 && !openWork) {
     lines.push('No mail. If you have nothing to do, reply {"actions":[],"done":true}.');
-  } else {
+  } else if (messages.length > 0) {
     for (const m of messages) {
       lines.push(`--- #${m.seq} from ${m.from} kind=${m.kind}`);
       lines.push(`subject: ${m.subject}`);
@@ -447,7 +453,7 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
     name: 'agent',
 
     async takeTurn(context: WakeContext): Promise<WakeResult> {
-      const { messages, tools } = context;
+      const { messages, openWork, tools } = context;
       let sessionId: string | undefined;
       let lastNote = '';
       let servedBy: string | undefined;
@@ -560,7 +566,7 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
       };
 
       for (let round = 0; round < maxRounds; round += 1) {
-        const base = buildWakePrompt(seat, messages);
+        const base = buildWakePrompt(seat, messages, openWork);
         const correction = unreportedTask
           ? 'You marked the work done without answering the task. An acknowledgement is NOT an ' +
             'answer - it says you heard the request, not what you found. An acknowledgement ' +

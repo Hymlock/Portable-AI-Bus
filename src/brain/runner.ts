@@ -114,6 +114,8 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
    * Without it, a long task can only ever advance when someone happens to send mail.
    */
   let hasOpenWork = false;
+  /** The last unfinished wake's own description of what the next wake must continue. */
+  let openWork: string | undefined;
 
   try {
     while (!stopped) {
@@ -195,6 +197,7 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
           seat,
           reason,
           messages,
+          openWork,
           tools: counted,
           budget: budgetPerWake,
           log
@@ -243,6 +246,16 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
       // stranded a seat whose own note read "Audit is open". The runner's own budget breach is
       // the dangerous one, and it is already excluded because that path sets `done: true`.
       hasOpenWork = result.done === false && !result.exhausted;
+      if (hasOpenWork) {
+        const nextOpenWork = result.note?.trim();
+        // A later partial step may omit its note. Retain the last useful summary rather than
+        // erasing the only durable context the next model session has.
+        openWork = nextOpenWork || openWork;
+      } else {
+        // Completion and exhaustion both close the continuation. Never leak an older task's
+        // summary into a genuinely idle or unrelated future wake.
+        openWork = undefined;
+      }
 
       log('wake-complete', {
         seat,
