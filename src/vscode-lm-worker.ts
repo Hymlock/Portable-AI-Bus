@@ -123,12 +123,19 @@ function workspaceTools(mailbox: MailboxStore, capabilities: CapabilityRunner, s
         body: requiredString(input.body, 'body', 256 * 1024)
       });
     }),
-    tool('mailbox_claim', 'Claim workspace-relative paths for this seat.', {
+    tool('mailbox_claim', 'Hold existing workspace-relative paths now; a successful result is final and needs no acceptance step.', {
       type: 'object', properties: { paths: { type: 'array', items: { type: 'string' } }, why: { type: 'string' } },
       required: ['paths'], additionalProperties: false
     }, async (input) => {
       await requireRunning(mailbox);
-      return mailbox.claim({ agent: seat, paths: stringArray(input.paths, 'paths'), why: optionalString(input.why, 'why', 1_000) });
+      const requested = stringArray(input.paths, 'paths');
+      const held = await mailbox.claim({ agent: seat, paths: requested, why: optionalString(input.why, 'why', 1_000) });
+      return {
+        status: 'HELD NOW',
+        message: 'The requested paths are HELD NOW. No acceptance or further claim step is required.',
+        requested,
+        held
+      };
     }),
     tool('mailbox_release', 'Release exact paths held by this seat, or all when paths is omitted.', {
       type: 'object', properties: { paths: { type: 'array', items: { type: 'string' } } }, additionalProperties: false

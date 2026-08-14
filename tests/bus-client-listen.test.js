@@ -168,6 +168,7 @@ test('real harness peek is non-destructive and acknowledgement commits only its 
     path.join(root, '.ai-bus', 'capabilities.json'),
     JSON.stringify({ version: 1, capabilities: [] })
   );
+  await fs.mkdir(path.join(root, 'src', 'brain'), { recursive: true });
   const server = new HarnessServer(root, { credentialsDir });
   await server.mailbox.ensureInitialized(['sender', 'worker'], 50);
   await server.start(0);

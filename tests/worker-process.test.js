@@ -11,6 +11,9 @@ test('three provider-neutral seat processes acquire, wake, and release independe
   const credentialsDir = path.join(root, '.test-credentials');
   const seats = ['codex', 'claude', 'grok'];
   await fs.mkdir(path.join(root, '.ai-bus'), { recursive: true });
+  for (const seat of seats) {
+    await fs.mkdir(path.join(root, 'work', seat), { recursive: true });
+  }
   await fs.writeFile(path.join(root, '.ai-bus', 'capabilities.json'), JSON.stringify({ version: 1, capabilities: [] }));
   const server = new HarnessServer(root, { credentialsDir });
   await server.mailbox.ensureInitialized(['dispatcher', ...seats]);

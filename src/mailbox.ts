@@ -596,6 +596,15 @@ export class MailboxStore {
     return this.withLock(async () => {
       const state = await this.loadStateUnsafe();
       this.assertSeated(state, input.agent, 'agent');
+      const missing: string[] = [];
+      for (const requestedPath of requested) {
+        if (!(await this.exists(path.resolve(this.paths.root, requestedPath)))) {
+          missing.push(requestedPath);
+        }
+      }
+      if (missing.length > 0) {
+        throw new ClaimPathMissingError(missing);
+      }
       for (const [other, claims] of Object.entries(state.claims)) {
         if (other === input.agent) {
           continue;
@@ -610,6 +619,7 @@ export class MailboxStore {
 
       const held = [...(state.claims[input.agent] ?? [])];
       const timestamp = nowIso();
+      let changed = false;
       for (const requestedPath of requested) {
         if (held.some((claim) => this.pathContains(claim.path, requestedPath))) {
           continue;
@@ -620,13 +630,16 @@ export class MailboxStore {
           }
         }
         held.push({ path: requestedPath, why: input.why?.trim() || '', at: timestamp });
+        changed = true;
       }
       held.sort((left, right) => left.path.localeCompare(right.path));
-      state.claims[input.agent] = held;
-      await this.writeStateUnsafe(state);
-      await this.appendLineUnsafe(
-        `\n- **claim** \`${input.agent}\` -> ${requested.join(', ')} (${input.why?.trim() || ''})\n`
-      );
+      if (changed) {
+        state.claims[input.agent] = held;
+        await this.writeStateUnsafe(state);
+        await this.appendLineUnsafe(
+          `\n- **claim** \`${input.agent}\` -> ${requested.join(', ')} (${input.why?.trim() || ''})\n`
+        );
+      }
       return held;
     });
   }
@@ -1413,6 +1426,18 @@ export class ClaimConflictError extends Error {
   }
 }
 
+export class ClaimPathMissingError extends Error {
+  readonly exitCode = 1;
+
+  constructor(readonly paths: string[]) {
+    super(
+      `Claim refused: path(s) do not exist in the workspace: ${paths.join(', ')}. `
+      + 'No claim was recorded.'
+    );
+    this.name = 'ClaimPathMissingError';
+  }
+}
+
 type CliArgs = Record<string, string | boolean | string[]> & { _: string[] };
 
 function parseArgs(argv: string[]): CliArgs {
@@ -1571,7 +1596,13 @@ async function runCli(argv = process.argv.slice(2)) {
         paths: listArg(args, 'paths'),
         why: stringArg(args, 'why')
       });
-      console.log(json ? JSON.stringify(claims, null, 2) : `holds: ${claims.map((claim) => claim.path).join(', ')}`);
+      console.log(json
+        ? JSON.stringify({
+            status: 'HELD NOW',
+            message: 'The requested paths are HELD NOW. No acceptance or further claim step is required.',
+            held: claims
+          }, null, 2)
+        : `HELD NOW (no further step required): ${claims.map((claim) => claim.path).join(', ')}`);
       return 0;
     }
     case 'release': {

@@ -19,6 +19,10 @@ async function removeTree(target) {
 
 beforeEach(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'portable-ai-bus-'));
+  await fs.mkdir(path.join(root, 'src'), { recursive: true });
+  await fs.mkdir(path.join(root, 'tests', 'unit'), { recursive: true });
+  await fs.writeFile(path.join(root, 'src', 'mailbox.ts'), 'fixture');
+  await fs.writeFile(path.join(root, 'src', 'bus.ts'), 'fixture');
   store = new MailboxStore(root);
   await store.ensureInitialized(['claude', 'codex', 'grok'], 32);
 });
@@ -175,6 +179,25 @@ test('round guard halts sends until an explicit resume adds capacity', async () 
   } finally {
     await removeTree(limitedRoot);
   }
+});
+
+test('claiming a nonexistent path is refused atomically and records no hold', async () => {
+  await assert.rejects(
+    store.claim({ agent: 'codex', paths: ['src/mailbox.ts', 'bus.py'] }),
+    /Claim refused.*bus\.py.*No claim was recorded/i
+  );
+  assert.deepEqual(await store.claims(), {});
+});
+
+test('re-claiming an already held path is an idempotent confirmation, not a new record', async () => {
+  const first = await store.claim({ agent: 'codex', paths: ['src/mailbox.ts'], why: 'first' });
+  const transcriptBefore = await fs.readFile(store.paths.transcriptPath, 'utf8');
+  const second = await store.claim({ agent: 'codex', paths: ['src/mailbox.ts'], why: 'retry' });
+  const transcriptAfter = await fs.readFile(store.paths.transcriptPath, 'utf8');
+
+  assert.deepEqual(second, first, 'the original claim metadata is preserved');
+  assert.equal(second.length, 1, 'the held path appears exactly once');
+  assert.equal(transcriptAfter, transcriptBefore, 'a retry does not append another claim event');
 });
 
 test('status warns well before the round guard fails mutating tools closed', async () => {

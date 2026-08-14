@@ -4,7 +4,7 @@ import * as http from 'node:http';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { CapabilityRunner } from './capabilities';
-import { BusHaltedError, ClaimConflictError, MailboxStore } from './mailbox';
+import { BusHaltedError, ClaimConflictError, ClaimPathMissingError, MailboxStore } from './mailbox';
 import { credentialWorkspaceKey } from './workspace-key';
 
 type ToolDefinition = {
@@ -398,7 +398,7 @@ export class HarnessServer {
           ['from', 'to', 'subject', 'body']
         )
       },
-      { name: 'mailbox_claim', description: 'Accumulate workspace path claims after conflict checks.', inputSchema: object({ agent, paths, why: { type: 'string' } }, ['agent', 'paths']) },
+      { name: 'mailbox_claim', description: 'Hold existing workspace paths now after conflict checks; success is final and requires no acceptance step.', inputSchema: object({ agent, paths, why: { type: 'string' } }, ['agent', 'paths']) },
       { name: 'mailbox_release', description: 'Release exact paths, or all claims when paths is omitted.', inputSchema: object({ agent, paths }, ['agent']) },
       { name: 'mailbox_complete_step', description: 'Record structured step completion and apply the configured step halt policy.', inputSchema: object({ agent, summary: { type: 'string' }, evidence: paths }, ['agent', 'summary']) },
       { name: 'mailbox_complete_goal', description: 'Operator-only: record structured goal completion and apply the configured goal halt policy.', inputSchema: object({ agent, summary: { type: 'string' }, evidence: paths }, ['agent', 'summary']) },
@@ -693,12 +693,20 @@ export class HarnessServer {
             ? {}
             : { keepBaton: optionalBoolean(input.keepBaton, 'keepBaton') })
         });
-      case 'mailbox_claim':
-        return this.mailbox.claim({
+      case 'mailbox_claim': {
+        const requested = requireStringArray(input.paths, 'paths');
+        const held = await this.mailbox.claim({
           agent: this.authorizedAgent(principal, input.agent),
-          paths: requireStringArray(input.paths, 'paths'),
+          paths: requested,
           why: optionalString(input.why, 1_000)
         });
+        return {
+          status: 'HELD NOW',
+          message: 'The requested paths are HELD NOW. No acceptance or further claim step is required.',
+          requested,
+          held
+        };
+      }
       case 'mailbox_release':
         return this.mailbox.release(
           this.authorizedAgent(principal, input.agent),
@@ -1029,6 +1037,7 @@ function httpFailure(error: unknown) {
   if (error instanceof InputValidationError) return new HarnessHttpError(400, 'invalid_request', error.message);
   if (error instanceof BusHaltedError) return new HarnessHttpError(423, 'bus_halted', error.message);
   if (error instanceof ClaimConflictError) return new HarnessHttpError(409, 'claim_conflict', error.message, true);
+  if (error instanceof ClaimPathMissingError) return new HarnessHttpError(400, 'claim_path_missing', error.message);
   if (error instanceof SyntaxError) return new HarnessHttpError(400, 'invalid_json', error.message);
   return new HarnessHttpError(500, 'internal_error', asMessage(error), true);
 }

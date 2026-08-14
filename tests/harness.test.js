@@ -14,6 +14,10 @@ async function setup(agents = [], maxRounds = 20, serverOptions = {}) {
     JSON.stringify({ version: 1, capabilities: [] }),
     'utf8'
   );
+  await fs.mkdir(path.join(root, 'src'), { recursive: true });
+  for (const name of ['held.ts', 'new.ts', 'warn.ts']) {
+    await fs.writeFile(path.join(root, 'src', name), 'fixture', 'utf8');
+  }
   const server = new HarnessServer(root, {
     token: 'test-token',
     seatTokens: Object.fromEntries(agents.map((agent) => [agent, `test-${agent}-token`])),
@@ -345,6 +349,37 @@ test('approaching the round cap writes a loud harness audit warning', async (t) 
   const audit = await fs.readFile(server.auditPath, 'utf8');
   assert.match(audit, /"event":"round_guard_approaching"/);
   assert.match(audit, /10 rounds remain before the round guard/);
+});
+
+test('successful claim response says paths are held now with no acceptance step', async (t) => {
+  const { root, server, request } = await setup(['codex']);
+  t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
+
+  const claim = await request('/v1/tool', {
+    method: 'POST',
+    body: JSON.stringify({ requestId: 'clear-claim', name: 'mailbox_claim', input: { agent: 'codex', paths: ['src/held.ts'] } })
+  });
+
+  assert.equal(claim.status, 200);
+  assert.equal(claim.body.result.status, 'HELD NOW');
+  assert.match(claim.body.result.message, /HELD NOW.*No acceptance or further claim step is required/i);
+  assert.deepEqual(claim.body.result.held.map((item) => item.path), ['src/held.ts']);
+});
+
+test('harness refuses a nonexistent claim and leaves state clean', async (t) => {
+  const { root, server, request } = await setup(['codex']);
+  t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
+
+  const claim = await request('/v1/tool', {
+    method: 'POST',
+    body: JSON.stringify({ requestId: 'missing-claim', name: 'mailbox_claim', input: { agent: 'codex', paths: ['bus.py'] } })
+  });
+
+  assert.equal(claim.status, 400);
+  assert.equal(claim.body.error.code, 'claim_path_missing');
+  assert.equal(claim.body.error.retriable, false);
+  assert.match(claim.body.error.message, /do not exist.*bus\.py|bus\.py.*do not exist/i);
+  assert.deepEqual(await server.mailbox.claims(), {});
 });
 
 test('authenticated heartbeats persist leases and transition to stale without granting authority', async (t) => {
