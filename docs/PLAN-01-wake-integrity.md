@@ -46,7 +46,37 @@ green, because its stub brain already returned the flag. It also characterised 9
 events — **only one** came from the `<seat>` placeholder; 75 are CLI envelopes reaching
 `parsePlan` un-unwrapped, 19 are the model answering as a chat assistant.
 
-**AUDIT 03** — pending. Scope: `21a0db0` and `f4bc141`.
+**AUDIT 03** — never delivered. The auditor's transport failed repeatedly (5 `malformed-plan`,
+4 `error-retrying` after the 10:14 restart) and the audit reached attempt 2 of 3 before it would
+have been parked as poison. **The goal could not close because the auditor could not report, and
+the next goal could not be chosen because the auditor could not vote** — both blocked by the
+envelope/transport class itself. That deadlock is the strongest evidence we have for what to fix
+next, and it decided the goal round against the planner's own ranking.
+
+**AUDIT 04** — `claude` assignment, worktree `.ai-bus/claude-audit-04-wt`, HEAD `f4bc141`,
+baseline 292/292. Method: surgical revert, observe red, restore.
+
+| revert | test that went red |
+|---|---|
+| `retainMessages` on the genuine action-failure path (`agent.ts`) | `DELTA I: real agent retains failed mail and does not replay a committed send across wakes` |
+| `attempts >= maxBlockedAttempts` → unreachable (`runner.ts:286`) | `DELTA I: blocked work escalates after its separate bounded retry budget` |
+| replay guard `completedActionIds?.has(id)` (`agent.ts:441`) | `DELTA I: real agent retains failed mail and does not replay a committed send across wakes` |
+| lease-derived recovery window (`bus-client.ts:155`) | `DELTA H: lease-held listen retries past lease expiry and then succeeds` |
+
+Worktree restored clean; baseline green again at 292/292. The vacuous test AUDIT 02 found is
+genuinely repaired: the identical revert that once left it green now fails it.
+
+**Stated limit on this audit.** The `claude` assignment wrote the briefs that specified these
+behaviours. It did not write the implementation, so the auditor-is-never-the-author invariant
+holds — but it is *less* independent than an audit by an assignment with no hand in the design.
+What was verified is that each gate can be made to fail and that the tests bind to the right
+mechanisms. What was **not** re-run is AUDIT 02's live probes against the new build
+(`sends=2`, `providerCalls=5, parked=0`); those behaviours are now asserted by tests, which is
+not the same as re-measuring them in production.
+
+## Verdict
+
+**PLAN 01 closes** on the code, with the limit above recorded rather than argued away.
 
 ## Design decisions that survived challenge
 
