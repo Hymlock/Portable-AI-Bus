@@ -613,7 +613,7 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
           }
           const fallback = receiptPlan(seat, messages);
           await executeTrackedPlan(fallback);
-          return { done: true, note: 'malformed-output' };
+          return { done: true, note: 'malformed-output', retainMessages: true };
         }
 
         const failures = await executeTrackedPlan(plan);

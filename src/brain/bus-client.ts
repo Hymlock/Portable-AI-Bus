@@ -104,6 +104,25 @@ export function cliBusClient(options: CliBusOptions): BusClient {
       return 'timeout';
     },
 
+    async peek(seat) {
+      const result = await tool(seat, 'mailbox_inbox', { agent: seat, all: true });
+      return Array.isArray(result) ? (result as BrainMessage[]) : [];
+    },
+
+    async acknowledge(seat, count) {
+      const acknowledged: BrainMessage[] = [];
+      // Commit exactly the batch that was presented. `all:true` could also acknowledge mail
+      // that arrived while the model was thinking. Single-message reads work with every staged
+      // harness version and preserve FIFO order, so later mail remains unread for the next wake.
+      for (let index = 0; index < count; index += 1) {
+        const result = await tool(seat, 'mailbox_read', { agent: seat, all: false });
+        if (!Array.isArray(result) || result.length === 0) break;
+        acknowledged.push(result[0] as BrainMessage);
+      }
+      return acknowledged;
+    },
+
+    // Kept as the destructive compatibility surface for callers outside the brain runner.
     async read(seat) {
       const result = await tool(seat, 'mailbox_read', { agent: seat, all: true });
       return Array.isArray(result) ? (result as BrainMessage[]) : [];

@@ -83,6 +83,11 @@ export type WakeResult = {
    * into a baton hand-off rather than letting the seat go quietly silent.
    */
   exhausted?: boolean;
+  /**
+   * The wake did not produce a usable plan, so mail presented to it must remain unread.
+   * The runner normally commits a transactional inbox read after the turn succeeds.
+   */
+  retainMessages?: boolean;
 };
 
 export type Brain = {

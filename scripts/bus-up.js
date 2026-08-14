@@ -11,7 +11,8 @@
  *   3. give the baton to the console seat ONLY IF nobody is holding it, or the holder has
  *      gone stale - never take it from an agent that is actively working
  *   4. start a detached brain for each working seat, skipping any that already has one
- *   5. print the truth: who is attended, who holds the baton, what the goal is
+ *   5. start one detached supervisor for those brains, skipping it if already running
+ *   6. print the truth: who is attended, who holds the baton, what the goal is
  *
  * Written because "initiate the bus" was five commands nobody could remember in order, and a
  * half-initiated bus looks identical to a working one until something needs to move.
@@ -245,6 +246,33 @@ for (const seat of brainSeats) {
     '--brain', brainFile
   ], logFile);
   log(`brain:${seat.padEnd(7)} started pid ${pid ?? '?'} -> ${logFile}`);
+}
+
+// A supervisor left as an operator-only command was no supervisor at all: the normal startup
+// path brought up brains and then left their deaths invisible. bus-up owns the exact root,
+// workdir, brain module and detached-seat set, so it is also the one place that can launch the
+// correct monitor without asking the operator to repeat configuration by hand.
+const supervisors = processesForRoot(listNodeProcesses(), root)
+  .filter((item) => item.type === 'supervisor');
+const matchingSupervisors = supervisors.filter((item) =>
+  samePath(item.workdir, workdir)
+  && samePath(item.brain, brainFile)
+  && [...item.seats].sort().join(',') === [...brainSeats].sort().join(','));
+if (supervisors.length === 1 && matchingSupervisors.length === 1) {
+  log('supervisor   already running');
+} else if (supervisors.length > 0) {
+  throw new Error(
+    `Found ${supervisors.length} supervisor process(es) for this root, but not exactly one for `
+    + `--workdir ${workdir}, --brain ${brainFile}, --seats ${brainSeats.join(',')}. Run bus-restart.`
+  );
+} else {
+  const supervisorLog = path.join(root, '.ai-bus', 'runtime', 'bus-supervise.log');
+  const supervisorPid = launchHidden(process.execPath, [
+    path.join(REPO, 'scripts', 'bus-supervise.js'),
+    '--root', root, '--workdir', workdir, '--brain', brainFile,
+    '--seats', brainSeats.join(',')
+  ], supervisorLog);
+  log(`supervisor   started pid ${supervisorPid ?? '?'} -> ${supervisorLog}`);
 }
 
 log('policy       brains remain active after each wake; clarification keeps the goal open');

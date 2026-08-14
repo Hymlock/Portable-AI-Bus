@@ -26,7 +26,8 @@ async function main() {
   if (!fs.statSync(workdir, { throwIfNoEntry: false })?.isDirectory()) throw new Error(`--workdir is not a directory: ${workdir}`);
 
   const exact = processesForRoot(listNodeProcesses(), root);
-  const owned = exact.filter((item) => item.type === 'harness' || item.type === 'brain');
+  const owned = exact.filter((item) =>
+    item.type === 'harness' || item.type === 'brain' || item.type === 'supervisor');
   process.stdout.write(`stopping     ${owned.length} exact-root process(es): ${owned.map((item) => item.pid).join(', ') || 'none'}\n`);
   await stopExactProcesses(owned);
 
@@ -40,13 +41,23 @@ async function main() {
 
   const after = processesForRoot(listNodeProcesses(), root);
   const harnesses = after.filter((item) => item.type === 'harness' && samePath(item.workdir, workdir));
+  const supervisors = after.filter((item) => item.type === 'supervisor'
+    && samePath(item.workdir, workdir)
+    && samePath(item.brain, brainFile)
+    && [...item.seats].sort().join(',') === [...brains].sort().join(','));
   const missing = brains.filter((seat) => !after.some(
     (item) => item.type === 'brain' && item.seat === seat && samePath(item.workdir, workdir) && samePath(item.brain, brainFile)
   ));
-  if (harnesses.length !== 1 || missing.length) {
-    throw new Error(`Restart verification failed: harnesses=${harnesses.length}; missing brains=${missing.join(',') || 'none'}`);
+  if (harnesses.length !== 1 || supervisors.length !== 1 || missing.length) {
+    throw new Error(
+      `Restart verification failed: harnesses=${harnesses.length}; supervisors=${supervisors.length}; `
+      + `missing brains=${missing.join(',') || 'none'}`
+    );
   }
-  process.stdout.write(`restart      verified exact root/workdir; harness ${harnesses[0].pid}; brains ${brains.join(',')}\n`);
+  process.stdout.write(
+    `restart      verified exact root/workdir; harness ${harnesses[0].pid}; `
+    + `supervisor ${supervisors[0].pid}; brains ${brains.join(',')}\n`
+  );
 
   const endpointPath = path.join(root, '.ai-bus', 'runtime', 'harness', 'endpoint.json');
   const leasesPath = path.join(root, '.ai-bus', 'runtime', 'harness', 'leases.json');

@@ -6,6 +6,8 @@ const path = require('node:path');
 const { resolveGrokCommand, resolveProvider, extractGrokAnswer } = require('../dist/brain/providers.js');
 const { chainProviders, classifyFailure } = require('../dist/brain/chain.js');
 
+const CAPTURED_MALFORMED = path.join(__dirname, 'fixtures', 'grok-malformed.txt');
+
 test('the REAL binary is resolved, not the unspawnable npm trampoline', () => {
   // %APPDATA%\npm\grok.cmd cannot be spawned by Node 24 at all. The real binary is unpacked to
   // ~/.grok/bin by postinstall. Resolving the shim looks like a successful resolution and then
@@ -118,6 +120,16 @@ test('a deeply wrapped structured reply reaches the plan instead of spending rep
   }
 
   assert.deepEqual(JSON.parse(extractGrokAnswer(wrapped).text), JSON.parse(plan));
+});
+
+test('the three captured malformed logs retain the double-encoded Grok envelope evidence', () => {
+  const captures = fs.readFileSync(CAPTURED_MALFORMED, 'utf8').trim().split(/\r?\n/).map(JSON.parse);
+  assert.equal(captures.length, 3);
+  for (const capture of captures) {
+    assert.equal(capture.event, 'malformed-plan');
+    assert.match(capture.snippet, /^\{\r\n  "text": "\{\s*\\"actions\\"/,
+      'fixture must preserve the escaped JSON string and CRLF envelope that failed live');
+  }
 });
 
 test('ConPTY visual wraps inside a long Grok JSON string are reversed', () => {

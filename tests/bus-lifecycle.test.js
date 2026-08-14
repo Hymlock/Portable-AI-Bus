@@ -36,6 +36,16 @@ test('exact-root selection never captures a same-seat process from another Bus',
   assert.equal(samePath(first.workdir, second.workdir), false);
 });
 
+test('supervisor identity includes the configuration bus-up uses for idempotence', () => {
+  const command = 'node C:\\kit\\scripts\\bus-supervise.js --root "C:\\bus root" --workdir "D:\\repo path" --brain "C:\\kit\\brains\\agent-seat.js" --seats codex,grok';
+  const identity = identifyNodeProcess({ pid: 43, commandLine: command });
+  assert.equal(identity.type, 'supervisor');
+  assert.equal(identity.root, 'C:\\bus root');
+  assert.equal(identity.workdir, 'D:\\repo path');
+  assert.deepEqual(identity.seats, ['codex', 'grok']);
+  assert.equal(identity.brain, 'C:\\kit\\brains\\agent-seat.js');
+});
+
 test('canonical path equality resolves trailing separators and directory links', async (t) => {
   const fixture = await fsp.mkdtemp(path.join(os.tmpdir(), 'portable-ai-bus-canonical-'));
   const target = path.join(fixture, 'target');

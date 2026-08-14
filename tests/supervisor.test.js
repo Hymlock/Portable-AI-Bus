@@ -6,6 +6,8 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 
 const SUPERVISOR = path.join(__dirname, '..', 'scripts', 'bus-supervise.js');
+const BUS_UP = path.join(__dirname, '..', 'scripts', 'bus-up.js');
+const BUS_RESTART = path.join(__dirname, '..', 'scripts', 'bus-restart.js');
 
 /**
  * The supervisor closes the one hole the architecture has admitted since day one: the runner
@@ -58,4 +60,24 @@ test('a dead seat is restarted with the SAME root and workdir it was given', () 
   const source = fs.readFileSync(SUPERVISOR, 'utf8');
   assert.match(source, /'--root', root, '--seat', seat, '--brain', brainFile, '--workdir', workdir/,
     'the supervisor must reproduce the original launch arguments exactly');
+});
+
+test('bus-up starts exactly one detached supervisor for its brain seats', () => {
+  const source = fs.readFileSync(BUS_UP, 'utf8');
+  assert.match(source, /type === 'supervisor'/,
+    'idempotent bus-up must detect an existing supervisor instead of spawning duplicates');
+  assert.match(source, /bus-supervise\.js/,
+    'the normal bus startup path must actually launch the shipped supervisor');
+  assert.match(source, /'--seats', brainSeats\.join\(','\)/,
+    'the supervisor must watch exactly the detached brains, never the live console seat');
+  assert.match(source, /supervisor[^\n]*already running|already supervised/i,
+    'operators need visible proof that supervision is active');
+});
+
+test('bus-restart replaces and verifies the supervisor with the rest of the runtime', () => {
+  const source = fs.readFileSync(BUS_RESTART, 'utf8');
+  assert.match(source, /item\.type === 'supervisor'/,
+    'restart must stop the old monitor rather than leave a mismatched supervisor behind');
+  assert.match(source, /supervisors\.length !== 1/,
+    'restart is not verified unless exactly one configured supervisor came back');
 });

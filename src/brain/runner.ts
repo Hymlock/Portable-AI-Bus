@@ -13,6 +13,10 @@ export type BusClient = {
   /** Blocks until mail arrives or the deadline passes. Resolves 'mail' or 'timeout'. */
   listen(seat: string, deadlineSeconds: number): Promise<'mail' | 'timeout'>;
   read(seat: string): Promise<BrainMessage[]>;
+  /** Peek without acknowledging. Used with acknowledge() for transactional wakes. */
+  peek?(seat: string): Promise<BrainMessage[]>;
+  /** Commit the unread messages after a usable turn. */
+  acknowledge?(seat: string, count: number): Promise<BrainMessage[]>;
   tools(seat: string): BrainTools;
 };
 
@@ -88,6 +92,10 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
   } = options;
   const isAck = (message: BrainMessage) =>
     ackKinds.includes(String((message as { kind?: unknown }).kind ?? '').trim().toLowerCase());
+  const transactional = typeof bus.peek === 'function' && typeof bus.acknowledge === 'function';
+  const receive = (target: string) => transactional ? bus.peek!(target) : bus.read(target);
+  const commit = (target: string, count: number) =>
+    transactional ? bus.acknowledge!(target, count) : Promise.resolve([]);
 
   let stopped = false;
   void stopSignal?.then(() => {
@@ -118,14 +126,14 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
       // holds a lease while genuinely blocked, so a loop that listens without draining spins and
       // leaves the seat unattended while reporting success. That is a real failure this project
       // hit twice; draining first makes it structurally impossible here.
-      let messages = await bus.read(seat);
+      let messages = await receive(seat);
 
       if (messages.length === 0 && reason !== 'startup' && !hasOpenWork) {
         const outcome = await bus.listen(seat, listenSeconds);
         if (stopped) break;
         reason = outcome === 'mail' ? 'mail' : 'timeout';
         if (outcome === 'mail') {
-          messages = await bus.read(seat);
+          messages = await receive(seat);
         }
       } else if (messages.length > 0) {
         reason = 'mail';
@@ -142,6 +150,7 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
       // counted, so nothing is lost and the log records that they arrived - they simply do not
       // earn a reply, which is the only property that ends the exchange.
       if (messages.length > 0 && messages.every(isAck)) {
+        await commit(seat, messages.length);
         log('wake-acks-only', {
           seat,
           messages: messages.length,
@@ -213,6 +222,14 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
         } catch (error) {
           log('exhausted-handler-failed', { seat, error: (error as Error)?.message });
         }
+      }
+
+      // Inbox delivery is transactional. A malformed provider response is not work: the task
+      // that paid for that wake stays unread and the next wake sees it again. Commit only after
+      // the brain says it obtained a usable plan. Legacy BusClient implementations without the
+      // peek/acknowledge pair retain their historical destructive-read behaviour.
+      if (messages.length > 0 && result.retainMessages !== true) {
+        await commit(seat, messages.length);
       }
 
       // Carry "unfinished" into the next iteration, but never past an exhausted chain: a seat

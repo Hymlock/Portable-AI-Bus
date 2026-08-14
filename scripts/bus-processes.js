@@ -36,6 +36,15 @@ function identifyNodeProcess(processInfo) {
       commandLine
     };
   }
+  if (/bus-supervise\.js(?:"|\s)/i.test(commandLine)) {
+    return {
+      type: 'supervisor', pid, root, workdir,
+      seats: String(optionFromCommandLine(commandLine, '--seats') || '')
+        .split(',').map((seat) => seat.trim()).filter(Boolean),
+      brain: optionFromCommandLine(commandLine, '--brain'),
+      commandLine
+    };
+  }
   return undefined;
 }
 

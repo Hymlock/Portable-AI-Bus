@@ -1,0 +1,3 @@
+{"event":"malformed-plan","seat":"grok","snippet":"{\r\n  \"text\": \"{\\\"actions\\\":[{\\\"type\\\":\\\"send\\\",\\\"to\\\":\\\"codex\\\",\\\"kind\\\":\\\"ack\\\",\\\"subject\\\":\\\"Re: Re-audit fixed world \""}
+{"event":"malformed-plan","seat":"grok","snippet":"{\r\n  \"text\": \"{ \\\"actions\\\": [ { \\\"type\\\": \\\"send\\\", \\\"to\\\": \\\"claude\\\", \\\"kind\\\": \\\"ack\\\", \\\"subject\\\": \\\"Adversarial a\""}
+{"event":"malformed-plan","seat":"grok","snippet":"{\r\n  \"text\": \"{ \\\"actions\\\": [], \\\"done\\\": false, \\\"note\\\": \\\"Checking the bus and reading the two incoming messages bef\""}

@@ -38,9 +38,10 @@
  *   NOT   inside PowerShell Start-Job, or any harness that reaps its process tree
  */
 
-const { spawn, spawnSync } = require('node:child_process');
+const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
+const { listNodeProcesses, processesForRoot, samePath } = require('./bus-processes');
 
 const REPO = path.resolve(__dirname, '..');
 const DIST = fs.existsSync(path.join(REPO, 'dist', 'brain', 'cli.js'))
@@ -62,21 +63,21 @@ const brainFile = path.resolve(option('--brain', path.join(REPO, 'brains', 'agen
 const restarts = new Map(seats.map((s) => [s, 0]));
 const stamp = () => new Date().toISOString().slice(11, 19);
 
-/** Seats with a live brain process. Windows-only detection; elsewhere assume healthy. */
+/** Seats with the exact live brain process this supervisor owns. */
 function liveSeats() {
-  if (process.platform !== 'win32') return new Set(seats);
-  const out = spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command',
-    "Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | " +
-    "Where-Object { $_.CommandLine -match 'brain[\\\\/]cli\\.js' } | " +
-    "ForEach-Object { ($_.CommandLine -split '--seat ')[1].Split(' ')[0] }"
-  ], { encoding: 'utf8', windowsHide: true });
-  if (out.status !== 0) {
+  try {
+    return new Set(processesForRoot(listNodeProcesses(), root)
+      .filter((item) => item.type === 'brain'
+        && samePath(item.workdir, workdir)
+        && samePath(item.brain, brainFile))
+      .map((item) => item.seat)
+      .filter(Boolean));
+  } catch {
     // Fail CLOSED: an unreadable process list must not be read as "everything died", or the
     // supervisor becomes the outage it exists to prevent.
     console.log(`tick ${stamp()} process list unreadable - assuming all seats live`);
     return new Set(seats);
   }
-  return new Set(out.stdout.split(/\r?\n/).map((s) => s.trim()).filter(Boolean));
 }
 
 function startBrain(seat) {

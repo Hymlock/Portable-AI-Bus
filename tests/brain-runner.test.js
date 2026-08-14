@@ -1,6 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { runBrain } = require('../dist/brain/runner.js');
+const { createAgentBrain } = require('../dist/brain/brains/index.js');
 
 function makeBus({ script = [] } = {}) {
   const queue = script.slice();
@@ -153,4 +154,75 @@ test('a failing handoff handler does not take the runner with it', async () => {
     onExhausted: async () => { throw new Error('mailbox unreachable'); }
   });
   assert.equal(summary.stoppedBy, 'maxWakes', 'a broken handoff is not a reason to die');
+});
+
+function transactionalBus(message, injectOnAcknowledge) {
+  let unread = message ? [message] : [];
+  let acknowledgements = 0;
+  return {
+    get unread() { return unread.slice(); },
+    get acknowledgements() { return acknowledgements; },
+    client: {
+      async listen() { return unread.length ? 'mail' : 'timeout'; },
+      async peek() { return unread.slice(); },
+      async acknowledge(_seat, count) {
+        acknowledgements += 1;
+        if (injectOnAcknowledge) unread.push(injectOnAcknowledge);
+        const batch = unread.slice(0, count);
+        unread = unread.slice(count);
+        return batch;
+      },
+      async read() { throw new Error('transactional runner must not destructively read before the turn'); },
+      tools() {
+        return {
+          async send() { return { ok: true }; },
+          async status() { return { agents: ['claude', 'codex', 'grok'] }; },
+          async claim() { return {}; },
+          async release() { return {}; },
+          async runCapability() { return {}; },
+          async listCapabilities() { return []; }
+        };
+      }
+    }
+  };
+}
+
+function oneReply(text) {
+  return {
+    kind: 'test',
+    async ask() { return { text, isError: false }; }
+  };
+}
+
+test('a malformed model wake leaves its input unread, while a usable plan consumes it', async () => {
+  const task = { seq: 91, from: 'claude', to: 'codex', kind: 'task', subject: 'audit', body: 'inspect it' };
+
+  const malformedBus = transactionalBus(task);
+  const malformedBrain = createAgentBrain({
+    seat: 'codex', provider: oneReply('this is not a JSON plan'), maxRounds: 1
+  });
+  await runBrain({ seat: 'codex', brain: malformedBrain, bus: malformedBus.client, maxWakes: 1 });
+  assert.equal(malformedBus.unread.length, 1,
+    'parse failure must cost a retry, not destroy the task that paid for the wake');
+  assert.equal(malformedBus.acknowledgements, 0);
+
+  const goodBus = transactionalBus(task);
+  const goodBrain = createAgentBrain({
+    seat: 'codex',
+    provider: oneReply(JSON.stringify({
+      actions: [{ type: 'send', to: 'claude', kind: 'report', subject: 'result', body: 'verified' }],
+      done: true
+    })),
+    maxRounds: 1
+  });
+  await runBrain({ seat: 'codex', brain: goodBrain, bus: goodBus.client, maxWakes: 1 });
+  assert.equal(goodBus.unread.length, 0, 'a usable plan must commit the read');
+  assert.equal(goodBus.acknowledgements, 1,
+    'the inverse prevents a vacuous implementation that never consumes mail');
+
+  const late = { ...task, seq: 92, subject: 'arrived during model call' };
+  const racingBus = transactionalBus(task, late);
+  await runBrain({ seat: 'codex', brain: goodBrain, bus: racingBus.client, maxWakes: 1 });
+  assert.deepEqual(racingBus.unread.map((item) => item.seq), [92],
+    'committing the presented batch must not consume mail that arrived during the model call');
 });
