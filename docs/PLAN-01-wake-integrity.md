@@ -167,7 +167,13 @@ Two process notes from that attempt, both mistakes worth not repeating:
   wrong about its evidence, and the planner dismissed it.
 - **A stalled provider call starves the listen loop** — a seat that cannot answer also cannot
   receive, and accumulates unread work while reporting a healthy provider chain.
-- **A restarted brain does not drain retained mail** until new mail arrives.
+- ~~A restarted brain does not drain retained mail until new mail arrives.~~ **WRONG — this defect
+  did not exist.** The implementer checked before building and found the drain-before-listen
+  implementation already satisfied both directions, then added the regression coverage instead of
+  inventing a source rewrite (`bc94e5a`, 318 tests). What was actually observed — codex holding 3
+  unread at 11:29 and grok 5 at 12:13 — was the **starvation bug** (`760c17c`): those brains were
+  wedged in stalled provider calls and never reached the listen loop at all. One defect, two
+  symptoms, filed as two bugs by the planner.
 - **`node-pty` is fragile under concurrent `npm install`** — destroyed three times in one day via
   `EBUSY` on `conpty.node`, leaving a half-deleted module and "ConPTY unavailable" on every call.
   Stop the brains, remove `node_modules/.node-pty-*`, then install.
