@@ -337,7 +337,16 @@ export type PlanFailure = {
 export type ExecutePlanOptions = {
   claimRetryDelaysMs?: number[];
   sleep?: (milliseconds: number) => Promise<void>;
+  /** Action ids already committed for retained mail in an earlier wake. */
+  completedActionIds?: ReadonlySet<string>;
+  /** Records each side effect immediately after the bus accepts it. */
+  onActionCommitted?: (id: string) => void;
 };
+
+function actionSignature(action: BrainAction): string {
+  const ordered = Object.fromEntries(Object.entries(action).sort(([left], [right]) => left.localeCompare(right)));
+  return JSON.stringify(ordered);
+}
 
 /**
  * Did a bus tool refuse this call?
@@ -422,7 +431,15 @@ export async function executePlan(
     };
   };
 
+  const actionOccurrences = new Map<string, number>();
   for (const action of plan.actions) {
+    const signature = actionSignature(action);
+    const occurrence = actionOccurrences.get(signature) ?? 0;
+    actionOccurrences.set(signature, occurrence + 1);
+    // The occurrence distinguishes intentionally repeated identical actions while remaining
+    // stable if a retry reorders unrelated actions in the plan.
+    const id = `${occurrence}:${signature}`;
+    if (options.completedActionIds?.has(id)) continue;
     switch (action.type) {
       case 'send': {
         const { to, problem } = resolveRecipient(action.to);
@@ -437,6 +454,7 @@ export async function executePlan(
           failures.push(failure);
           return failures;
         }
+        options.onActionCommitted?.(id);
         // Recipient fallback is a completed delivery, not a refused tool call. Record the
         // addressing defect only after the report has safely reached the assigning seat.
         if (problem) {
@@ -456,6 +474,7 @@ export async function executePlan(
           failures.push(failure);
           return failures;
         }
+        options.onActionCommitted?.(id);
         break;
       }
       case 'release': {
@@ -464,6 +483,7 @@ export async function executePlan(
           failures.push(failure);
           return failures;
         }
+        options.onActionCommitted?.(id);
         break;
       }
       case 'capability': {
@@ -475,9 +495,11 @@ export async function executePlan(
           failures.push(failure);
           return failures;
         }
+        options.onActionCommitted?.(id);
         break;
       }
       case 'done':
+        options.onActionCommitted?.(id);
         break;
       default:
         break;
@@ -518,11 +540,33 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
     log = () => {}
   } = options;
 
+  // A retained message may be presented again in a later wake. Record accepted side effects
+  // by message and action identity so a later provider replay cannot deliver them twice.
+  // The runner calls settleMessages when it commits or parks the message, bounding this state.
+  const completedByMessage = new Map<number, Set<string>>();
+
   return {
     name: 'agent',
 
+    settleMessages(seqs) {
+      for (const seq of seqs) completedByMessage.delete(seq);
+    },
+
     async takeTurn(context: WakeContext): Promise<WakeResult> {
       const { messages, openWork, tools } = context;
+      const messageSeqs = messages.map((message) => message.seq);
+      const completedActionIds = new Set<string>();
+      for (const seq of messageSeqs) {
+        for (const id of completedByMessage.get(seq) ?? []) completedActionIds.add(id);
+      }
+      const recordCommittedAction = (id: string) => {
+        completedActionIds.add(id);
+        for (const seq of messageSeqs) {
+          let completed = completedByMessage.get(seq);
+          if (!completed) completedByMessage.set(seq, completed = new Set());
+          completed.add(id);
+        }
+      };
       let sessionId: string | undefined;
       let lastNote = '';
       let servedBy: string | undefined;
@@ -627,7 +671,11 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
         const failures = await executePlan(tools, filtered, {
           seats: knownSeats,
           fallbackTo: messages.find((m) => knownSeats.includes(m.from))?.from ?? 'hymlock'
-        }, executePlanOptions);
+        }, {
+          ...executePlanOptions,
+          completedActionIds,
+          onActionCommitted: recordCommittedAction
+        });
         if (attemptedReceipt && !failures.some((failure) => failure.action.startsWith('send to '))) {
           receiptSent = true;
         }
@@ -715,7 +763,11 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
         if (reply.sessionId) sessionId = reply.sessionId;
         const { plan, malformed } = parsePlan(reply.text);
         if (malformed) {
-          log('malformed-plan', { seat, snippet: reply.text.slice(0, 120) });
+          log('malformed-plan', {
+            seat,
+            payload: reply.text.slice(0, 65_536),
+            truncated: reply.text.length > 65_536
+          });
           // One retry with a repair prompt; if still bad, receipt-only.
           if (round + 1 < maxRounds) {
             let repair: ModelReply | ChainReply;

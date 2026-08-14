@@ -63,6 +63,24 @@ test('parsePlan accepts bare JSON and rejects fences-without-object as malformed
   assert.equal(prose.plan.note, 'no-json-object');
 });
 
+test('DELTA I: malformed-plan logging retains a reparsable payload', async () => {
+  const malformed = `prefix ${'x'.repeat(200)} {not-json}`;
+  const events = [];
+  const brain = createAgentBrain({
+    seat: 'codex', maxRounds: 1,
+    provider: { kind: 'test', async ask() { return { text: malformed, isError: false }; } },
+    log: (event, data) => events.push({ event, data })
+  });
+  await brain.takeTurn({
+    seat: 'codex', reason: 'mail', messages: [{ ...msg(8), to: 'codex', kind: 'task' }],
+    tools: { ...tools().api, async listCapabilities() { return []; } }, budget: 10, log: () => {}
+  });
+
+  const event = events.find((entry) => entry.event === 'malformed-plan');
+  assert.equal(event.data.payload, malformed);
+  assert.equal(event.data.truncated, false);
+});
+
 test('DELTA G: persistent claim conflict is blocked, bounded, and fail-fast', async () => {
   let claims = 0;
   let sends = 0;

@@ -156,7 +156,7 @@ test('a failing handoff handler does not take the runner with it', async () => {
   assert.equal(summary.stoppedBy, 'maxWakes', 'a broken handoff is not a reason to die');
 });
 
-function transactionalBus(message, injectOnAcknowledge) {
+function transactionalBus(message, injectOnAcknowledge, toolOverrides = {}) {
   let unread = Array.isArray(message) ? message.slice() : message ? [message] : [];
   const parked = [];
   let acknowledgements = 0;
@@ -190,7 +190,8 @@ function transactionalBus(message, injectOnAcknowledge) {
           async claim() { return {}; },
           async release() { return {}; },
           async runCapability() { return {}; },
-          async listCapabilities() { return []; }
+          async listCapabilities() { return []; },
+          ...toolOverrides
         };
       }
     }
@@ -306,18 +307,66 @@ test('DELTA G: blocked work retains mail without spending poison attempts and ca
   assert.equal(contexts[1].openWork, 'claim blocked: grok holds src/brain');
 });
 
-test('DELTA G: genuine action failure retains mail and follows bounded poison handling', async () => {
-  const task = { seq: 116, from: 'claude', to: 'codex', kind: 'task', subject: 'failure', body: 'work' };
+test('DELTA I: blocked work escalates after its separate bounded retry budget', async () => {
+  const task = { seq: 117, from: 'claude', to: 'codex', kind: 'task', subject: 'blocked forever', body: 'work' };
   const fixture = transactionalBus(task);
+  const events = [];
+  const backoffs = [];
+  let providerCalls = 0;
   const brain = {
-    name: 'failed-action',
+    name: 'blocked',
     async takeTurn() {
-      return { done: false, retainMessages: true, note: 'action-failed: internal_error' };
+      providerCalls += 1;
+      return { done: false, retainMessages: true, blocked: true, note: 'claim blocked: grok holds src/brain' };
     }
   };
 
+  await runBrain({
+    seat: 'codex', brain, bus: fixture.client, maxWakes: 5, maxBlockedAttempts: 3,
+    blockedBackoffMs: 30_000, sleep: async (milliseconds) => { backoffs.push(milliseconds); },
+    log: (event, data) => events.push({ event, data })
+  });
+
+  assert.equal(providerCalls, 3, 'parking must terminate paid blocked retries');
+  assert.deepEqual(backoffs, [30_000, 30_000]);
+  assert.equal(fixture.unread.length, 0);
+  assert.deepEqual(fixture.parked.map((message) => message.seq), [117]);
+  assert.match(fixture.parked[0].parkedReason, /blocked after 3 cycles/);
+  assert.equal(events.filter((entry) => entry.event === 'message-blocked-escalated').length, 1);
+  assert.equal(events.some((entry) => entry.event === 'message-retry'), false,
+    'blocked cycles remain separate from poison-input attempts');
+});
+
+test('DELTA I: real agent retains failed mail and does not replay a committed send across wakes', async () => {
+  const task = { seq: 116, from: 'claude', to: 'codex', kind: 'task', subject: 'failure', body: 'work' };
+  let sends = 0;
+  let claims = 0;
+  const fixture = transactionalBus(task, undefined, {
+    async send() { sends += 1; return { ok: true }; },
+    async claim() {
+      claims += 1;
+      return { error: 'claim service failed', status: 500, code: 'internal_error', retriable: false };
+    }
+  });
+  const plan = JSON.stringify({
+    actions: [
+      { type: 'send', to: 'claude', kind: 'report', subject: 'partial result', body: 'evidence landed' },
+      { type: 'claim', paths: ['src/brain'], why: 'continue work' }
+    ],
+    done: false
+  });
+  let providerCalls = 0;
+  const brain = createAgentBrain({
+    seat: 'codex', maxRounds: 1,
+    provider: { kind: 'test', async ask() { providerCalls += 1; return { text: plan, isError: false }; } },
+    executePlanOptions: { claimRetryDelaysMs: [], sleep: async () => {} }
+  });
+
   await runBrain({ seat: 'codex', brain, bus: fixture.client, maxWakes: 2, maxMessageAttempts: 2 });
 
+  assert.equal(providerCalls, 2);
+  assert.equal(sends, 1, 'the send accepted in wake one must be skipped when the plan is replayed');
+  assert.equal(claims, 2, 'the refused action itself remains retryable');
   assert.equal(fixture.unread.length, 0);
   assert.deepEqual(fixture.parked.map((message) => message.seq), [116]);
 });

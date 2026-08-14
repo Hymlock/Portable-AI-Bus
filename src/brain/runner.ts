@@ -45,6 +45,8 @@ export type RunnerOptions = {
   maxMessageAttempts?: number;
   /** Delay between continuation wakes while an external claim remains blocked. */
   blockedBackoffMs?: number;
+  /** Blocked delivery cycles allowed before the message is visibly parked for intervention. */
+  maxBlockedAttempts?: number;
   /** Injected by tests so blocked-backoff coverage does not sleep in real time. */
   sleep?: (milliseconds: number) => Promise<void>;
   /**
@@ -86,6 +88,7 @@ const DEFAULT_BUDGET = 30;
 const DEFAULT_LISTEN_SECONDS = 300;
 const DEFAULT_ACK_KINDS = ['ack', 'receipt', 'ping'];
 const DEFAULT_MAX_MESSAGE_ATTEMPTS = 3;
+const DEFAULT_MAX_BLOCKED_ATTEMPTS = 3;
 
 export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
   const {
@@ -96,6 +99,7 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
     listenSeconds = DEFAULT_LISTEN_SECONDS,
     maxWakes,
     maxMessageAttempts = DEFAULT_MAX_MESSAGE_ATTEMPTS,
+    maxBlockedAttempts = DEFAULT_MAX_BLOCKED_ATTEMPTS,
     blockedBackoffMs = 30_000,
     sleep = (milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)),
     ackKinds = DEFAULT_ACK_KINDS,
@@ -108,6 +112,9 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
   }
   if (!Number.isSafeInteger(blockedBackoffMs) || blockedBackoffMs < 0) {
     throw new Error('blockedBackoffMs must be a non-negative integer');
+  }
+  if (!Number.isSafeInteger(maxBlockedAttempts) || maxBlockedAttempts < 1) {
+    throw new Error('maxBlockedAttempts must be a positive integer');
   }
   const isAck = (message: BrainMessage) =>
     ackKinds.includes(String((message as { kind?: unknown }).kind ?? '').trim().toLowerCase());
@@ -128,6 +135,7 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
   // Process-scoped on purpose. A runner restart gives retained mail a fresh budget; persistent
   // counters would let an old provider outage consume a message's future attempts forever.
   const failedAttempts = new Map<number, number>();
+  const blockedAttempts = new Map<number, number>();
   let reason: WakeReason = 'startup';
   /**
    * Did the last turn end with work still to do?
@@ -259,17 +267,43 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
       // that paid for that wake stays unread and the next wake sees it again. Commit only after
       // the brain says it obtained a usable plan. Legacy BusClient implementations without the
       // peek/acknowledge pair retain their historical destructive-read behaviour.
+      let blockedEscalated = false;
       if (messages.length > 0 && result.retainMessages !== true) {
         await commit(seat, messages.length);
+        await brain.settleMessages?.(messages.map((message) => message.seq), 'committed');
         for (const message of messages) {
+          blockedAttempts.delete(message.seq);
           const attempts = failedAttempts.get(message.seq);
           if (attempts !== undefined) {
             failedAttempts.delete(message.seq);
             log('message-retry-cleared', { seat, seq: message.seq, attempts });
           }
         }
-      } else if (messages.length > 0 && transactional && result.blocked !== true) {
+      } else if (messages.length > 0 && transactional && result.blocked === true) {
         for (const message of messages) {
+          const attempts = (blockedAttempts.get(message.seq) ?? 0) + 1;
+          blockedAttempts.set(message.seq, attempts);
+          log('message-blocked', { seat, seq: message.seq, attempts, maxAttempts: maxBlockedAttempts, note: result.note });
+          if (attempts >= maxBlockedAttempts) {
+            const detail = result.note?.trim() || 'external condition remained blocked';
+            const parkReason = `blocked after ${attempts} cycles: ${detail}`;
+            if (bus.park) await bus.park(seat, message.seq, parkReason);
+            else await commit(seat, 1);
+            blockedAttempts.delete(message.seq);
+            failedAttempts.delete(message.seq);
+            await brain.settleMessages?.([message.seq], 'parked');
+            summary.parkedMessages += 1;
+            blockedEscalated = true;
+            log('message-blocked-escalated', {
+              seat, seq: message.seq, from: message.from, kind: message.kind,
+              subject: message.subject, attempts, reason: parkReason,
+              recovery: `original mailbox record retained; run mailbox requeue --for ${seat} --seq ${message.seq} to retry`
+            });
+          }
+        }
+      } else if (messages.length > 0 && transactional) {
+        for (const message of messages) {
+          blockedAttempts.delete(message.seq);
           const attempts = (failedAttempts.get(message.seq) ?? 0) + 1;
           failedAttempts.set(message.seq, attempts);
           log('message-retry', { seat, seq: message.seq, attempts, maxAttempts: maxMessageAttempts });
@@ -280,6 +314,7 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
             if (bus.park) await bus.park(seat, message.seq, parkReason);
             else await commit(seat, 1);
             failedAttempts.delete(message.seq);
+            await brain.settleMessages?.([message.seq], 'parked');
             summary.parkedMessages += 1;
             log('message-parked', {
               seat,
@@ -304,7 +339,7 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
       // `done: false, capped: true` - honest unfinished work, and refusing to continue it
       // stranded a seat whose own note read "Audit is open". The runner's own budget breach is
       // the dangerous one, and it is already excluded because that path sets `done: true`.
-      hasOpenWork = result.done === false && !result.exhausted;
+      hasOpenWork = result.done === false && !result.exhausted && !blockedEscalated;
       if (hasOpenWork) {
         const nextOpenWork = result.note?.trim();
         // A later partial step may omit its note. Retain the last useful summary rather than
@@ -330,7 +365,7 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
       // Retained mail makes listen return immediately, so a blocked claim needs its own wake
       // boundary delay. Without it, each continuation asks the provider again at full speed
       // while another seat legitimately holds the path.
-      if (result.blocked && blockedBackoffMs > 0 && !stopped) {
+      if (result.blocked && !blockedEscalated && blockedBackoffMs > 0 && !stopped) {
         log('wake-blocked-backoff', { seat, milliseconds: blockedBackoffMs, note: result.note });
         await sleep(blockedBackoffMs);
       }

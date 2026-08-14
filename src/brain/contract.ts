@@ -114,6 +114,8 @@ export type Brain = {
   start?(): Promise<void>;
   /** Optional: called on shutdown, best-effort. */
   stop?(): Promise<void>;
+  /** Forget per-message execution state after the runner commits or parks that mail. */
+  settleMessages?(seqs: number[], outcome: 'committed' | 'parked'): Promise<void> | void;
 };
 
 export type BrainFactory = (options: {
