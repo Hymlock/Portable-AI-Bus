@@ -42,3 +42,11 @@ test('model-backed providers receive the explicit repository workdir', () => {
     [{ kind: 'grok', grok: { cwd: 'C:\\repo' } }]
   );
 });
+
+test('the Grok extractor diagnostic is wired to the brain log', () => {
+  const log = () => {};
+  assert.deepEqual(
+    providerConfigs({ PORTABLE_AI_BUS_PROVIDER_CHAIN: 'grok' }, 'grok', 'C:\\repo', log),
+    [{ kind: 'grok', grok: { cwd: 'C:\\repo', log } }]
+  );
+});

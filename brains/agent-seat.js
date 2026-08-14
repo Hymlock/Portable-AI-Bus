@@ -30,7 +30,7 @@ const VENDOR_BY_SEAT = {
   grok: 'xAI'
 };
 
-function providerConfigs(env = process.env, seat = 'default', workdir) {
+function providerConfigs(env = process.env, seat = 'default', workdir, log) {
   const seatVendor = VENDOR_BY_SEAT[seat];
   if (!seatVendor) {
     throw new Error(`Unknown funded seat: ${seat}. Expected one of ${Object.keys(VENDOR_BY_SEAT).join(', ')}.`);
@@ -54,7 +54,7 @@ function providerConfigs(env = process.env, seat = 'default', workdir) {
     if (!workdir) return { kind };
     if (kind === 'cli') return { kind, cli: { cwd: workdir } };
     if (kind === 'codex') return { kind, codex: { cwd: workdir } };
-    if (kind === 'grok') return { kind, grok: { cwd: workdir } };
+    if (kind === 'grok') return { kind, grok: { cwd: workdir, ...(log ? { log } : {}) } };
     return { kind };
   });
 }
@@ -73,7 +73,9 @@ const SYSTEM = [
 ].join('\n');
 
 module.exports = ({ seat, root, workdir = root, log }) => {
-  const provider = resolveChain(providerConfigs(process.env, seat, workdir), { log });
+  // The chain and the provider adapter both emit evidence. Pass the same brain logger into the
+  // Grok adapter so `grok-extract-fellback` cannot silently disappear behind its no-op default.
+  const provider = resolveChain(providerConfigs(process.env, seat, workdir, log), { log });
   const brain = createAgentBrain({ seat, provider, log, systemPrompt: SYSTEM });
   return {
     ...brain,

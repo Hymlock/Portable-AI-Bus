@@ -231,3 +231,8 @@ test('the parser handles the other shapes the CLI can emit', () => {
   assert.equal(failed.text, '');
   assert.equal(failed.error, 'Not signed in.');
 });
+
+test('an empty cancelled envelope is a provider error, not raw malformed-plan text', () => {
+  const cancelled = extractGrokAnswer(JSON.stringify({ text: '', stopReason: 'cancelled' }, null, 2));
+  assert.deepEqual(cancelled, { text: '', error: 'cancelled' });
+});

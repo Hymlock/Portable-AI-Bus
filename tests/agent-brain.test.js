@@ -1,5 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const fs = require('node:fs');
+const path = require('node:path');
 const { chainProviders } = require('../dist/brain/chain.js');
 const {
   createAgentBrain,
@@ -200,6 +202,58 @@ test('parsePlan unwraps provider answer envelopes at the final safety boundary',
   assert.equal(parsed.plan.actions[0].type, 'send');
 });
 
+test('parsePlan directly peels pretty Grok envelopes with compact and spaced plans', () => {
+  const compact = JSON.stringify({
+    actions: [{ type: 'send', to: 'claude', kind: 'report', subject: 'compact', body: 'verified' }],
+    done: true
+  });
+  const spaced = '{ "actions": [ { "type": "send", "to": "claude", "kind": "report", ' +
+    '"subject": "spaced", "body": "verified" } ], "done": true }';
+
+  for (const inner of [compact, spaced]) {
+    const document = JSON.stringify({ text: inner, stopReason: 'end_turn' }, null, 2);
+    const parsed = parsePlan(document);
+    assert.equal(parsed.malformed, false);
+    assert.equal(parsed.plan.actions.length, 1);
+    assert.equal(parsed.plan.actions[0].kind, 'report');
+  }
+});
+
+test('parsePlan directly reverses live 123-byte terminal wraps in a prefixed pretty envelope', () => {
+  const plan = JSON.stringify({
+    actions: [{
+      type: 'send', to: 'claude', kind: 'report', subject: 'wrapped',
+      body: 'The exact provider payload remains intact. '.repeat(40)
+    }],
+    done: true
+  });
+  const encoded = JSON.stringify(plan);
+  const wrapped = encoded.match(/.{1,123}/gs).join('\r\n');
+  const document = [
+    'WARN auto-worktree cleanup failed',
+    '{',
+    `  "text": ${wrapped},`,
+    '  "stopReason": "end_turn"',
+    '}'
+  ].join('\r\n');
+
+  const parsed = parsePlan(document);
+  assert.equal(parsed.malformed, false);
+  assert.deepEqual(parsed.plan.actions, JSON.parse(plan).actions);
+});
+
+test('historical ConPTY-corrupted Grok documents remain rejected, not speculatively healed', () => {
+  for (const name of [
+    'grok-conpty-corrupted-event-99.txt',
+    'grok-conpty-corrupted-event-100.txt'
+  ]) {
+    const document = fs.readFileSync(path.join(__dirname, 'fixtures', name), 'utf8');
+    const parsed = parsePlan(document);
+    assert.equal(parsed.malformed, true, `${name} must remain malformed`);
+    assert.equal(parsed.plan.note, 'no-json-object');
+  }
+});
+
 test('parsePlan takes the last valid plan from concatenated provider envelopes', () => {
   const progress = JSON.stringify({
     actions: [{ type: 'send', to: 'codex', kind: 'progress', subject: 'working', body: 'still auditing' }],
@@ -357,6 +411,35 @@ test('ATTACK: malformed model output yields receipt-only, not a throw', async ()
   assert.equal(sent.length, 1, 'echo receipt must still fire');
   assert.equal(sent[0].kind, 'ack');
   assert.match(sent[0].subject, /#3/);
+});
+
+test('an empty cancelled provider reply is a provider error and never enters malformed repair', async () => {
+  const { api, sent } = tools();
+  const events = [];
+  let calls = 0;
+  const brain = createAgentBrain({
+    seat: 'grok',
+    maxRounds: 2,
+    provider: {
+      kind: 'grok',
+      async ask() {
+        calls += 1;
+        return { text: 'cancelled', isError: true };
+      }
+    },
+    log: (event, data) => events.push({ event, data })
+  });
+
+  const result = await brain.takeTurn({
+    seat: 'grok', reason: 'mail', messages: [msg(20)], tools: api, budget: 10, log: () => {}
+  });
+
+  assert.equal(calls, 1, 'provider errors must not buy a malformed-plan repair call');
+  assert.equal(result.note, 'provider-error-reply');
+  assert.equal(result.retainMessages, true);
+  assert.equal(events.some(({ event }) => event === 'provider-error-reply'), true);
+  assert.equal(events.some(({ event }) => event === 'malformed-plan'), false);
+  assert.equal(sent.length, 1, 'the durable receipt still records that the task was heard');
 });
 
 test('ATTACK: slow-but-successful first link is not abandoned', async () => {

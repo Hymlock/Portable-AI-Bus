@@ -568,6 +568,12 @@ export function extractGrokAnswer(stdout: string): { text: string; error?: strin
     if (value.type === 'error' && typeof value.message === 'string') {
       return { text: '', error: value.message };
     }
+    // A cancelled Grok turn is an explicit provider failure, not an empty answer and not the
+    // raw JSON envelope. Returning the envelope used to send a known provider cancellation into
+    // parsePlan, where it was logged as malformed and bought a repair call that could not help.
+    if (typeof value.text === 'string' && !value.text.trim() && value.stopReason === 'cancelled') {
+      return { text: '', error: 'cancelled' };
+    }
     // With --json-schema Grok may emit the structured answer directly, without a `text`
     // envelope. Treating this as an unknown event falls through to the original ConPTY bytes,
     // undoing `undoTerminalStringWraps` and making a valid long plan malformed again.
