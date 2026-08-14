@@ -3,14 +3,37 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { listNodeProcesses, processesForRoot, samePath, stopExactProcesses } = require('./bus-processes');
+const { staleCodeWarning } = require('./bus-supervise');
+
+const REPO = path.resolve(__dirname, '..');
+const DIST = fs.existsSync(path.join(REPO, 'dist', 'brain', 'cli.js'))
+  ? path.join(REPO, 'dist')
+  : path.join(REPO, 'bin');
 
 function option(name, fallback) {
   const index = process.argv.indexOf(name);
   return index >= 0 && index + 1 < process.argv.length ? process.argv[index + 1] : fallback;
 }
 
+/**
+ * A lease proves that a seat is currently between receiving and completing a wake, not that its
+ * brain is alive. Verify the long-lived process and the code marker it writes after loading
+ * instead, so a busy seat and a genuinely dead seat cannot be confused.
+ */
+function unreadyBrainCodeMarkers({ root, brains, processes, distRoot = DIST }) {
+  return brains.filter((seat) => {
+    const running = processes.find((item) => item.seat === seat);
+    return !running || Boolean(staleCodeWarning({
+      coordinationRoot: root,
+      seat,
+      pid: running.pid,
+      distRoot
+    }));
+  });
+}
+
 async function main() {
-  const repo = path.resolve(__dirname, '..');
+  const repo = REPO;
   const root = path.resolve(option('--root', process.cwd()));
   const workdir = path.resolve(option('--workdir', root));
   // Same rule as bus-up: any funded vendor can pilot the chat interface, and the OTHER TWO spin
@@ -59,26 +82,28 @@ async function main() {
     + `supervisor ${supervisors[0].pid}; brains ${brains.join(',')}\n`
   );
 
-  const endpointPath = path.join(root, '.ai-bus', 'runtime', 'harness', 'endpoint.json');
-  const leasesPath = path.join(root, '.ai-bus', 'runtime', 'harness', 'leases.json');
   const deadline = Date.now() + leaseTimeoutMs;
-  let missingLeases = [...brains];
+  let unreadyBrains = [...brains];
   while (Date.now() < deadline) {
-    const endpoint = JSON.parse(fs.readFileSync(endpointPath, 'utf8'));
-    const state = JSON.parse(fs.readFileSync(leasesPath, 'utf8'));
-    const now = Date.now();
-    missingLeases = brains.filter((seat) => !(state.leases || []).some((lease) => {
-      const lastSeen = Date.parse(lease.lastHeartbeatAt || lease.lastWakeAt || lease.firstSeenAt || '');
-      return lease.seat === seat && lease.instanceId === endpoint.instanceId && Number.isFinite(lastSeen) && now - lastSeen < 60_000;
-    }));
-    if (missingLeases.length === 0) break;
+    const current = processesForRoot(listNodeProcesses(), root)
+      .filter((item) => item.type === 'brain'
+        && samePath(item.workdir, workdir)
+        && samePath(item.brain, brainFile));
+    unreadyBrains = unreadyBrainCodeMarkers({ root, brains, processes: current });
+    if (unreadyBrains.length === 0) break;
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);
   }
-  if (missingLeases.length) throw new Error(`Fresh lease verification timed out for: ${missingLeases.join(', ')}`);
-  process.stdout.write(`leases       fresh and instance-bound: ${brains.join(',')}\n`);
+  if (unreadyBrains.length) {
+    throw new Error(`Brain/code verification timed out for: ${unreadyBrains.join(', ')}`);
+  }
+  process.stdout.write(`brains       live with matching loaded-code markers: ${brains.join(',')}\n`);
 }
 
-main().catch((error) => {
-  process.stderr.write(`bus-restart FAILED: ${error.message}\n`);
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  main().catch((error) => {
+    process.stderr.write(`bus-restart FAILED: ${error.message}\n`);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = { unreadyBrainCodeMarkers };

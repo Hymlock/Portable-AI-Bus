@@ -9,6 +9,7 @@ const SUPERVISOR = path.join(__dirname, '..', 'scripts', 'bus-supervise.js');
 const BUS_UP = path.join(__dirname, '..', 'scripts', 'bus-up.js');
 const BUS_RESTART = path.join(__dirname, '..', 'scripts', 'bus-restart.js');
 const { staleCodeWarning } = require(SUPERVISOR);
+const { unreadyBrainCodeMarkers } = require(BUS_RESTART);
 
 /**
  * The supervisor closes the one hole the architecture has admitted since day one: the runner
@@ -81,6 +82,32 @@ test('bus-restart replaces and verifies the supervisor with the rest of the runt
     'restart must stop the old monitor rather than leave a mismatched supervisor behind');
   assert.match(source, /supervisors\.length !== 1/,
     'restart is not verified unless exactly one configured supervisor came back');
+});
+
+test('bus-restart verifies a live brain by its matching loaded-code marker, not an active lease', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'portable-ai-bus-restart-marker-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const distRoot = path.join(root, 'dist');
+  fs.mkdirSync(path.join(root, '.ai-bus', 'runtime'), { recursive: true });
+  fs.mkdirSync(path.join(distRoot, 'brain'), { recursive: true });
+  fs.writeFileSync(path.join(distRoot, 'brain', 'cli.js'), 'loaded code');
+  const loadedDistMtimeMs = fs.statSync(path.join(distRoot, 'brain', 'cli.js')).mtimeMs;
+  fs.writeFileSync(path.join(root, '.ai-bus', 'runtime', 'brain-grok.code.json'), JSON.stringify({
+    pid: 4242,
+    distRoot,
+    loadedDistMtimeMs
+  }));
+
+  assert.deepEqual(unreadyBrainCodeMarkers({
+    root,
+    brains: ['grok'],
+    processes: [{ seat: 'grok', pid: 4242 }],
+    distRoot
+  }), []);
+
+  const source = fs.readFileSync(BUS_RESTART, 'utf8');
+  assert.doesNotMatch(source, /leases\.json|Fresh lease verification/,
+    'a healthy but busy seat may have no ACTIVE lease between wakes');
 });
 
 test('it names a live seat whose loaded dist is older than dist on disk', () => {
