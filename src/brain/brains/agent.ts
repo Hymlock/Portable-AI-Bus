@@ -131,9 +131,16 @@ export const PLAN_SCHEMA = {
 // rather than our own overflow.
 //
 // A 32 KiB per-field allowance therefore let ONE message consume the entire process budget before
-// the system prompt, action schema, roster and capability lines were added, and it took both seats
-// off the bus. 12 KiB admits the 5-7 KiB briefs this Bus routinely carries while leaving the rest
-// of the command line for everything wrapped around them.
+// the system prompt, action schema, roster and capability lines were added. 12 KiB admits the
+// 5-7 KiB briefs this Bus routinely carries while leaving the rest of the command line for
+// everything wrapped around them.
+//
+// CORRECTION, measured after the fix landed: this was a LATENT hazard, not the outage of
+// 2026-08-14. Sampling the real provider processes during a live wake showed command lines of
+// 4,735 characters (codex.exe) and 5,545 (grok.exe) - nowhere near the cliff. The seats were down
+// for other reasons: grok's CLI now opens an interactive TUI without an explicit headless flag,
+// and PowerShell 5.1 mangles quoted arguments to a native exe. Keep this ceiling, but do not
+// credit it with a fix it did not make.
 //
 // This is a ceiling on the CALLER, not on the transport: the capture path is byte-exact at 200 KB
 // and beyond. Raising it again requires moving prompts off argv - stdin or a temp file - not a
