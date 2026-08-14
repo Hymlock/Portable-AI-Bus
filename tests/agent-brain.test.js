@@ -320,6 +320,38 @@ test('buildWakePrompt presents durable continuation context without inventing it
   assert.doesNotMatch(idle, /investigate DELTA D continuation memory/);
 });
 
+test('buildWakePrompt marks an oversized message with its sequence and exact omitted byte count', () => {
+  const limit = 32 * 1024;
+  const body = `${'a'.repeat(limit)}\u{1F642}tail`;
+  const prompt = buildWakePrompt('grok', [{ ...msg(42), body }]);
+
+  assert.match(prompt, /TRUNCATED MESSAGE #42/);
+  assert.match(prompt, /8 UTF-8 bytes omitted/);
+  assert.match(prompt, /\.ai-bus\/runtime\/mailbox\/inbox\/000042-claude-to-grok\.json/);
+  assert.equal(prompt.includes(body), false);
+});
+
+test('buildWakePrompt passes a message below the limit through byte-for-byte without a marker', () => {
+  const body = 'short unicode brief \u{1F642}\nwith its original newline';
+  const prompt = buildWakePrompt('grok', [{ ...msg(43), body }]);
+
+  assert.equal(prompt.includes(body), true);
+  assert.doesNotMatch(prompt, /TRUNCATED MESSAGE|bytes omitted/);
+});
+
+test('buildWakePrompt marks oversized open work and leaves short open work unchanged', () => {
+  const limit = 32 * 1024;
+  const longOpenWork = `${'b'.repeat(limit)}\u{1F642}tail`;
+  const truncated = buildWakePrompt('codex', [], longOpenWork);
+  assert.match(truncated, /TRUNCATED OPEN WORK/);
+  assert.match(truncated, /8 UTF-8 bytes omitted/);
+
+  const shortOpenWork = 'continue the exact remaining audit';
+  const complete = buildWakePrompt('codex', [], shortOpenWork);
+  assert.equal(complete.includes(shortOpenWork), true);
+  assert.doesNotMatch(complete, /TRUNCATED OPEN WORK|bytes omitted/);
+});
+
 test('the copyable system-prompt example sends only to an addressable live seat', async () => {
   const { api, sent } = tools();
   api.status = async () => ({ agents: ['claude', 'codex', 'grok'] });

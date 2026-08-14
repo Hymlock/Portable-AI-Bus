@@ -123,6 +123,40 @@ export const PLAN_SCHEMA = {
   required: ['actions', 'done']
 };
 
+// One normal transactional wake carries one message, so 32 KiB leaves room for the system
+// prompt, action schema, and a useful answer in common model context windows while admitting
+// the 5-7 KiB task briefs this Bus routinely carries. The transport supports much larger
+// records; this is only a prompt-budget boundary, and crossing it must therefore be visible.
+const WAKE_FIELD_LIMIT_BYTES = 32 * 1024;
+
+function promptField(
+  value: string,
+  label: string,
+  recovery: string
+): string {
+  const totalBytes = Buffer.byteLength(value, 'utf8');
+  if (totalBytes <= WAKE_FIELD_LIMIT_BYTES) return value;
+
+  const prefix: string[] = [];
+  let includedBytes = 0;
+  // Iterate Unicode code points instead of slicing UTF-16 code units so the prompt never ends
+  // in half of a surrogate pair and the reported UTF-8 byte count remains exact.
+  for (const character of value) {
+    const characterBytes = Buffer.byteLength(character, 'utf8');
+    if (includedBytes + characterBytes > WAKE_FIELD_LIMIT_BYTES) break;
+    prefix.push(character);
+    includedBytes += characterBytes;
+  }
+  const omittedBytes = totalBytes - includedBytes;
+  return `${prefix.join('')}\n[TRUNCATED ${label}: ${omittedBytes} UTF-8 bytes omitted. ${recovery}]`;
+}
+
+function messageRecordPath(message: BrainMessage): string {
+  const safe = (value: string) => value.replace(/[^a-zA-Z0-9_.-]+/g, '-');
+  const file = `${String(message.seq).padStart(6, '0')}-${safe(message.from)}-to-${safe(message.to)}.json`;
+  return `.ai-bus/runtime/mailbox/inbox/${file}`;
+}
+
 export function buildWakePrompt(seat: string, messages: BrainMessage[], openWork?: string): string {
   const lines = [
     `Seat: ${seat}`,
@@ -131,8 +165,12 @@ export function buildWakePrompt(seat: string, messages: BrainMessage[], openWork
   ];
   if (openWork) {
     lines.push('Open work from your previous wake:');
-    lines.push(openWork.slice(0, 4000));
-    lines.push('Continue that work. This context is durable; the assigning mail may already be consumed.');
+    lines.push(promptField(
+      openWork,
+      'OPEN WORK',
+      'The full value remains only in this runner process; report an open dependency if the omitted bytes are required.'
+    ));
+    lines.push('Continue that work. This context is carried across wakes by this runner; the assigning mail may already be consumed.');
     lines.push('');
   }
   if (messages.length === 0 && !openWork) {
@@ -141,7 +179,11 @@ export function buildWakePrompt(seat: string, messages: BrainMessage[], openWork
     for (const m of messages) {
       lines.push(`--- #${m.seq} from ${m.from} kind=${m.kind}`);
       lines.push(`subject: ${m.subject}`);
-      lines.push(m.body.slice(0, 4000));
+      lines.push(promptField(
+        m.body,
+        `MESSAGE #${m.seq}`,
+        `Read the complete mailbox record at ${messageRecordPath(m)}.`
+      ));
       lines.push('');
     }
   }
