@@ -132,11 +132,45 @@ It woke on mail, reported, and kept running — which is the thing a chat sessio
 - **Graceful stop** on SIGINT/SIGTERM, with `brain.stop()` called.
 - **Echo-on-receipt is the default brain's behaviour**, so a seat is never silent by accident.
 
-### Still owed
+### Wake delivery is a transaction
 
-A **supervisor**. A crashed process is still a dead seat, and the reachability gap stands: an
-agent that dies is unreachable by any route the bus provides, because the route runs through the
-dead thing. The runner survives *brain* errors; it cannot survive its own process being killed.
+For transactional clients the runner peeks the oldest unread message without consuming it,
+presents it to the model, executes the plan, and acknowledges the message only after a usable
+result. `retainMessages` aborts that commit boundary. This is why one sequence can appear in
+several wake records without being a second send.
+
+Unusable results consume a per-message poison budget and eventually park the original record.
+Claim conflicts are different: the action executor reports them as retriable `BLOCKED`, the
+runner backs off, and `maxBlockedAttempts` advances without touching the poison counter. Either
+limit can park a record so FIFO delivery is no longer wedged; parking preserves the record and
+reason for explicit operator requeue.
+
+Successful actions before a later refusal enter a process-local committed-action journal keyed
+by message and stable action identity. Retrying retained mail skips those entries, preventing a
+second send or mutation. Committing or parking the message settles the journal.
+
+`done: false` creates `openWork`, which is supplied to immediate continuation wakes even after
+the assigning message has committed. This state deliberately belongs to the running process:
+completion/exhaustion clears it, and a RESTART drops it rather than pretending volatile model
+context is durable.
+
+### A live process must also be able to hear
+
+Listen failures back off and retry through a complete lease-stale interval, allowing a restarted
+brain to wait out its predecessor's lease. Terminal failure or exhaustion of that recovery
+window exits the process. The supervisor can then replace it instead of accepting an alive but
+deaf brain as progress. Restarts are burst-bounded, followed by a lease-length cooldown and a
+fresh burst; this avoids both hot loops and permanent abandonment.
+
+The supervisor also compares each live brain's loaded-code marker with the current dist tree.
+A `stale-code` line is evidence that a process predates the build, but it never triggers an
+automatic restart: liveness supervision does not guess whether an operator wants a code rollout.
+
+### Supervisor now built
+
+The original reachability gap is closed by `scripts/bus-supervise.js`: a crashed process is
+detected and replaced under the bounded burst policy above. The runner still cannot survive its
+own process being killed; recovery belongs to the independently running supervisor.
 
 ## Original recommendation (kept for the reasoning)
 
@@ -152,10 +186,9 @@ dead thing. The runner survives *brain* errors; it cannot survive its own proces
 The mailbox, claims, baton and lease machinery all survive unchanged. What changes is **who runs
 the agent**: a process we own, instead of a chat UI whose turn boundary we cannot control.
 
-> **Honest caveat.** This does not make an agent immortal — a crashed process is still a dead
-> seat, and today's reachability gap stands: an agent that dies is unreachable by any means the
-> bus provides, because the route to it runs through the dead thing. A supervisor that restarts
-> a dead brain is a separate, smaller piece of work, and worth doing at the same time.
+> **Historical caveat (since resolved).** At recommendation time a crashed process was still a
+> dead seat. `scripts/bus-supervise.js` now owns that separate recovery boundary; the caveat is
+> retained here because it explains why supervision is intentionally outside the runner.
 
 ---
 

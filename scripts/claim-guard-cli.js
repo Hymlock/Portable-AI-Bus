@@ -40,11 +40,12 @@ if (process.argv.includes('--install-hook')) {
   const body = [
     '#!/bin/sh',
     '# Installed by Portable AI Bus. Refuses a commit containing another seat\'s files.',
-    `BUS_SEAT="${seat}" BUS_ROOT="${root}" node "${path.join(__dirname, 'claim-guard-cli.js').replace(/\\/g, '/')}" --repo "$(pwd)" || exit 1`,
+    '# BUS_SEAT names the assignment used for this commit. It must be supplied by the caller.',
+    `BUS_ROOT="${root}" node "${path.join(__dirname, 'claim-guard-cli.js').replace(/\\/g, '/')}" --repo "$(pwd)" || exit 1`,
     ''
   ].join('\n');
   fs.writeFileSync(hook, body, { mode: 0o755 });
-  console.log(`claim-guard: pre-commit hook installed for seat "${seat}"`);
+  console.log('claim-guard: pre-commit hook installed (set BUS_SEAT to the active assignment)');
   console.log(`             ${hook}`);
   process.exit(0);
 }

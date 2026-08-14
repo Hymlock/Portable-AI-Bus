@@ -44,6 +44,8 @@ node .ai-bus/bin/mailbox.js init --agents codex,claude,grok [--max-rounds 32]
 node .ai-bus/bin/mailbox.js status
 node .ai-bus/bin/mailbox.js send --from A --to B --kind note --subject "..." --body "..."
 node .ai-bus/bin/mailbox.js read --for A [--all]
+node .ai-bus/bin/mailbox.js parked --for A
+node .ai-bus/bin/mailbox.js requeue --for A --seq N
 node .ai-bus/bin/mailbox.js wait --for A --timeout 600
 node .ai-bus/bin/mailbox.js claim --agent A --paths path1,path2 --why "..."
 node .ai-bus/bin/mailbox.js release --agent A [--paths path1]
@@ -61,6 +63,18 @@ node .ai-bus/bin/mailbox.js resume [--add-rounds N]
 - A send increments both `seq` and `round`. If that new round triggers a round policy, the message is written first and the bus then halts.
 - Completion is a structured event containing scope (`step` or `goal`), actor, summary, optional evidence, timestamp, and whether it halted the bus. Ordinary message text never implies completion.
 - Exit `2` = halted; `3` = nothing waiting / wait timeout.
+- A brain **peeks** one unread message, asks the model, and acknowledges it only after a usable
+  plan completes. `retainMessages: true` means that acknowledgement was deliberately withheld:
+  the same sequence can therefore appear in several wake log entries. That is a retry, not
+  duplicate delivery.
+- Repeated malformed/provider failures are bounded by `maxMessageAttempts`. At the limit the
+  original message is marked **PARKED** (read, with `parkedAt` and `parkedReason`) so later FIFO
+  mail can proceed. Inspect it with `mailbox parked --for A`; after correcting the cause, retry
+  it with `mailbox requeue --for A --seq N`.
+- **BLOCKED** is a separate temporary state used for retriable claim conflicts. It retains the
+  message, backs off, and uses `maxBlockedAttempts`; blocked cycles never spend the poison
+  `maxMessageAttempts` budget. A conflict that remains blocked to its own limit is parked for
+  operator intervention, with the same inspection and requeue commands.
 
 ### Halt policy matrix
 
@@ -349,6 +363,43 @@ configuration and receipts remain under the coordination root.
 The process waits, drains, acts, reports, and **waits again**. `done` means this wake finished,
 never that the agent finished. With a brain running you do not need the listener loop — the
 runner is the listener.
+
+### Wake continuation, replay safety, and restart boundaries
+
+When a result says `done: false`, the runner carries its `note` as `openWork` into immediate
+continuation wakes. It does not wait for new mail, and the assigning message may already have
+been acknowledged. `openWork` is process memory: a deliberate `bus-restart` drops it, so finish
+or report important partial work before restarting.
+
+Each retained message also has a process-local committed-action journal. A successful send,
+claim, release, capability call, or done action is recorded by stable action identity before a
+later action can fail. If the wake is retried, already committed actions are skipped instead of
+being sent or applied twice. The journal entry is discarded when the message commits or parks;
+like `openWork`, it is not promised across a process restart.
+
+The listener treats a failed poll as loss of hearing, not as a clean timeout. Retriable failures
+back off through one complete harness lease-stale window so a replacement process can outlive
+the old lease and reacquire it. A non-retriable failure, or failure through that recovery
+window, exits the brain; an alive-but-deaf process must not look healthy. The supervisor then
+restarts dead brains. It permits a bounded burst (`--max-restarts`, default 5), cools down for
+one lease-stale interval, and opens a new burst rather than spinning hot or giving up forever.
+
+Long-lived brains write loaded-code markers. `bus-supervise.log` emits a `stale-code` warning
+when the running PID loaded another dist tree or predates a rebuilt dist. This warning is
+diagnostic only and explicitly does **not** auto-restart a live brain; use `bus-restart` when a
+code upgrade should replace running processes.
+
+### Claim guard identity and the round ceiling
+
+`BUS_SEAT` declares the bus **assignment** under which a commit is being made; it is not a
+person or provider identity. Any operator or agent can act under any assigned seat, so the
+pre-commit guard refuses when `BUS_SEAT` is undeclared instead of guessing. Set it explicitly
+for every commit, for example `BUS_SEAT=claude git commit ...` (PowerShell:
+`$env:BUS_SEAT='claude'; git commit ...`). The hook installer records `BUS_ROOT` only.
+
+`bus-up` initializes new mailboxes with `--max-rounds 6000`. The old 550 default was too small
+for a busy three-seat engagement and could halt mutating tools mid-task; existing state keeps
+the larger of its current cap and the requested value.
 
 The packaged default is `.ai-bus/brains/agent-seat.js`. It builds a provider-neutral brain with
 a cross-vendor chain; use `PORTABLE_AI_BUS_PROVIDER_CHAIN` to change order. `--console` may be

@@ -1,4 +1,8 @@
 const assert = require('node:assert/strict');
+const { execFileSync } = require('node:child_process');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const test = require('node:test');
 const { guardStagedPaths, coveredBy, formatGuardResult } = require('../dist/claim-guard.js');
 
@@ -71,4 +75,17 @@ test('the refusal message says what to do instead', () => {
 test('a seat with no claims can commit nothing but shared paths', () => {
   const result = guardStagedPaths('hymlock', ['src/brain/chain.ts'], claims);
   assert.equal(result.ok, false, 'no claims means no ownership, not blanket permission');
+});
+
+test('installed hook refuses to guess the active seat assignment', () => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-bus-claim-hook-'));
+  fs.mkdirSync(path.join(repo, '.git'), { recursive: true });
+  execFileSync(process.execPath, [
+    path.join(__dirname, '..', 'scripts', 'claim-guard-cli.js'),
+    '--root', repo, '--repo', repo, '--seat', 'codex', '--install-hook'
+  ]);
+  const hook = fs.readFileSync(path.join(repo, '.git', 'hooks', 'pre-commit'), 'utf8');
+  assert.match(hook, /BUS_SEAT names the assignment/);
+  assert.doesNotMatch(hook, /BUS_SEAT=/,
+    'install-time seat must not become a default identity for future commits');
 });
