@@ -365,3 +365,46 @@ See `docs/LOOP_ARCHITECTURE.md` for why this exists and what it is still missing
 
 Provider authentication and full install/update/uninstall steps are in `docs/AUTH.md` and
 `docs/DISTRIBUTION.md`.
+
+## An operating pattern: planner, implementer, auditor
+
+One way to run three seats. Not the only way, and not enforced by the bus — recorded because it
+was arrived at after a session where the pilot did nearly all the work itself, spending one wallet
+while two seats idled and leaving its own code unchecked.
+
+| role | does | does not |
+|---|---|---|
+| **planner** | examines the material, writes the plan, holds the goal | implement |
+| **implementer** | builds against the plan, with tests | audit its own work |
+| **auditor** | attacks the implementation, reports to the planner | implement what it audits |
+
+The cycle: planner writes a plan → **both other seats attack the plan** → planner revises →
+implementer builds → auditor attacks the result → planner revises → implementer applies the delta.
+When a goal is met, an **adversarial round decides the next goal** before any plan is written.
+
+Two adversarial gates, not one: the **goal** is argued before the plan, and the **plan** is argued
+before the code. Otherwise the planner's error becomes the direction everyone builds in.
+
+### Roles are assignments, not identities
+
+Any seat can hold any role, and they rotate — most obviously when a vendor runs out of credit,
+degrades, or its brain dies. The bus has no notion of these roles; they exist in the briefs.
+
+What must survive every rotation is one invariant:
+
+> **The auditor is never the author.** Whoever implemented a thing does not get to be the seat
+> that certifies it. Self-audit proves little; this project's sharpest corrections all came from
+> the seat that did *not* do the work.
+
+### Failure modes this pattern hits
+
+- **Ack-only wakes.** A seat acknowledges each message and ends the turn, producing nothing, while
+  `done: true` is logged. Aggravated by sending a seat several briefs in quick succession — it
+  acknowledges them all and works none. Send **one** brief, then stay off the bus until it reports.
+- **`malformed-output` consuming the message.** A wake that cannot produce a usable plan still
+  drains its mail, so the work is paid for and lost, and it looks like participation.
+- **A dead brain.** Nothing notices unless the supervisor is running.
+
+All three share a shape: **the bus reporting success for an empty turn.** The signals to tell them
+apart — `wake-acks-only`, `done-without-report`, `malformed-output` — are emitted already; what
+matters is that something consumes them.
