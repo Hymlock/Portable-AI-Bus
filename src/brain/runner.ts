@@ -167,6 +167,10 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
   let recovery = await bus.loadRecovery?.(seat);
   let recoveryData: string | undefined;
   if (recovery) {
+    // These are two presentations of the SAME checkpoint.note, not competing sources. The first
+    // restarted wake uses recoveryData so the prompt can label and tightly cap untrusted durable
+    // bytes; openWork keeps the identical note alive for later in-process continuations. Emitting
+    // both on this wake would duplicate content and spend the aggregate argv budget for no gain.
     hasOpenWork = true;
     openWork = recovery.note;
     recoveryData = recovery.note;
