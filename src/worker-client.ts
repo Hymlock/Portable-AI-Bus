@@ -45,6 +45,8 @@ export type WorkerClientOptions = {
   cursorPath?: string;
   persistCursor?: boolean;
   requestTimeoutMs?: number;
+  /** Begin a one-shot wake strictly after this durable mailbox sequence. */
+  afterSeq?: number;
   /**
    * Reconcile the delivery cursor against UNREAD state before watching.
    *
@@ -108,7 +110,15 @@ export async function waitForMailbox(
   let result: WakeResult | undefined;
   let operationError: unknown;
   try {
-    result = await wake(connection, options, clientId, lease, 0, requestedTimeout(options), runtime);
+    result = await wake(
+      connection,
+      options,
+      clientId,
+      lease,
+      boundedAfterSeq(options.afterSeq),
+      requestedTimeout(options),
+      runtime
+    );
   } catch (error) {
     operationError = error;
   }
@@ -649,6 +659,13 @@ function cliUsage() {
 function validateOptions(options: WorkerClientOptions) {
   validateSeatOptions(options);
   requestedTimeout(options);
+  boundedAfterSeq(options.afterSeq);
+}
+
+function boundedAfterSeq(value: number | undefined) {
+  if (value === undefined) return 0;
+  if (!Number.isSafeInteger(value) || value < 0) throw new Error('afterSeq must be a non-negative safe integer.');
+  return value;
 }
 
 function validateSeatOptions(options: WorkerClientOptions) {

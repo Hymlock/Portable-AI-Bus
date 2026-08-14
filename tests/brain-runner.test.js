@@ -174,6 +174,7 @@ function transactionalBus(message, injectOnAcknowledge, toolOverrides = {}) {
   let acknowledgements = 0;
   return {
     get unread() { return unread.slice(); },
+    enqueue(message) { unread.push(message); },
     get parked() { return parked.slice(); },
     get acknowledgements() { return acknowledgements; },
     client: {
@@ -248,6 +249,66 @@ test('a malformed model wake leaves its input unread, while a usable plan consum
   await runBrain({ seat: 'codex', brain: goodBrain, bus: racingBus.client, maxWakes: 1 });
   assert.deepEqual(racingBus.unread.map((item) => item.seq), [92],
     'committing the presented batch must not consume mail that arrived during the model call');
+});
+
+test('mail arriving during a stalled provider is received but remains unread after the presented wake commits', async () => {
+  const first = { seq: 201, from: 'claude', to: 'codex', kind: 'task', subject: 'presented', body: 'work' };
+  const late = { seq: 202, from: 'claude', to: 'codex', kind: 'task', subject: 'late', body: 'more work' };
+  const fixture = transactionalBus(first);
+  const events = [];
+  let releaseProvider;
+  let listenerRan;
+  const providerGate = new Promise((resolve) => { releaseProvider = resolve; });
+  const listenerGate = new Promise((resolve) => { listenerRan = resolve; });
+  let providerCalls = 0;
+  let activeProviders = 0;
+  let maxActiveProviders = 0;
+  const originalListen = fixture.client.listen;
+  let listeningCalls = 0;
+  fixture.client.listen = async (_seat, _seconds, afterSeq, signal) => {
+    listeningCalls += 1;
+    if (listeningCalls === 1) {
+      assert.equal(afterSeq, 201, 'the concurrent listener must skip the presented batch');
+      fixture.enqueue(late);
+      listenerRan();
+      return 'mail';
+    }
+    assert.equal(afterSeq, 202, 'the listener cursor advances without acknowledging late mail');
+    await new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }));
+    return 'timeout';
+  };
+  const brain = {
+    name: 'stalled',
+    async takeTurn() {
+      providerCalls += 1;
+      activeProviders += 1;
+      maxActiveProviders = Math.max(maxActiveProviders, activeProviders);
+      await providerGate;
+      activeProviders -= 1;
+      return { done: true, note: 'presented batch consumed' };
+    }
+  };
+
+  const running = runBrain({
+    seat: 'codex', brain, bus: fixture.client, maxWakes: 1, providerStallMs: 0,
+    log: (event, data) => events.push({ event, data })
+  });
+  await listenerGate;
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(fixture.unread.map((message) => message.seq), [201, 202],
+    'concurrent reception must be durable and non-destructive');
+  releaseProvider();
+  await running;
+
+  assert.equal(providerCalls, 1);
+  assert.equal(maxActiveProviders, 1, 'reception must never start another provider call');
+  assert.equal(fixture.acknowledgements, 1, 'the presented wake commits exactly once');
+  assert.deepEqual(fixture.unread.map((message) => message.seq), [202],
+    'mail received during the call belongs to the next transactional wake');
+  for (const event of ['provider-thinking', 'provider-stalled', 'provider-exited', 'seat-listening']) {
+    assert.equal(events.some((entry) => entry.event === event), true, `${event} must be explicit in logs`);
+  }
+  fixture.client.listen = originalListen;
 });
 
 test('every provider exit without a usable plan retains the presented batch', async () => {

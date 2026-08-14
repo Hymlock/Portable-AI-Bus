@@ -107,7 +107,7 @@ export function cliBusClient(options: CliBusOptions): BusClient {
   }
 
   return {
-    async listen(seat, deadlineSeconds) {
+    async listen(seat, deadlineSeconds, afterSeq = 0, signal) {
       // The deadline is chunked into polls the harness will accept, rather than passed straight
       // through. A brain waits minutes; one poll may last 30 seconds.
       const wait = options.waitForMailbox ?? waitForMailbox;
@@ -119,19 +119,23 @@ export function cliBusClient(options: CliBusOptions): BusClient {
       let recoveryUntil: number | undefined;
       let lastFailure: unknown;
 
-      while (now() < (recoveryUntil ?? requestedUntil)) {
+      while (!signal?.aborted && now() < (recoveryUntil ?? requestedUntil)) {
         const remaining = (recoveryUntil ?? requestedUntil) - now();
         try {
           const wake = await wait({
             root: options.root,
             seat,
-            timeoutMs: Math.min(MAX_POLL_MS, remaining)
+            timeoutMs: Math.min(MAX_POLL_MS, remaining),
+            afterSeq,
+            signal
           });
+          if (signal?.aborted) return 'timeout';
           if (wake.wake === 'message') return 'mail';
           // One accepted long poll proves this process owns a working listener again.
           recoveryUntil = undefined;
           lastFailure = undefined;
         } catch (error) {
+          if (signal?.aborted) return 'timeout';
           // A retriable outage gets a lease-sized recovery window. It must WAIT between attempts;
           // returning here is what turned a broken poll into a spawn storm. A terminal outage or
           // exhaustion escapes the runner so the process cannot remain alive while deaf.

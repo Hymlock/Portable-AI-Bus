@@ -77,6 +77,25 @@ test('one-shot wait acquires, polls with its lease, and releases', async (t) => 
   assert.equal(calls[1].query.get('timeoutMs'), '123');
 });
 
+test('one-shot wait can listen strictly after an already-presented batch', async (t) => {
+  const fixture = await clientFixture(t, 'instance-a', TOKEN_A);
+  const calls = [];
+  await waitForMailbox({
+    root: fixture.root,
+    seat: 'worker',
+    credentialsDir: fixture.credentialsDir,
+    clientId: 'in-flight-listener',
+    timeoutMs: 123,
+    afterSeq: 41
+  }, { fetch: scriptedFetch(calls, [
+    json({ ok: true, instanceId: 'instance-a', leaseId: 'lease-a', generation: 2, staleAfterMs: 1000 }),
+    json({ ok: true, instanceId: 'instance-a', wake: 'message', messages: [{ seq: 42, subject: 'late' }] }),
+    json({ ok: true, instanceId: 'instance-a', released: true })
+  ]) });
+
+  assert.equal(calls.find((call) => call.pathname === '/v1/wake').query.get('afterSeq'), '41');
+});
+
 test('one-shot wait still releases when polling fails', async (t) => {
   const fixture = await clientFixture(t, 'instance-a', TOKEN_A);
   const calls = [];

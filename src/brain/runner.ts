@@ -11,7 +11,13 @@ import { Brain, BrainMessage, BrainTools, WakeReason, WakeResult } from './contr
 
 export type BusClient = {
   /** Blocks until mail arrives or the deadline passes. Resolves 'mail' or 'timeout'. */
-  listen(seat: string, deadlineSeconds: number): Promise<'mail' | 'timeout'>;
+  listen(
+    seat: string,
+    deadlineSeconds: number,
+    /** Ignore the batch already presented to an in-flight wake. */
+    afterSeq?: number,
+    signal?: AbortSignal
+  ): Promise<'mail' | 'timeout'>;
   read(seat: string): Promise<BrainMessage[]>;
   /** Peek without acknowledging. Used with acknowledge() for transactional wakes. */
   peek?(seat: string): Promise<BrainMessage[]>;
@@ -49,6 +55,8 @@ export type RunnerOptions = {
   maxBlockedAttempts?: number;
   /** Injected by tests so blocked-backoff coverage does not sleep in real time. */
   sleep?: (milliseconds: number) => Promise<void>;
+  /** Emit provider-stalled after an in-flight turn has exceeded this duration. */
+  providerStallMs?: number;
   /**
    * Message kinds that are pure courtesy: they inform, and they never need an answer.
    *
@@ -89,6 +97,7 @@ const DEFAULT_LISTEN_SECONDS = 300;
 const DEFAULT_ACK_KINDS = ['ack', 'receipt', 'ping'];
 const DEFAULT_MAX_MESSAGE_ATTEMPTS = 3;
 const DEFAULT_MAX_BLOCKED_ATTEMPTS = 3;
+const DEFAULT_PROVIDER_STALL_MS = 30_000;
 
 export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
   const {
@@ -101,6 +110,7 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
     maxMessageAttempts = DEFAULT_MAX_MESSAGE_ATTEMPTS,
     maxBlockedAttempts = DEFAULT_MAX_BLOCKED_ATTEMPTS,
     blockedBackoffMs = 30_000,
+    providerStallMs = DEFAULT_PROVIDER_STALL_MS,
     sleep = (milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)),
     ackKinds = DEFAULT_ACK_KINDS,
     thinkWhenIdle = false,
@@ -115,6 +125,9 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
   }
   if (!Number.isSafeInteger(maxBlockedAttempts) || maxBlockedAttempts < 1) {
     throw new Error('maxBlockedAttempts must be a positive integer');
+  }
+  if (!Number.isSafeInteger(providerStallMs) || providerStallMs < 0) {
+    throw new Error('providerStallMs must be a non-negative integer');
   }
   const isAck = (message: BrainMessage) =>
     ackKinds.includes(String((message as { kind?: unknown }).kind ?? '').trim().toLowerCase());
@@ -227,6 +240,46 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
       });
 
       let result: WakeResult = { done: true };
+      const presentedThrough = messages.reduce((highest, message) => Math.max(highest, message.seq), 0);
+      const receiveController = new AbortController();
+      let listeningThrough = presentedThrough;
+      const receiveWhileThinking = (transactional ? (async () => {
+        while (!receiveController.signal.aborted) {
+          log('seat-listening', { seat, afterSeq: listeningThrough, providerInFlight: true });
+          const outcome = await bus.listen(seat, listenSeconds, listeningThrough, receiveController.signal);
+          if (receiveController.signal.aborted) break;
+          if (outcome !== 'mail') {
+            // A production long poll already yields for seconds. Test clients and degraded
+            // adapters may answer timeout immediately; yield a macrotask so their receive loop
+            // cannot starve the provider promise or its stall timer.
+            await new Promise<void>((resolve) => setTimeout(resolve, 0));
+            continue;
+          }
+          // Peek is non-destructive. It only advances the listener cursor; the original
+          // presented count remains the sole input to acknowledge() below.
+          const queued = await receive(seat);
+          const next = queued.reduce((highest, message) => Math.max(highest, message.seq), listeningThrough);
+          log('mail-queued-during-provider', {
+            seat,
+            messages: queued.filter((message) => message.seq > listeningThrough).length,
+            afterSeq: listeningThrough,
+            throughSeq: next
+          });
+          listeningThrough = next;
+        }
+      })() : Promise.resolve()).catch((error) => {
+        if (!receiveController.signal.aborted) {
+          log('seat-listen-failed', { seat, error: (error as Error)?.message ?? String(error) });
+        }
+      });
+      const providerStartedAt = Date.now();
+      let providerOutcome = 'returned';
+      log('provider-thinking', { seat, reason, messages: messages.length });
+      const reportStall = () => {
+        log('provider-stalled', { seat, milliseconds: providerStallMs, reason, messages: messages.length });
+      };
+      const stallTimer = providerStallMs === 0 ? undefined : setTimeout(reportStall, providerStallMs);
+      if (providerStallMs === 0) reportStall();
       try {
         result = await brain.takeTurn({
           seat,
@@ -238,6 +291,7 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
           log
         });
       } catch (error) {
+        providerOutcome = 'threw';
         if (error instanceof BudgetExceededError) {
           summary.cappedWakes += 1;
           result = { done: true, capped: true, note: error.message };
@@ -250,6 +304,15 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
           result = { done: true, retainMessages: true };
           log('wake-error', { seat, error: (error as Error)?.message ?? String(error) });
         }
+      } finally {
+        if (stallTimer !== undefined) clearTimeout(stallTimer);
+        receiveController.abort();
+        await receiveWhileThinking;
+        log('provider-exited', {
+          seat,
+          outcome: providerOutcome,
+          milliseconds: Date.now() - providerStartedAt
+        });
       }
 
       // A brain signals a spent chain by returning `exhausted`. Distinct from an error on

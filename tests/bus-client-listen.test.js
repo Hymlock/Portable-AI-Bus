@@ -100,6 +100,22 @@ test('mail on the first poll returns immediately', async () => {
   assert.equal(calls, 1, 'chunking must not delay a wake that is already available');
 });
 
+test('an in-flight listener ignores the presented sequence and is abortable', async () => {
+  const asked = [];
+  const controller = new AbortController();
+  const client = cliBusClient({
+    root: 'C:/nowhere',
+    waitForMailbox: async (options) => {
+      asked.push(options);
+      controller.abort();
+      return { wake: 'timeout', messages: [], instanceId: 'i', afterSeq: options.afterSeq };
+    }
+  });
+
+  assert.equal(await client.listen('worker', 600, 17, controller.signal), 'timeout');
+  assert.equal(asked[0].afterSeq, 17);
+});
+
 test('an exhausted deadline reports timeout without a further poll', async () => {
   let calls = 0;
   const client = cliBusClient({
