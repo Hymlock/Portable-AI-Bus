@@ -1,12 +1,44 @@
 # PLAN 04 — Seat memory
 
-Status: **slice 1 implemented.** Durable same-seat recovery checkpoints now live on their source
-mailbox record (`workId` is its sequence). They retain closed history, supersede rather than expire,
-and atomically retain accepted-action receipts with unfinished intent. Startup retrieves only open
-checkpoints; injection is escaped, explicitly untrusted, and capped at 2 KiB inside the existing
-aggregate prompt budget. Cross-seat reassignment and verified long-term memory remain later slices.
-Ordering decided adversarially: memory built first would faithfully record a pipeline that was
-still discarding most of its long messages.
+Status: **slice 1 implemented and audited** (`d74e8fe` + `951f218`, 326 tests). Durable same-seat
+recovery checkpoints now live on their source mailbox record (`workId` is its sequence). They retain
+closed history, supersede rather than expire, and atomically retain accepted-action receipts with
+unfinished intent. Startup retrieves only open checkpoints; injection is escaped, explicitly
+untrusted, and capped at 2 KiB inside the existing aggregate prompt budget. Cross-seat reassignment
+and verified long-term memory remain later slices. Ordering decided adversarially: memory built first
+would faithfully record a pipeline that was still discarding most of its long messages.
+
+### Slice 1 audit — six gates
+
+| gate | result |
+|---|---|
+| a restart does not repeat an action whose durable receipt landed | **real gate** — simulates process loss after the receipt, restarts, asserts the effect count stays at 1 |
+| restart after `done:false` recovers the exact note without resending the brief | characterisation — already held |
+| completion and exhaustion remain closed through two later restarts | characterisation — already held, both terminal paths |
+| hostile checkpoint text cannot bypass the parsed action boundary | characterisation — recovery-only wake produced zero sends, claims, releases or capability runs |
+| recovery injection is labelled, escaped, capped at 2 KiB | real gate |
+| supersession and closure retain history in the source message | real gate |
+
+**No production gap was found.** Three of the audit's six gates were characterisation of behaviour
+that already worked, and the implementer said so plainly rather than manufacturing a fix — the same
+call it made when the planner reported a retained-mail defect that did not exist.
+
+Two limits recorded rather than smoothed over:
+
+- The hostile-text gate proves **checkpoint bytes do not enter dispatch without a parsed provider
+  action**. It does *not* claim a model cannot be socially influenced by hostile prompt data. That
+  is a different property and it is not tested here.
+- The audit was run by the **planner**, because the auditor's balance was exhausted. Less
+  independent than an outside audit, and the planner specified much of this work.
+
+### Precedence: recovery and openWork are the same note
+
+`recoveryData` and `openWork` are two presentations of the same durable `checkpoint.note`. The first
+restarted wake uses the labelled, capped recovery rendering; showing `openWork` as well would
+duplicate identical bytes and spend the argv budget twice. After that presentation the live note is
+authoritative again and is re-persisted on the next `done:false`. **There is no conflict-resolution
+rule here, because there is no conflict** — documented beside `buildWakePrompt` and runner
+initialisation so the next reader does not go looking for one.
 
 ## The problem, measured
 
