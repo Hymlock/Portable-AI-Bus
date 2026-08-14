@@ -50,10 +50,16 @@ test('every bin entry points at a file that exists', () => {
   }
 });
 
-test('it refuses to restart a seat past its limit, and says a human is needed', () => {
+test('DELTA H: restart exhaustion cools down but never abandons a dead seat permanently', () => {
   const source = fs.readFileSync(SUPERVISOR, 'utf8');
-  assert.match(source, /NOT restarting\. Needs a human\./,
-    'giving up must be stated out loud - a supervisor that silently stops trying is a lie');
+  assert.match(source, /DEFAULT_LEASE_STALE_MS/,
+    'restart recovery must derive from the same lease-stale policy as the harness');
+  assert.match(source, /cooling down, then retrying/,
+    'a spent burst must be visible and bounded');
+  assert.match(source, /opening a fresh budget/,
+    'the five-restart guard must not turn into permanent unattended death');
+  assert.doesNotMatch(source, /NOT restarting\. Needs a human\./,
+    'permanent supervisor silence is the same deaf-seat failure in another layer');
 });
 
 test('a dead seat is restarted with the SAME root and workdir it was given', () => {

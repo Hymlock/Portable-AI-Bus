@@ -22,6 +22,7 @@ import { BrainMessage, BrainTools } from './contract';
 import { BusClient } from './runner';
 import { callSeatTool, waitForMailbox } from '../worker-client';
 import { MailboxStore } from '../mailbox';
+import { DEFAULT_LEASE_STALE_MS } from '../harness';
 
 export type CliBusOptions = {
   root: string;
@@ -34,6 +35,10 @@ export type CliBusOptions = {
   callSeatTool?: typeof callSeatTool;
   /** Injected in tests so a backoff test does not actually sleep. */
   sleep?: (ms: number) => Promise<void>;
+  /** Test-only clock and lease-policy overrides. Production derives from the harness constant. */
+  now?: () => number;
+  leaseStaleMs?: number;
+  listenErrorBackoffMs?: number;
 };
 
 /**
@@ -54,6 +59,20 @@ const MAX_POLL_MS = 25_000;
  * Any listen that fails must cost real time before it can be retried.
  */
 const LISTEN_ERROR_BACKOFF_MS = 5_000;
+
+export class ListenTerminalError extends Error {
+  constructor(message: string, readonly causeValue: unknown) {
+    super(message);
+    this.name = 'ListenTerminalError';
+  }
+}
+
+export class ListenExhaustedError extends Error {
+  constructor(message: string, readonly causeValue: unknown) {
+    super(message);
+    this.name = 'ListenExhaustedError';
+  }
+}
 
 export function cliBusClient(options: CliBusOptions): BusClient {
   const log = options.log ?? (() => {});
@@ -93,10 +112,15 @@ export function cliBusClient(options: CliBusOptions): BusClient {
       // through. A brain waits minutes; one poll may last 30 seconds.
       const wait = options.waitForMailbox ?? waitForMailbox;
       const sleep = options.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
-      const until = Date.now() + deadlineSeconds * 1000;
+      const now = options.now ?? Date.now;
+      const leaseStaleMs = options.leaseStaleMs ?? DEFAULT_LEASE_STALE_MS;
+      const errorBackoffMs = options.listenErrorBackoffMs ?? LISTEN_ERROR_BACKOFF_MS;
+      const requestedUntil = now() + deadlineSeconds * 1000;
+      let recoveryUntil: number | undefined;
+      let lastFailure: unknown;
 
-      while (Date.now() < until) {
-        const remaining = until - Date.now();
+      while (now() < (recoveryUntil ?? requestedUntil)) {
+        const remaining = (recoveryUntil ?? requestedUntil) - now();
         try {
           const wake = await wait({
             root: options.root,
@@ -104,17 +128,44 @@ export function cliBusClient(options: CliBusOptions): BusClient {
             timeoutMs: Math.min(MAX_POLL_MS, remaining)
           });
           if (wake.wake === 'message') return 'mail';
+          // One accepted long poll proves this process owns a working listener again.
+          recoveryUntil = undefined;
+          lastFailure = undefined;
         } catch (error) {
-          // An unreachable harness should look like a quiet bus, not a dead agent — the brain
-          // keeps listening and recovers when the harness returns. But it must WAIT first.
-          // Returning here instead is what turned a broken poll into a spawn storm.
-          log('listen-failed', { seat, error: (error as Error)?.message });
+          // A retriable outage gets a lease-sized recovery window. It must WAIT between attempts;
+          // returning here is what turned a broken poll into a spawn storm. A terminal outage or
+          // exhaustion escapes the runner so the process cannot remain alive while deaf.
+          const failure = error as Error & { status?: unknown; code?: unknown; retriable?: unknown };
+          log('listen-failed', {
+            seat,
+            error: failure?.message,
+            status: failure?.status,
+            code: failure?.code,
+            retriable: failure?.retriable
+          });
+          if (failure?.retriable === false) {
+            throw new ListenTerminalError(
+              `Listening for ${seat} stopped on non-retriable ${failure.code ?? failure.message ?? 'error'}`,
+              error
+            );
+          }
+          lastFailure = error;
+          // A replacement may start anywhere in the old process's lease. Wait one complete
+          // stale interval plus two backoffs so one acquisition is attempted strictly after
+          // expiry and still has a full backoff-sized call window.
+          recoveryUntil ??= Math.max(requestedUntil, now() + leaseStaleMs + 2 * errorBackoffMs);
           // The FULL backoff, deliberately not clamped to the remaining deadline. Clamping made
           // the last failure before a deadline free, and "free failure" is the precise shape of
           // the bug: overshooting a wake deadline by five seconds costs nothing, while a
           // zero-cost failure path costs a spawn storm.
-          await sleep(LISTEN_ERROR_BACKOFF_MS);
+          await sleep(errorBackoffMs);
         }
+      }
+      if (lastFailure !== undefined) {
+        throw new ListenExhaustedError(
+          `Listening for ${seat} stayed unavailable through the ${leaseStaleMs}ms lease-stale window`,
+          lastFailure
+        );
       }
       return 'timeout';
     },

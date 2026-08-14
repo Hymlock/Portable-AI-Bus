@@ -31,25 +31,60 @@ test('a long deadline is chunked into polls the harness will accept', async () =
   }
 });
 
-test('a FAILING listen backs off instead of spinning', async () => {
+test('DELTA H: lease-held listen retries past lease expiry and then succeeds', async () => {
   // The bug exactly. A listen that fails must cost real time before it can be retried,
   // otherwise a broken bus is indistinguishable from a busy one and the seat burns a model
   // call per iteration. This test spins forever without the backoff.
   let calls = 0;
+  let clock = 0;
   const slept = [];
   const client = cliBusClient({
     root: 'C:/nowhere',
-    waitForMailbox: async () => { calls += 1; throw new Error('timeoutMs must be 0..30000.'); },
-    sleep: async (ms) => { slept.push(ms); }
+    waitForMailbox: async () => {
+      calls += 1;
+      if (clock > 60) return { wake: 'message', messages: [], instanceId: 'i', afterSeq: 0 };
+      const error = new Error('another worker owns this seat');
+      error.status = 409;
+      error.code = 'lease_held';
+      error.retriable = true;
+      throw error;
+    },
+    now: () => clock,
+    leaseStaleMs: 60,
+    listenErrorBackoffMs: 5,
+    sleep: async (ms) => { slept.push(ms); clock += ms; }
   });
 
-  const result = await client.listen('worker', 2);
-  assert.equal(result, 'timeout', 'a broken bus is a quiet bus, not a dead agent');
+  const result = await client.listen('worker', 0.01);
+  assert.equal(result, 'mail');
+  assert.ok(calls > 3, 'it must not retain the old three-attempt ceiling');
+  assert.ok(clock > 60, 'it must attempt acquisition after the lease-stale boundary');
   assert.ok(slept.length > 0, 'it must wait between failures');
-  assert.equal(slept.length, calls, 'every failure waits - no failure is free');
+  assert.equal(slept.length, calls - 1, 'every failure waits - no failure is free');
   // Including the LAST one. Clamping the final backoff to the remaining deadline left one
   // free failure per wake, which is all a hot loop needs.
-  for (const ms of slept) assert.ok(ms >= 1000, `a backoff must be real, got ${ms}`);
+  for (const ms of slept) assert.equal(ms, 5);
+});
+
+test('DELTA H: a non-retriable listen failure exits promptly', async () => {
+  let calls = 0;
+  let sleeps = 0;
+  const client = cliBusClient({
+    root: 'C:/nowhere',
+    waitForMailbox: async () => {
+      calls += 1;
+      const error = new Error('seat token is invalid');
+      error.status = 401;
+      error.code = 'unauthorized';
+      error.retriable = false;
+      throw error;
+    },
+    sleep: async () => { sleeps += 1; }
+  });
+
+  await assert.rejects(client.listen('worker', 300), /non-retriable unauthorized/);
+  assert.equal(calls, 1);
+  assert.equal(sleeps, 0, 'terminal errors do not spend the lease retry window');
 });
 
 test('mail on the first poll returns immediately', async () => {

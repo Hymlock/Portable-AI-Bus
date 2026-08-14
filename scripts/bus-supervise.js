@@ -21,9 +21,10 @@
  * would burn tokens and hide the fault. Liveness is the one condition a supervisor can judge
  * without guessing.
  *
- * It gives up after `--max-restarts` per seat (default 5). A brain that dies immediately and
- * repeatedly has a real problem, and an infinite restart loop turns that into a token fire while
- * looking, from outside, exactly like a healthy bus.
+ * It pauses after `--max-restarts` per seat (default 5) for one harness lease-stale interval,
+ * then opens a fresh bounded burst. A brain that dies immediately and repeatedly has a real
+ * problem, but permanent give-up is itself an unattended dead seat; the cooldown prevents both
+ * a hot token-burning loop and permanent silence.
  *
  * ## Run it detached, not inside a job
  *
@@ -42,6 +43,7 @@ const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const { listNodeProcesses, processesForRoot, samePath } = require('./bus-processes');
+const { DEFAULT_LEASE_STALE_MS } = require('../dist/harness');
 
 const REPO = path.resolve(__dirname, '..');
 const DIST = fs.existsSync(path.join(REPO, 'dist', 'brain', 'cli.js'))
@@ -61,6 +63,8 @@ const maxRestarts = Number(option('--max-restarts', '5'));
 const brainFile = path.resolve(option('--brain', path.join(REPO, 'brains', 'agent-seat.js')));
 
 const restarts = new Map(seats.map((s) => [s, 0]));
+const healthySince = new Map();
+const budgetExhaustedAt = new Map();
 const staleWarnings = new Map();
 const stamp = () => new Date().toISOString().slice(11, 19);
 
@@ -132,6 +136,13 @@ function sweep() {
   for (const seat of seats) {
     const running = live.get(seat);
     if (running) {
+      const firstHealthyAt = healthySince.get(seat) ?? Date.now();
+      healthySince.set(seat, firstHealthyAt);
+      if ((restarts.get(seat) ?? 0) > 0 && Date.now() - firstHealthyAt >= DEFAULT_LEASE_STALE_MS) {
+        restarts.set(seat, 0);
+        budgetExhaustedAt.delete(seat);
+        console.log(`tick ${stamp()} ${seat} stayed live through one lease-stale window - restart budget reset.`);
+      }
       if (!running.assumedLive) {
         const warning = staleCodeWarning({ coordinationRoot: root, seat, pid: running.pid });
         if (warning && staleWarnings.get(seat) !== warning) console.log(`tick ${stamp()} ${warning} - NOT restarting.`);
@@ -140,16 +151,25 @@ function sweep() {
       }
       continue;
     }
+    healthySince.delete(seat);
     const count = restarts.get(seat) ?? 0;
     if (count >= maxRestarts) {
-      // Said once per sweep on purpose. A seat that cannot stay up is a problem for a human,
-      // and the supervisor must not quietly paper over it.
-      console.log(`tick ${stamp()} ${seat} DEAD and past ${maxRestarts} restarts - NOT restarting. Needs a human.`);
-      continue;
+      const exhaustedAt = budgetExhaustedAt.get(seat) ?? Date.now();
+      budgetExhaustedAt.set(seat, exhaustedAt);
+      if (Date.now() - exhaustedAt < DEFAULT_LEASE_STALE_MS) {
+        console.log(`tick ${stamp()} ${seat} DEAD after ${maxRestarts} restarts - cooling down, then retrying.`);
+        continue;
+      }
+      // Permanent give-up is another silent dead seat. Open a fresh bounded burst after one
+      // harness lease-stale interval, avoiding both a hot restart loop and permanent deafness.
+      restarts.set(seat, 0);
+      budgetExhaustedAt.delete(seat);
+      console.log(`tick ${stamp()} ${seat} restart cooldown elapsed - opening a fresh budget.`);
     }
     const pid = startBrain(seat);
-    restarts.set(seat, count + 1);
-    console.log(`tick ${stamp()} ${seat} was dead - restarted pid ${pid} (${count + 1}/${maxRestarts})`);
+    const nextCount = (restarts.get(seat) ?? 0) + 1;
+    restarts.set(seat, nextCount);
+    console.log(`tick ${stamp()} ${seat} was dead - restarted pid ${pid} (${nextCount}/${maxRestarts})`);
   }
 }
 

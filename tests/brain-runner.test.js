@@ -87,6 +87,18 @@ test('a throwing brain does not kill the process', async () => {
   assert.equal(turns, 2, 'the seat stays attended and the next wake gets a fresh chance');
 });
 
+test('DELTA H: an exhausted listener escapes the runner so the process exits nonzero', async () => {
+  const { bus } = makeBus();
+  bus.listen = async () => { throw new Error('listen recovery exhausted'); };
+  const brain = { name: 'idle', async takeTurn() { return { done: true }; } };
+
+  await assert.rejects(
+    runBrain({ seat: 'claude', brain, bus, maxWakes: 2 }),
+    /listen recovery exhausted/,
+    'the runner must not translate deafness into an ordinary timeout or successful exit'
+  );
+});
+
 test('the per-wake budget caps a runaway brain without ending it', async () => {
   const { bus, sent } = makeBus({ script: [[msg(1, 'go')], [msg(2, 'go again')]] });
   const brain = {

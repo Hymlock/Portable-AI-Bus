@@ -66,7 +66,8 @@ const DEFAULT_PORT = 47_831;
 const DEFAULT_MAX_BODY_BYTES = 1024 * 1024;
 const MAX_WAKE_MS = 30_000;
 const MAX_CONCURRENT_WAKES = 8;
-const DEFAULT_LEASE_STALE_MS = 60_000;
+/** Shared with listeners and supervisors so their recovery policy cannot drift from lease expiry. */
+export const DEFAULT_LEASE_STALE_MS = 60_000;
 const DEFAULT_LEASE_SWEEP_MS = 15_000;
 const MAX_WORKER_LEASES = 256;
 const DEFAULT_MAX_WAKE_MESSAGES = 100;
