@@ -123,11 +123,22 @@ export const PLAN_SCHEMA = {
   required: ['actions', 'done']
 };
 
-// One normal transactional wake carries one message, so 32 KiB leaves room for the system
-// prompt, action schema, and a useful answer in common model context windows while admitting
-// the 5-7 KiB task briefs this Bus routinely carries. The transport supports much larger
-// records; this is only a prompt-budget boundary, and crossing it must therefore be visible.
-const WAKE_FIELD_LIMIT_BYTES = 32 * 1024;
+// The binding constraint is NOT model context - it is the Windows command line. Providers take
+// their prompt as an argv element (`args.push(prompt)` in providers.ts), and CreateProcess caps a
+// whole command line at 32,767 characters. Measured against the real codex CLI through runProcess:
+// 1,000 / 8,000 / 20,000 / 31,000-character prompts all answer normally; 40,000 returns code 255
+// in 368 ms with no output, which surfaces as `chain-exhausted` and reads like a provider fault
+// rather than our own overflow.
+//
+// A 32 KiB per-field allowance therefore let ONE message consume the entire process budget before
+// the system prompt, action schema, roster and capability lines were added, and it took both seats
+// off the bus. 12 KiB admits the 5-7 KiB briefs this Bus routinely carries while leaving the rest
+// of the command line for everything wrapped around them.
+//
+// This is a ceiling on the CALLER, not on the transport: the capture path is byte-exact at 200 KB
+// and beyond. Raising it again requires moving prompts off argv - stdin or a temp file - not a
+// larger number here.
+const WAKE_FIELD_LIMIT_BYTES = 12 * 1024;
 
 function promptField(
   value: string,
