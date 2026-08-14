@@ -3,7 +3,7 @@ const test = require('node:test');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { resolveGrokCommand, resolveProvider, extractGrokAnswer } = require('../dist/brain/providers.js');
+const { resolveGrokCommand, resolveProvider, extractGrokAnswer, buildGrokArgs } = require('../dist/brain/providers.js');
 const { parsePlan } = require('../dist/brain/brains/agent.js');
 const { chainProviders, classifyFailure } = require('../dist/brain/chain.js');
 
@@ -40,6 +40,19 @@ test('"Not signed in" classifies as auth, not as a generic error', () => {
 test('a grok link reports kind "grok", so the record names the vendor', () => {
   const provider = resolveProvider({ kind: 'grok', codex: {}, grok: { command: 'nonexistent-grok' } });
   assert.equal(provider.kind, 'grok');
+});
+
+test('Grok structured-output options precede -p and the prompt is its final argument', () => {
+  // The Grok Build CLI treats -p as the single-prompt boundary. Flags placed after the prompt
+  // leave the process in its interactive TUI, where a headless bus wake waits forever for keys.
+  const schema = { type: 'object', required: ['done'] };
+  const args = buildGrokArgs('wake', schema, 'grok-4');
+  const promptIndex = args.indexOf('-p');
+
+  assert.ok(promptIndex > args.indexOf('--json-schema'));
+  assert.ok(promptIndex > args.indexOf('--output-format'));
+  assert.ok(promptIndex > args.indexOf('--model'));
+  assert.deepEqual(args.slice(promptIndex), ['-p', 'wake']);
 });
 
 test('a signed-out grok does not stop a seat', async () => {

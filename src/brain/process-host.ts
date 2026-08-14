@@ -274,6 +274,9 @@ const completionPath = process.argv[3];
 const scriptLauncherPath = process.argv[4];
 let child;
 let finished = false;
+function quoteCmdArgument(value) {
+  return '"' + String(value).replace(/"/g, '\\"') + '"';
+}
 function finish(code, error) {
   if (finished) return;
   finished = true;
@@ -289,18 +292,24 @@ function finish(code, error) {
   process.exit(Number.isInteger(code) ? code : 255);
 }
 try {
-  const isWindowsScript = /\.(?:bat|cmd|ps1)$/i.test(request.command);
-  const command = isWindowsScript
-    ? (process.env.SystemRoot || 'C:\\Windows') + '\\System32\\WindowsPowerShell\\v1.0\\powershell.exe'
-    : request.command;
-  const args = isWindowsScript
-    ? ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
-       '-File', scriptLauncherPath, requestPath]
-    : request.args;
+  const isCommandScript = /\.(?:bat|cmd)$/i.test(request.command);
+  const isPowerShellScript = /\.ps1$/i.test(request.command);
+  const command = isCommandScript
+    ? (process.env.ComSpec || (process.env.SystemRoot || 'C:\\Windows') + '\\System32\\cmd.exe')
+    : isPowerShellScript
+      ? (process.env.SystemRoot || 'C:\\Windows') + '\\System32\\WindowsPowerShell\\v1.0\\powershell.exe'
+      : request.command;
+  const args = isCommandScript
+    ? ['/d', '/s', '/c', '"' + [request.command, ...request.args].map(quoteCmdArgument).join(' ') + '"']
+    : isPowerShellScript
+      ? ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+         '-File', scriptLauncherPath, requestPath]
+      : request.args;
   child = childProcess.spawn(command, args, {
     cwd: process.cwd(),
     env: process.env,
     windowsHide: true,
+    windowsVerbatimArguments: isCommandScript,
     stdio: ['ignore', output, output]
   });
 } catch (error) {

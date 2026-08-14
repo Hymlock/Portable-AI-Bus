@@ -709,6 +709,15 @@ export type GrokProviderOptions = {
   log?: (event: string, data?: unknown) => void;
 };
 
+/** Build a one-shot Grok invocation, keeping every CLI option before the `-p` prompt boundary. */
+export function buildGrokArgs(prompt: string, responseSchema?: unknown, model?: string): string[] {
+  const args = ['--output-format', 'json', '--always-approve'];
+  if (responseSchema) args.push('--json-schema', JSON.stringify(responseSchema));
+  if (model) args.push('--model', model);
+  args.push('-p', prompt);
+  return args;
+}
+
 /**
  * The xAI Grok CLI as a provider — the third vendor, and the one that makes the bus genuinely
  * vendor-independent rather than merely two-vendor.
@@ -760,13 +769,11 @@ export function grokProvider(options: GrokProviderOptions = {}): ModelProvider {
       // This grants unattended tool execution, and that is the design: seats have full
       // functionality in their workdir. The boundary that keeps it safe is the WORKDIR plus git,
       // not a prompt telling a capable agent it is powerless.
-      const args = ['-p', systemPrompt ? `${systemPrompt}\n\n---\n\n${prompt}` : prompt,
-                    '--output-format', 'json', '--always-approve'];
       // Constrain decoding when the caller says what shape it needs. This is the whole reason
       // the grok seat can be trusted with structured work: the CLI enforces the schema, so
       // "reply with only JSON" stops being a request the model may decline.
-      if (responseSchema) args.push('--json-schema', JSON.stringify(responseSchema));
-      if (options.model) args.push('--model', options.model);
+      const combinedPrompt = systemPrompt ? `${systemPrompt}\n\n---\n\n${prompt}` : prompt;
+      const args = buildGrokArgs(combinedPrompt, responseSchema, options.model);
 
       const { code, stdout, stderr } = await run(args, timeoutMs);
       const { text, error } = extractGrokAnswer(stdout);

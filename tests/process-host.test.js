@@ -2,6 +2,8 @@ const assert = require('node:assert/strict');
 const { spawnSync } = require('node:child_process');
 const { EventEmitter } = require('node:events');
 const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const test = require('node:test');
 
 const { runProcess, stripAnsi } = require('../dist/brain/process-host');
@@ -70,6 +72,51 @@ test('Windows process host launches a non-EXE command wrapper', {
 
   assert.equal(result.code, 0, result.stderr);
   assert.match(result.stdout, /\d+\.\d+\.\d+/);
+});
+
+test('Windows process host round-trips quoted JSON through a command wrapper', {
+  skip: process.platform !== 'win32'
+}, () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'portable-ai-bus-cmd-wrapper-'));
+  const fixture = path.join(root, 'wrapper fixture');
+  fs.mkdirSync(fixture);
+  const wrapper = path.join(fixture, 'capture.cmd');
+  const capture = path.join(fixture, 'capture.js');
+  const schema = JSON.stringify({
+    type: 'object',
+    properties: { done: { type: 'boolean' } },
+    required: ['done']
+  });
+  fs.writeFileSync(capture, 'process.stdout.write(JSON.stringify(process.argv.slice(2)))');
+  fs.writeFileSync(wrapper, `@"${process.execPath}" "${capture}" %*\r\n`);
+
+  try {
+    const probe = `
+      const { runProcess } = require('./dist/brain/process-host');
+      runProcess(${JSON.stringify(wrapper)}, ${JSON.stringify([
+        '--json-schema', schema, '-p', 'Set done true.'
+      ])}, { timeoutMs: 10_000 })
+        .then((result) => {
+          process.stdout.write(JSON.stringify(result));
+          process.exit(0);
+        });
+    `;
+    const completed = spawnSync(process.execPath, ['-e', probe], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      timeout: 20_000,
+      windowsHide: true
+    });
+    assert.equal(completed.status, 0, completed.stderr || completed.error?.message);
+    const result = JSON.parse(completed.stdout);
+
+    assert.equal(result.code, 0, result.stderr || result.stdout);
+    assert.deepEqual(JSON.parse(result.stdout), [
+      '--json-schema', schema, '-p', 'Set done true.'
+    ]);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('Windows process host uses headless ConPTY and strips terminal controls', async () => {
