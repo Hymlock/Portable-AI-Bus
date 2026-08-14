@@ -158,6 +158,7 @@ async function runConPty(
       JSON.stringify({ command: executable, args }),
       'utf8'
     );
+    fs.writeFileSync(path.join(captureDir, 'launch-script.ps1'), powerShellScriptLauncher, 'utf8');
   } catch (error) {
     return { code: -1, stdout: '', stderr: `ConPTY capture setup failed: ${errorMessage(error)}` };
   }
@@ -165,6 +166,7 @@ async function runConPty(
   const requestPath = path.join(captureDir, 'request.json');
   const outputPath = path.join(captureDir, 'output.bin');
   const completionPath = path.join(captureDir, 'completion.json');
+  const scriptLauncherPath = path.join(captureDir, 'launch-script.ps1');
 
   return new Promise((resolve) => {
     let child: PtyProcess;
@@ -174,7 +176,7 @@ async function runConPty(
       // used as a byte transport. The short wrapper's PTY output is reserved for launch diagnostics.
       child = pty.spawn(
         process.execPath,
-        ['-e', conPtyCaptureWrapper, requestPath, outputPath, completionPath],
+        ['-e', conPtyCaptureWrapper, requestPath, outputPath, completionPath, scriptLauncherPath],
         {
           name: 'xterm-256color',
           cols: 120,
@@ -265,9 +267,11 @@ async function runConPty(
 const conPtyCaptureWrapper = String.raw`
 const childProcess = require('node:child_process');
 const fs = require('node:fs');
-const request = JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
+const requestPath = process.argv[1];
+const request = JSON.parse(fs.readFileSync(requestPath, 'utf8'));
 const output = fs.openSync(process.argv[2], 'w');
 const completionPath = process.argv[3];
+const scriptLauncherPath = process.argv[4];
 let child;
 let finished = false;
 function finish(code, error) {
@@ -285,7 +289,15 @@ function finish(code, error) {
   process.exit(Number.isInteger(code) ? code : 255);
 }
 try {
-  child = childProcess.spawn(request.command, request.args, {
+  const isWindowsScript = /\.(?:bat|cmd|ps1)$/i.test(request.command);
+  const command = isWindowsScript
+    ? (process.env.SystemRoot || 'C:\\Windows') + '\\System32\\WindowsPowerShell\\v1.0\\powershell.exe'
+    : request.command;
+  const args = isWindowsScript
+    ? ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+       '-File', scriptLauncherPath, requestPath]
+    : request.args;
+  child = childProcess.spawn(command, args, {
     cwd: process.cwd(),
     env: process.env,
     windowsHide: true,
@@ -298,6 +310,19 @@ if (child) {
   child.once('error', (error) => finish(255, error));
   child.once('exit', (code) => finish(code));
 }
+`;
+
+const powerShellScriptLauncher = String.raw`
+param([Parameter(Mandatory=$true)][string]$RequestPath)
+$request = Get-Content -LiteralPath $RequestPath -Raw | ConvertFrom-Json
+$command = [string]$request.command
+$arguments = @($request.args | ForEach-Object { [string]$_ })
+& $command @arguments
+$invocationSucceeded = $?
+$exitCode = $LASTEXITCODE
+if ($null -ne $exitCode) { exit $exitCode }
+if (-not $invocationSucceeded) { exit 1 }
+exit 0
 `;
 
 function removeCaptureDir(directory: string): void {
@@ -326,7 +351,10 @@ function resolveWindowsExecutable(
   const hasExtension = Boolean(path.extname(base));
   const extensions = hasExtension
     ? ['']
-    : (env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean);
+    : [...(env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean), '.PS1']
+      .filter((extension, index, all) => all.findIndex(
+        (other) => other.toLowerCase() === extension.toLowerCase()
+      ) === index);
   for (const root of roots) {
     for (const extension of extensions) {
       const candidate = root ? path.join(root, base + extension) : base + extension;

@@ -48,6 +48,30 @@ test('Windows process host does not reap a real running child before it exits', 
   assert.equal(result.code, 0);
 });
 
+test('Windows process host launches a non-EXE command wrapper', {
+  skip: process.platform !== 'win32'
+}, () => {
+  const probe = `
+    const { runProcess } = require('./dist/brain/process-host');
+    runProcess('npm', ['--version'], { timeoutMs: 10_000 })
+      .then((result) => {
+        process.stdout.write(JSON.stringify(result));
+        process.exit(0);
+      });
+  `;
+  const completed = spawnSync(process.execPath, ['-e', probe], {
+    cwd: process.cwd(),
+    encoding: 'utf8',
+    timeout: 20_000,
+    windowsHide: true
+  });
+  assert.equal(completed.status, 0, completed.stderr || completed.error?.message);
+  const result = JSON.parse(completed.stdout);
+
+  assert.equal(result.code, 0, result.stderr);
+  assert.match(result.stdout, /\d+\.\d+\.\d+/);
+});
+
 test('Windows process host uses headless ConPTY and strips terminal controls', async () => {
   let received;
   const fakePty = {
