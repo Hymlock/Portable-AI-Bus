@@ -219,6 +219,13 @@ export function cliBusClient(options: CliBusOptions): BusClient {
       return parked;
     },
 
+    loadRecovery(seat) { return durableMailbox.openRecoveryFor(seat); },
+    openRecovery(seat, workId, note) { return durableMailbox.openRecovery(seat, workId, note); },
+    recordRecoveryAction(seat, workId, actionId) {
+      return durableMailbox.recordRecoveryAction(seat, workId, actionId);
+    },
+    closeRecovery(seat, workId, reason) { return durableMailbox.closeRecovery(seat, workId, reason); },
+
     // Kept as the destructive compatibility surface for callers outside the brain runner.
     async read(seat) {
       const result = await tool(seat, 'mailbox_read', { agent: seat, all: true });

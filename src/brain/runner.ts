@@ -8,6 +8,7 @@
  */
 
 import { Brain, BrainMessage, BrainTools, WakeReason, WakeResult } from './contract';
+import { RecoveryCheckpoint } from '../mailbox';
 
 export type BusClient = {
   /** Blocks until mail arrives or the deadline passes. Resolves 'mail' or 'timeout'. */
@@ -25,6 +26,10 @@ export type BusClient = {
   acknowledge?(seat: string, count: number): Promise<BrainMessage[]>;
   /** Move one poison message out of delivery while retaining its durable record. */
   park?(seat: string, seq: number, reason: string): Promise<unknown>;
+  loadRecovery?(seat: string): Promise<RecoveryCheckpoint | undefined>;
+  openRecovery?(seat: string, workId: number, note: string): Promise<RecoveryCheckpoint>;
+  recordRecoveryAction?(seat: string, workId: number, actionId: string): Promise<RecoveryCheckpoint>;
+  closeRecovery?(seat: string, workId: number, reason: string): Promise<unknown>;
   tools(seat: string): BrainTools;
 };
 
@@ -159,6 +164,13 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
   let hasOpenWork = false;
   /** The last unfinished wake's own description of what the next wake must continue. */
   let openWork: string | undefined;
+  let recovery = await bus.loadRecovery?.(seat);
+  let recoveryData: string | undefined;
+  if (recovery) {
+    hasOpenWork = true;
+    openWork = recovery.note;
+    recoveryData = recovery.note;
+  }
 
   try {
     while (!stopped) {
@@ -240,6 +252,10 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
       });
 
       let result: WakeResult = { done: true };
+      const workId = messages[0]?.seq ?? recovery?.workId;
+      if (messages[0] && bus.openRecovery) {
+        recovery = await bus.openRecovery(seat, messages[0].seq, openWork ?? messages[0].subject);
+      }
       const presentedThrough = messages.reduce((highest, message) => Math.max(highest, message.seq), 0);
       const receiveController = new AbortController();
       let listeningThrough = presentedThrough;
@@ -281,15 +297,22 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
       const stallTimer = providerStallMs === 0 ? undefined : setTimeout(reportStall, providerStallMs);
       if (providerStallMs === 0) reportStall();
       try {
-        result = await brain.takeTurn({
+        const wakeContext = {
           seat,
           reason,
           messages,
           openWork,
+          recoveryData,
+          recoveryActionIds: recovery?.actionReceipts,
+          recordRecoveryAction: workId && bus.recordRecoveryAction
+            ? async (actionId: string) => { recovery = await bus.recordRecoveryAction!(seat, workId, actionId); }
+            : undefined,
           tools: counted,
           budget: budgetPerWake,
           log
-        });
+        };
+        result = await brain.takeTurn(wakeContext);
+        recoveryData = undefined;
       } catch (error) {
         providerOutcome = 'threw';
         if (error instanceof BudgetExceededError) {
@@ -324,6 +347,8 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
         } catch (error) {
           log('exhausted-handler-failed', { seat, error: (error as Error)?.message });
         }
+        if (workId) await bus.closeRecovery?.(seat, workId, 'exhausted');
+        recovery = undefined;
       }
 
       // Inbox delivery is transactional. A malformed provider response is not work: the task
@@ -357,6 +382,7 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
             await brain.settleMessages?.([message.seq], 'parked');
             summary.parkedMessages += 1;
             blockedEscalated = true;
+            if (workId === message.seq) recovery = undefined;
             log('message-blocked-escalated', {
               seat, seq: message.seq, from: message.from, kind: message.kind,
               subject: message.subject, attempts, reason: parkReason,
@@ -379,6 +405,7 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
             failedAttempts.delete(message.seq);
             await brain.settleMessages?.([message.seq], 'parked');
             summary.parkedMessages += 1;
+            if (workId === message.seq) recovery = undefined;
             log('message-parked', {
               seat,
               seq: message.seq,
@@ -408,10 +435,15 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
         // A later partial step may omit its note. Retain the last useful summary rather than
         // erasing the only durable context the next model session has.
         openWork = nextOpenWork || openWork;
+        if (workId && bus.openRecovery) recovery = await bus.openRecovery(seat, workId, openWork ?? 'unfinished');
       } else {
         // Completion and exhaustion both close the continuation. Never leak an older task's
         // summary into a genuinely idle or unrelated future wake.
         openWork = undefined;
+        if (workId && result.retainMessages !== true && !result.exhausted && !blockedEscalated) {
+          await bus.closeRecovery?.(seat, workId, result.done ? 'done' : 'settled');
+          recovery = undefined;
+        }
       }
 
       log('wake-complete', {

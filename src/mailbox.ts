@@ -35,6 +35,20 @@ export type BusMessage = {
   readAt?: string;
   parkedAt?: string;
   parkedReason?: string;
+  recoveryCheckpoints?: RecoveryCheckpoint[];
+};
+
+export type RecoveryCheckpoint = {
+  id: string;
+  workId: number;
+  seat: string;
+  status: 'open' | 'closed';
+  note: string;
+  actionReceipts: string[];
+  openedAt: string;
+  updatedAt: string;
+  closedAt?: string;
+  closeReason?: string;
 };
 
 export type MailboxState = {
@@ -434,6 +448,7 @@ export class MailboxStore {
       message.readAt = parkedAt;
       message.parkedAt = parkedAt;
       message.parkedReason = reason.trim();
+      this.closeCheckpoints(message, agent, 'parked', parkedAt);
       await this.atomicJson(messagePath, message);
       return message;
     });
@@ -457,9 +472,89 @@ export class MailboxStore {
       delete message.readAt;
       delete message.parkedAt;
       delete message.parkedReason;
+      this.closeCheckpoints(message, agent, 'requeued');
       await this.atomicJson(messagePath, message);
       return message;
     });
+  }
+
+  async openRecovery(agent: string, workId: number, note: string): Promise<RecoveryCheckpoint> {
+    this.assertAgent(agent, 'agent');
+    if (!Number.isSafeInteger(workId) || workId < 1) throw new Error('workId must be a positive mailbox sequence');
+    return this.withLock(async () => {
+      const messages = await this.allMessagesUnsafe();
+      const source = messages.find((message) => message.seq === workId);
+      if (!source) throw new Error(`message #${workId} does not exist`);
+      if (source.to !== agent) throw new Error(`message #${workId} is addressed to ${source.to}, not ${agent}`);
+      const at = nowIso();
+      for (const message of messages) {
+        if (message.seq === workId) continue;
+        if (this.closeCheckpoints(message, agent, `superseded by work #${workId}`, at)) {
+          const file = await this.findMessagePathUnsafe(message.seq);
+          if (file) await this.atomicJson(file, message);
+        }
+      }
+      source.recoveryCheckpoints ??= [];
+      let checkpoint = source.recoveryCheckpoints.find((item) => item.seat === agent && item.status === 'open');
+      if (checkpoint) {
+        if (note.trim()) checkpoint.note = note.trim();
+        checkpoint.updatedAt = at;
+      } else {
+        checkpoint = { id: randomUUID(), workId, seat: agent, status: 'open', note: note.trim(), actionReceipts: [], openedAt: at, updatedAt: at };
+        source.recoveryCheckpoints.push(checkpoint);
+      }
+      const file = await this.findMessagePathUnsafe(workId);
+      if (!file) throw new Error(`message #${workId} disappeared`);
+      await this.atomicJson(file, source);
+      return checkpoint;
+    });
+  }
+
+  async openRecoveryFor(agent: string): Promise<RecoveryCheckpoint | undefined> {
+    this.assertAgent(agent, 'agent');
+    return (await this.allMessages()).flatMap((message) => message.recoveryCheckpoints ?? [])
+      .filter((item) => item.seat === agent && item.status === 'open')
+      .sort((left, right) => left.updatedAt.localeCompare(right.updatedAt)).at(-1);
+  }
+
+  async recordRecoveryAction(agent: string, workId: number, actionId: string): Promise<RecoveryCheckpoint> {
+    if (!actionId) throw new Error('action receipt id must not be empty');
+    return this.withLock(async () => {
+      const file = await this.findMessagePathUnsafe(workId);
+      if (!file) throw new Error(`message #${workId} does not exist`);
+      const message = await this.readJson<BusMessage>(file);
+      const checkpoint = message.recoveryCheckpoints?.find((item) => item.seat === agent && item.status === 'open');
+      if (!checkpoint) throw new Error(`work #${workId} has no open recovery checkpoint for ${agent}`);
+      if (!checkpoint.actionReceipts.includes(actionId)) checkpoint.actionReceipts.push(actionId);
+      checkpoint.updatedAt = nowIso();
+      await this.atomicJson(file, message);
+      return checkpoint;
+    });
+  }
+
+  async closeRecovery(agent: string, workId: number, reason: string): Promise<RecoveryCheckpoint | undefined> {
+    return this.withLock(async () => {
+      const file = await this.findMessagePathUnsafe(workId);
+      if (!file) return undefined;
+      const message = await this.readJson<BusMessage>(file);
+      const checkpoint = message.recoveryCheckpoints?.find((item) => item.seat === agent && item.status === 'open');
+      if (!checkpoint) return undefined;
+      const at = nowIso();
+      checkpoint.status = 'closed'; checkpoint.closedAt = at; checkpoint.updatedAt = at;
+      checkpoint.closeReason = reason.trim() || 'settled';
+      await this.atomicJson(file, message);
+      return checkpoint;
+    });
+  }
+
+  private closeCheckpoints(message: BusMessage, agent: string, reason: string, at = nowIso()) {
+    let changed = false;
+    for (const checkpoint of message.recoveryCheckpoints ?? []) {
+      if (checkpoint.seat !== agent || checkpoint.status !== 'open') continue;
+      checkpoint.status = 'closed'; checkpoint.closedAt = at; checkpoint.updatedAt = at; checkpoint.closeReason = reason;
+      changed = true;
+    }
+    return changed;
   }
 
   async waitFor(

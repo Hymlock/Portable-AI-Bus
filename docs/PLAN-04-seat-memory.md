@@ -1,6 +1,10 @@
 # PLAN 04 — Seat memory
 
-Status: **not started.** Queued behind the transport fix (PLAN 03) and the envelope class (PLAN 02).
+Status: **slice 1 implemented.** Durable same-seat recovery checkpoints now live on their source
+mailbox record (`workId` is its sequence). They retain closed history, supersede rather than expire,
+and atomically retain accepted-action receipts with unfinished intent. Startup retrieves only open
+checkpoints; injection is escaped, explicitly untrusted, and capped at 2 KiB inside the existing
+aggregate prompt budget. Cross-seat reassignment and verified long-term memory remain later slices.
 Ordering decided adversarially: memory built first would faithfully record a pipeline that was
 still discarding most of its long messages.
 
