@@ -8,7 +8,8 @@ const {
   buildWakePrompt,
   parsePlan,
   receiptPlan,
-  executePlan
+  executePlan,
+  WAKE_FIELD_LIMIT_BYTES
 } = require('../dist/brain/brains/agent.js');
 
 const msg = (seq, from = 'claude') => ({
@@ -321,12 +322,16 @@ test('buildWakePrompt presents durable continuation context without inventing it
 });
 
 test('buildWakePrompt marks an oversized message with its sequence and exact omitted byte count', () => {
-  const limit = 32 * 1024;
-  const body = `${'a'.repeat(limit)}\u{1F642}tail`;
+  // Bind to the REAL limit. This test used to hardcode 32 KiB and assert "8 UTF-8 bytes omitted";
+  // once the limit dropped to 12 KiB the true count was 20488, which still contains that substring,
+  // so it kept passing for the wrong reason. Deriving the expectation makes it fail when the
+  // arithmetic is wrong rather than when a digit happens not to line up.
+  const body = `${'a'.repeat(WAKE_FIELD_LIMIT_BYTES)}\u{1F642}tail`;
+  const omitted = Buffer.byteLength(body, 'utf8') - WAKE_FIELD_LIMIT_BYTES;
   const prompt = buildWakePrompt('grok', [{ ...msg(42), body }]);
 
   assert.match(prompt, /TRUNCATED MESSAGE #42/);
-  assert.match(prompt, /8 UTF-8 bytes omitted/);
+  assert.match(prompt, new RegExp(`\\b${omitted} UTF-8 bytes omitted\\b`));
   assert.match(prompt, /\.ai-bus\/runtime\/mailbox\/inbox\/000042-claude-to-grok\.json/);
   assert.equal(prompt.includes(body), false);
 });
@@ -339,8 +344,33 @@ test('buildWakePrompt passes a message below the limit through byte-for-byte wit
   assert.doesNotMatch(prompt, /TRUNCATED MESSAGE|bytes omitted/);
 });
 
+// The wake field limit is bounded by the WINDOWS COMMAND LINE, not by model context: providers
+// pass the assembled prompt as an argv element and CreateProcess caps the whole command line at
+// 32,767 characters. Measured against the real codex CLI: 31,000-character prompts answer normally,
+// 40,000 returns code 255 with no output.
+//
+// The other truncation tests here use bodies larger than every candidate limit, so they pass at any
+// setting and cannot catch a limit raised past the budget. This one can: it fails if a maximum-size
+// wake prompt no longer leaves room for the system prompt, action schema and flags wrapped around
+// it. Raising the ceiling requires moving prompts off argv - stdin or a file - not a bigger number.
+test('a maximum-size wake prompt still fits inside the Windows command-line budget', () => {
+  const WINDOWS_COMMAND_LINE_MAX = 32767;
+  const RESERVED_FOR_SYSTEM_PROMPT_AND_FLAGS = 8 * 1024;
+  const budget = WINDOWS_COMMAND_LINE_MAX - RESERVED_FOR_SYSTEM_PROMPT_AND_FLAGS;
+
+  const oversized = 'x'.repeat(64 * 1024);
+  const prompt = buildWakePrompt('grok', [{ ...msg(44), body: oversized }], oversized);
+  const bytes = Buffer.byteLength(prompt, 'utf8');
+
+  assert.ok(
+    bytes <= budget,
+    `a fully saturated wake prompt is ${bytes} bytes, over the ${budget}-byte argv budget; ` +
+    'lower WAKE_FIELD_LIMIT_BYTES or move prompts off the command line'
+  );
+});
+
 test('buildWakePrompt marks oversized open work and leaves short open work unchanged', () => {
-  const limit = 32 * 1024;
+  const limit = WAKE_FIELD_LIMIT_BYTES;
   const longOpenWork = `${'b'.repeat(limit)}\u{1F642}tail`;
   const truncated = buildWakePrompt('codex', [], longOpenWork);
   assert.match(truncated, /TRUNCATED OPEN WORK/);
@@ -506,7 +536,7 @@ test('ATTACK: slow-but-successful first link is not abandoned', async () => {
   assert.equal(result.done, true);
 });
 
-test('ATTACK: every provider exhausted — receipt + chain-exhausted note for baton move', async () => {
+test('ATTACK: every provider exhausted â€” receipt + chain-exhausted note for baton move', async () => {
   const chain = chainProviders([
     failProvider('cli', 'insufficient_quota'),
     failProvider('api', '401 unauthorized'),

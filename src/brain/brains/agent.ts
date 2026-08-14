@@ -145,7 +145,15 @@ export const PLAN_SCHEMA = {
 // This is a ceiling on the CALLER, not on the transport: the capture path is byte-exact at 200 KB
 // and beyond. Raising it again requires moving prompts off argv - stdin or a temp file - not a
 // larger number here.
-const WAKE_FIELD_LIMIT_BYTES = 12 * 1024;
+// 8 KiB, not 12: the limit is PER FIELD and one wake can carry both a message and open work, so the
+// worst case is twice this number plus the wrapper text. 12 KiB looked safe per field and still
+// produced a ~24.6 KB prompt when both were saturated, which leaves too little of the 32,767-byte
+// command line for the system prompt, action schema and flags. Caught by the budget test below,
+// which is the gate 64b3d45 shipped without.
+// Exported so tests bind to the REAL value. The truncation tests previously hardcoded 32 KiB and
+// asserted "8 UTF-8 bytes omitted"; at a 12 KiB limit the true count was 20488, which still matched
+// that substring by accident. They passed for the wrong reason and could not detect a changed limit.
+export const WAKE_FIELD_LIMIT_BYTES = 8 * 1024;
 
 function promptField(
   value: string,
