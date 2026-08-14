@@ -124,7 +124,9 @@ function mailbox(args) {
 const stagedRepo = path.basename(REPO).toLowerCase() === '.ai-bus';
 const created = stagedRepo ? [] : bootstrapCoordinationRoot(REPO, root);
 if (created.length) log(`bootstrap    installed ${created.length} missing coordination asset(s)`);
-mailbox(['init', '--agents', allSeats.join(','), '--max-rounds', '550']);
+// A busy three-seat engagement crossed 535 rounds in one evening. 550 looked generous when it
+// was chosen, but in practice it was a silent shutdown scheduled fifteen messages later.
+mailbox(['init', '--agents', allSeats.join(','), '--max-rounds', '6000']);
 log(`seats        ${allSeats.join(', ')}`);
 log(`workdir      ${workdir}`);
 

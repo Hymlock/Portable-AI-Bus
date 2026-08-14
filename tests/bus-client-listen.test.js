@@ -128,4 +128,12 @@ test('real harness peek is non-destructive and acknowledgement commits only its 
   assert.deepEqual(acknowledged.map((message) => message.seq), presented.map((message) => message.seq));
   assert.deepEqual((await server.mailbox.inbox('worker')).map((message) => message.seq), [late.seq],
     'mail arriving mid-turn must remain unread');
+
+  await client.park('worker', late.seq, 'bounded poison retry exhausted');
+  assert.deepEqual((await server.mailbox.inbox('worker')).map((message) => message.seq), []);
+  const parked = await server.mailbox.parked('worker');
+  assert.deepEqual(parked.map((message) => message.seq), [late.seq]);
+  assert.equal(parked[0].parkedReason, 'bounded poison retry exhausted');
+  await server.mailbox.requeue('worker', late.seq);
+  assert.deepEqual((await server.mailbox.inbox('worker')).map((message) => message.seq), [late.seq]);
 });

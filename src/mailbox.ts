@@ -33,6 +33,8 @@ export type BusMessage = {
   workspaceCommit?: CommitStamp;
   read: boolean;
   readAt?: string;
+  parkedAt?: string;
+  parkedReason?: string;
 };
 
 export type MailboxState = {
@@ -120,6 +122,8 @@ export type CompletionEvent = {
 export type MailboxStatus = MailboxState & {
   unread: Record<string, number>;
   workspaceCommit?: CommitStamp;
+  /** Human-facing warning emitted before the round guard begins failing mutations closed. */
+  roundWarning?: string;
 };
 
 export type DoctorReport = {
@@ -413,6 +417,48 @@ export class MailboxStore {
         await this.atomicJson(messagePath, message);
       }
       return selected;
+    });
+  }
+
+  async park(agent: string, seq: number, reason: string): Promise<BusMessage> {
+    this.assertAgent(agent, 'agent');
+    if (!Number.isSafeInteger(seq) || seq < 1) throw new Error('message sequence must be a positive integer');
+    if (!reason.trim()) throw new Error('parking reason must not be empty');
+    return this.withLock(async () => {
+      const messagePath = await this.findMessagePathUnsafe(seq);
+      if (!messagePath) throw new Error(`message #${seq} does not exist`);
+      const message = await this.readJson<BusMessage>(messagePath);
+      if (message.to !== agent) throw new Error(`message #${seq} is addressed to ${message.to}, not ${agent}`);
+      const parkedAt = nowIso();
+      message.read = true;
+      message.readAt = parkedAt;
+      message.parkedAt = parkedAt;
+      message.parkedReason = reason.trim();
+      await this.atomicJson(messagePath, message);
+      return message;
+    });
+  }
+
+  async parked(agent: string): Promise<BusMessage[]> {
+    this.assertAgent(agent, 'agent');
+    return (await this.allMessages()).filter((message) => message.to === agent && Boolean(message.parkedAt));
+  }
+
+  async requeue(agent: string, seq: number): Promise<BusMessage> {
+    this.assertAgent(agent, 'agent');
+    if (!Number.isSafeInteger(seq) || seq < 1) throw new Error('message sequence must be a positive integer');
+    return this.withLock(async () => {
+      const messagePath = await this.findMessagePathUnsafe(seq);
+      if (!messagePath) throw new Error(`message #${seq} does not exist`);
+      const message = await this.readJson<BusMessage>(messagePath);
+      if (message.to !== agent) throw new Error(`message #${seq} is addressed to ${message.to}, not ${agent}`);
+      if (!message.parkedAt) throw new Error(`message #${seq} is not parked`);
+      message.read = false;
+      delete message.readAt;
+      delete message.parkedAt;
+      delete message.parkedReason;
+      await this.atomicJson(messagePath, message);
+      return message;
     });
   }
 
@@ -800,7 +846,12 @@ export class MailboxStore {
     for (const agent of state.agents) {
       unread[agent] = messages.filter((message) => message.to === agent && !message.read).length;
     }
-    return { ...state, unread, workspaceCommit };
+    const remaining = state.maxRounds - state.round;
+    const warningAt = Math.max(10, Math.ceil(state.maxRounds * 0.1));
+    const roundWarning = !state.halted && remaining > 0 && remaining <= warningAt
+      ? `${remaining} rounds remain before the round guard (${state.round}/${state.maxRounds}); raise the cap or finish the goal before mutating tools fail closed.`
+      : undefined;
+    return { ...state, unread, workspaceCommit, ...(roundWarning ? { roundWarning } : {}) };
   }
 
   async claims(): Promise<Record<string, Claim[]>> {
@@ -1389,6 +1440,19 @@ async function runCli(argv = process.argv.slice(2)) {
       printMessages(messages, json);
       return messages.length > 0 ? 0 : 3;
     }
+    case 'parked': {
+      const messages = await store.parked(stringArg(args, 'for', true));
+      printMessages(messages, json);
+      return messages.length > 0 ? 0 : 3;
+    }
+    case 'requeue': {
+      const message = await store.requeue(
+        stringArg(args, 'for', true),
+        intArg(args, 'seq', 0)
+      );
+      console.log(json ? JSON.stringify(message, null, 2) : `requeued #${message.seq}`);
+      return 0;
+    }
     case 'wait': {
       const result = await store.waitFor(
         stringArg(args, 'for', true),
@@ -1511,7 +1575,7 @@ async function runCli(argv = process.argv.slice(2)) {
     }
     default:
       throw new Error(
-        'usage: mailbox <init|send|inbox|read|wait|claim|release|claims|status|doctor|goal|assign|stall-check|reassign|configure-halting|complete-step|complete-goal|halt|resume> [options]'
+        'usage: mailbox <init|send|inbox|read|parked|requeue|wait|claim|release|claims|status|doctor|goal|assign|stall-check|reassign|configure-halting|complete-step|complete-goal|halt|resume> [options]'
       );
   }
 }

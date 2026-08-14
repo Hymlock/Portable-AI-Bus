@@ -331,6 +331,22 @@ test('round cap halts immediately after durably writing the cap message', async 
   assert.deepEqual(await server.mailbox.claims(), {});
 });
 
+test('approaching the round cap writes a loud harness audit warning', async (t) => {
+  const { root, server, request } = await setup(['codex'], 20);
+  t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
+  for (let round = 0; round < 10; round += 1) {
+    await server.mailbox.send({ from: 'codex', to: 'codex', subject: `round ${round}`, body: 'advance' });
+  }
+  const claim = await request('/v1/tool', {
+    method: 'POST',
+    body: JSON.stringify({ requestId: 'near-cap-claim', name: 'mailbox_claim', input: { agent: 'codex', paths: ['src/warn.ts'] } })
+  });
+  assert.equal(claim.status, 200);
+  const audit = await fs.readFile(server.auditPath, 'utf8');
+  assert.match(audit, /"event":"round_guard_approaching"/);
+  assert.match(audit, /10 rounds remain before the round guard/);
+});
+
 test('authenticated heartbeats persist leases and transition to stale without granting authority', async (t) => {
   // 1000ms, not 100ms. At 100 the test raced the machine: between a heartbeat and the
   // /v1/status call that asserts `live`, several awaits and an HTTP round trip elapse, and on

@@ -650,6 +650,16 @@ export class HarnessServer {
     const input = request.input ?? {};
     if (['mailbox_read', 'mailbox_send', 'mailbox_claim', 'mailbox_release', 'capability_run'].includes(request.name)) {
       const status = await this.mailbox.status();
+      if (status.roundWarning) {
+        await this.audit({
+          event: 'round_guard_approaching',
+          principal: principal.kind === 'seat' ? principal.id : 'operator',
+          tool: request.name,
+          round: status.round,
+          maxRounds: status.maxRounds,
+          warning: status.roundWarning
+        }).catch(() => undefined);
+      }
       if (status.halted || status.round >= status.maxRounds) {
         throw new BusHaltedError(status.stopReason ?? `round guard reached (${status.round}/${status.maxRounds}); mutating tools fail closed.`);
       }

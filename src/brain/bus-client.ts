@@ -21,6 +21,7 @@
 import { BrainMessage, BrainTools } from './contract';
 import { BusClient } from './runner';
 import { callSeatTool, waitForMailbox } from '../worker-client';
+import { MailboxStore } from '../mailbox';
 
 export type CliBusOptions = {
   root: string;
@@ -56,6 +57,7 @@ const LISTEN_ERROR_BACKOFF_MS = 5_000;
 
 export function cliBusClient(options: CliBusOptions): BusClient {
   const log = options.log ?? (() => {});
+  const durableMailbox = new MailboxStore(options.root);
 
   async function tool(seat: string, name: string, input: Record<string, unknown>, timeoutMs = 30_000) {
     try {
@@ -141,6 +143,12 @@ export function cliBusClient(options: CliBusOptions): BusClient {
         acknowledged.push(result[0] as BrainMessage);
       }
       return acknowledged;
+    },
+
+    async park(seat, seq, reason) {
+      const parked = await durableMailbox.park(seat, seq, reason);
+      log('message-durably-parked', { seat, seq, parkedAt: parked.parkedAt, reason: parked.parkedReason });
+      return parked;
     },
 
     // Kept as the destructive compatibility surface for callers outside the brain runner.

@@ -17,6 +17,8 @@ export type BusClient = {
   peek?(seat: string): Promise<BrainMessage[]>;
   /** Commit the unread messages after a usable turn. */
   acknowledge?(seat: string, count: number): Promise<BrainMessage[]>;
+  /** Move one poison message out of delivery while retaining its durable record. */
+  park?(seat: string, seq: number, reason: string): Promise<unknown>;
   tools(seat: string): BrainTools;
 };
 
@@ -39,6 +41,8 @@ export type RunnerOptions = {
   listenSeconds?: number;
   /** Stop after N wakes. For tests only — production runs unbounded. */
   maxWakes?: number;
+  /** Failed deliveries allowed for one message before it is parked. */
+  maxMessageAttempts?: number;
   /**
    * Message kinds that are pure courtesy: they inform, and they never need an answer.
    *
@@ -70,12 +74,14 @@ export type RunnerSummary = {
   wakes: number;
   cappedWakes: number;
   errors: number;
+  parkedMessages: number;
   stoppedBy: 'signal' | 'maxWakes';
 };
 
 const DEFAULT_BUDGET = 30;
 const DEFAULT_LISTEN_SECONDS = 300;
 const DEFAULT_ACK_KINDS = ['ack', 'receipt', 'ping'];
+const DEFAULT_MAX_MESSAGE_ATTEMPTS = 3;
 
 export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
   const {
@@ -85,11 +91,15 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
     budgetPerWake = DEFAULT_BUDGET,
     listenSeconds = DEFAULT_LISTEN_SECONDS,
     maxWakes,
+    maxMessageAttempts = DEFAULT_MAX_MESSAGE_ATTEMPTS,
     ackKinds = DEFAULT_ACK_KINDS,
     thinkWhenIdle = false,
     log = () => {},
     stopSignal
   } = options;
+  if (!Number.isSafeInteger(maxMessageAttempts) || maxMessageAttempts < 1) {
+    throw new Error('maxMessageAttempts must be a positive integer');
+  }
   const isAck = (message: BrainMessage) =>
     ackKinds.includes(String((message as { kind?: unknown }).kind ?? '').trim().toLowerCase());
   const transactional = typeof bus.peek === 'function' && typeof bus.acknowledge === 'function';
@@ -105,7 +115,10 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
 
   await brain.start?.();
 
-  const summary: RunnerSummary = { wakes: 0, cappedWakes: 0, errors: 0, stoppedBy: 'signal' };
+  const summary: RunnerSummary = { wakes: 0, cappedWakes: 0, errors: 0, parkedMessages: 0, stoppedBy: 'signal' };
+  // Process-scoped on purpose. A runner restart gives retained mail a fresh budget; persistent
+  // counters would let an old provider outage consume a message's future attempts forever.
+  const failedAttempts = new Map<number, number>();
   let reason: WakeReason = 'startup';
   /**
    * Did the last turn end with work still to do?
@@ -129,6 +142,10 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
       // leaves the seat unattended while reporting success. That is a real failure this project
       // hit twice; draining first makes it structurally impossible here.
       let messages = await receive(seat);
+      // Transactional clients can preserve FIFO while presenting one message at a time. That is
+      // what makes the retry budget genuinely per-message: a poison task cannot spend a later
+      // task's attempts merely because both happened to be unread in the same snapshot.
+      if (transactional && messages.length > 1) messages = messages.slice(0, 1);
 
       if (messages.length === 0 && reason !== 'startup' && !hasOpenWork) {
         const outcome = await bus.listen(seat, listenSeconds);
@@ -136,6 +153,7 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
         reason = outcome === 'mail' ? 'mail' : 'timeout';
         if (outcome === 'mail') {
           messages = await receive(seat);
+          if (transactional && messages.length > 1) messages = messages.slice(0, 1);
         }
       } else if (messages.length > 0) {
         reason = 'mail';
@@ -234,6 +252,38 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
       // peek/acknowledge pair retain their historical destructive-read behaviour.
       if (messages.length > 0 && result.retainMessages !== true) {
         await commit(seat, messages.length);
+        for (const message of messages) {
+          const attempts = failedAttempts.get(message.seq);
+          if (attempts !== undefined) {
+            failedAttempts.delete(message.seq);
+            log('message-retry-cleared', { seat, seq: message.seq, attempts });
+          }
+        }
+      } else if (messages.length > 0 && transactional) {
+        for (const message of messages) {
+          const attempts = (failedAttempts.get(message.seq) ?? 0) + 1;
+          failedAttempts.set(message.seq, attempts);
+          log('message-retry', { seat, seq: message.seq, attempts, maxAttempts: maxMessageAttempts });
+          if (attempts >= maxMessageAttempts) {
+            const parkReason = result.note?.trim() || 'brain did not produce a usable plan';
+            // New clients mark the mailbox record explicitly. The acknowledge fallback keeps
+            // older transactional clients bounded; either way the original record is retained.
+            if (bus.park) await bus.park(seat, message.seq, parkReason);
+            else await commit(seat, 1);
+            failedAttempts.delete(message.seq);
+            summary.parkedMessages += 1;
+            log('message-parked', {
+              seat,
+              seq: message.seq,
+              from: message.from,
+              kind: message.kind,
+              subject: message.subject,
+              attempts,
+              reason: parkReason,
+              recovery: `original mailbox record retained; run mailbox requeue --for ${seat} --seq ${message.seq} to retry`
+            });
+          }
+        }
       }
 
       // Carry "unfinished" into the next iteration, but never past an exhausted chain: a seat

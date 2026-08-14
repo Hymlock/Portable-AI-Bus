@@ -177,6 +177,46 @@ test('round guard halts sends until an explicit resume adds capacity', async () 
   }
 });
 
+test('status warns well before the round guard fails mutating tools closed', async () => {
+  const limitedRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'portable-ai-bus-round-warning-'));
+  try {
+    const limited = new MailboxStore(limitedRoot);
+    await limited.ensureInitialized(['codex'], 20);
+    for (let round = 0; round < 10; round += 1) {
+      await limited.send({ from: 'codex', to: 'codex', subject: `round ${round}`, body: 'advance' });
+    }
+    const status = await limited.status();
+    assert.match(status.roundWarning, /10 rounds remain.*10\/20/i);
+  } finally {
+    await removeTree(limitedRoot);
+  }
+});
+
+test('parked poison mail remains inspectable and can be requeued', async () => {
+  const poison = await store.send({ from: 'codex', to: 'grok', subject: 'poison', body: 'bad provider input' });
+  const parked = await store.park('grok', poison.seq, 'three unusable provider plans');
+  assert.equal(parked.read, true);
+  assert.equal(typeof parked.parkedAt, 'string');
+  assert.equal(parked.parkedReason, 'three unusable provider plans');
+  assert.deepEqual((await store.inbox('grok')).map((message) => message.seq), []);
+  assert.deepEqual((await store.parked('grok')).map((message) => message.seq), [poison.seq]);
+
+  const recovered = await store.requeue('grok', poison.seq);
+  assert.equal(recovered.read, false);
+  assert.equal(recovered.parkedAt, undefined);
+  assert.deepEqual((await store.inbox('grok')).map((message) => message.seq), [poison.seq]);
+});
+
+test('mailbox CLI lists and requeues parked mail for human recovery', async () => {
+  const poison = await store.send({ from: 'codex', to: 'grok', subject: 'CLI poison', body: 'inspect me' });
+  await store.park('grok', poison.seq, 'retry limit');
+  const listed = await execFileAsync(process.execPath, [mailboxCli, 'parked', '--root', root, '--for', 'grok', '--json']);
+  assert.deepEqual(JSON.parse(listed.stdout).map((message) => message.seq), [poison.seq]);
+  const recovered = await execFileAsync(process.execPath, [mailboxCli, 'requeue', '--root', root, '--for', 'grok', '--seq', String(poison.seq)]);
+  assert.match(recovered.stdout, new RegExp(`requeued #${poison.seq}`));
+  assert.deepEqual((await store.inbox('grok')).map((message) => message.seq), [poison.seq]);
+});
+
 test('registering a late seat preserves the configured round limit', async () => {
   const limitedRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'portable-ai-bus-register-'));
   try {

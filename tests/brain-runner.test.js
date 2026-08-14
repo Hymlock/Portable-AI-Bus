@@ -157,10 +157,12 @@ test('a failing handoff handler does not take the runner with it', async () => {
 });
 
 function transactionalBus(message, injectOnAcknowledge) {
-  let unread = message ? [message] : [];
+  let unread = Array.isArray(message) ? message.slice() : message ? [message] : [];
+  const parked = [];
   let acknowledgements = 0;
   return {
     get unread() { return unread.slice(); },
+    get parked() { return parked.slice(); },
     get acknowledgements() { return acknowledgements; },
     client: {
       async listen() { return unread.length ? 'mail' : 'timeout'; },
@@ -171,6 +173,14 @@ function transactionalBus(message, injectOnAcknowledge) {
         const batch = unread.slice(0, count);
         unread = unread.slice(count);
         return batch;
+      },
+      async park(_seat, seq, reason) {
+        const index = unread.findIndex((message) => message.seq === seq);
+        if (index < 0) throw new Error(`message #${seq} is not unread`);
+        const [message] = unread.splice(index, 1);
+        const record = { ...message, parkedReason: reason };
+        parked.push(record);
+        return record;
       },
       async read() { throw new Error('transactional runner must not destructively read before the turn'); },
       tools() {
@@ -242,6 +252,78 @@ test('every provider exit without a usable plan retains the presented batch', as
     assert.deepEqual(fixture.unread.map((message) => message.seq), [101], sample.name);
     assert.equal(fixture.acknowledgements, 0, sample.name);
   }
+});
+
+test('a poison message is parked after its own bounded retry budget', async () => {
+  const poison = { seq: 111, from: 'claude', to: 'codex', kind: 'task', subject: 'poison', body: 'cannot parse' };
+  const fixture = transactionalBus(poison);
+  const events = [];
+  const brain = { name: 'broken', async takeTurn() { return { done: true, retainMessages: true, note: 'invalid plan' }; } };
+
+  await runBrain({
+    seat: 'codex', brain, bus: fixture.client, maxWakes: 4, maxMessageAttempts: 3,
+    log: (event, data) => events.push({ event, data })
+  });
+
+  assert.equal(fixture.unread.length, 0, 'the poison message must stop blocking the seat');
+  assert.equal(fixture.acknowledgements, 0, 'parking uses the explicit durable path, not ordinary acknowledgement');
+  assert.deepEqual(fixture.parked.map((message) => message.seq), [111]);
+  const parked = events.find((entry) => entry.event === 'message-parked');
+  assert.equal(parked.data.seq, 111);
+  assert.equal(parked.data.attempts, 3);
+  assert.match(parked.data.reason, /invalid plan/);
+});
+
+test('a message that fails then succeeds is not parked and its attempt counter resets', async () => {
+  const transient = { seq: 112, from: 'claude', to: 'codex', kind: 'task', subject: 'transient', body: 'provider blip' };
+  const fixture = transactionalBus(transient);
+  const events = [];
+  let turns = 0;
+  const brain = {
+    name: 'recovers',
+    async takeTurn() {
+      turns += 1;
+      return turns === 1
+        ? { done: true, retainMessages: true, note: 'temporary provider error' }
+        : { done: true, note: 'processed' };
+    }
+  };
+
+  await runBrain({
+    seat: 'codex', brain, bus: fixture.client, maxWakes: 2, maxMessageAttempts: 3,
+    log: (event, data) => events.push({ event, data })
+  });
+
+  assert.equal(fixture.unread.length, 0);
+  assert.equal(events.some((entry) => entry.event === 'message-parked'), false);
+  const completed = events.find((entry) => entry.event === 'message-retry-cleared');
+  assert.deepEqual(completed.data, { seat: 'codex', seq: 112, attempts: 1 });
+});
+
+test('one poison message cannot spend a later message retry budget', async () => {
+  const poison = { seq: 113, from: 'claude', to: 'codex', kind: 'task', subject: 'poison', body: 'bad' };
+  const healthy = { seq: 114, from: 'claude', to: 'codex', kind: 'task', subject: 'healthy', body: 'good' };
+  const fixture = transactionalBus([poison, healthy]);
+  const seen = [];
+  const events = [];
+  const brain = {
+    name: 'selective',
+    async takeTurn({ messages }) {
+      seen.push(messages[0].seq);
+      return messages[0].seq === poison.seq
+        ? { done: true, retainMessages: true, note: 'poison input' }
+        : { done: true, note: 'processed healthy input' };
+    }
+  };
+
+  await runBrain({
+    seat: 'codex', brain, bus: fixture.client, maxWakes: 4, maxMessageAttempts: 3,
+    log: (event, data) => events.push({ event, data })
+  });
+
+  assert.deepEqual(seen, [113, 113, 113, 114]);
+  assert.deepEqual(events.filter((entry) => entry.event === 'message-parked').map((entry) => entry.data.seq), [113]);
+  assert.equal(fixture.unread.length, 0, 'the healthy message proceeds with an untouched budget');
 });
 
 test('a thrown takeTurn retains mail; a returned usable turn commits it', async () => {
