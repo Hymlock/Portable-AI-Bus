@@ -27,6 +27,15 @@ export type BrainMessage = {
   body: string;
 };
 
+export type WakeEvidence = {
+  id: string;
+  workId: number;
+  subject: string;
+  statement: string;
+  trust: 'untrusted' | 'verified';
+  invalidateReason?: string;
+};
+
 /** Everything a brain is given for one wake. */
 export type WakeContext = {
   seat: string;
@@ -41,6 +50,11 @@ export type WakeContext = {
    * Absent when there is no unfinished work.
    */
   openWork?: string;
+  /**
+   * Current evidence for the work this wake is continuing. Injected as labelled,
+   * untrusted data. Absent when no evidence is keyed to the presented work.
+   */
+  evidence?: WakeEvidence[];
   /** Bus tools, already bound to this seat. Calling them is how a brain acts. */
   tools: BrainTools;
   /** How many tool calls remain before the runner caps this wake. */
@@ -70,6 +84,21 @@ export type BrainTools = {
    * Same lesson as the seat roster: a model given no inventory invents a plausible one.
    */
   listCapabilities(): Promise<string[]>;
+  /**
+   * Persist an UNTRUSTED claim keyed to mailbox work. Promotion is a separate
+   * observed action; recording is not verification.
+   */
+  recordEvidence?(input: { subject: string; statement: string; workId?: number }): Promise<unknown>;
+  /**
+   * Ask the bus to observe the world and promote a claim. The seat names a
+   * verifier kind; it cannot supply the observation.
+   */
+  promoteEvidence?(input: {
+    id: string;
+    kind: string;
+    invocation?: string;
+    transition?: string;
+  }): Promise<unknown>;
 };
 
 export type WakeResult = {

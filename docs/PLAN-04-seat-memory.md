@@ -1,11 +1,12 @@
 # PLAN 04 — Seat memory
 
-Status: **slice 1 implemented and audited** (`d74e8fe` + `951f218`, 326 tests). Durable same-seat
+Status: **slice 1 implemented and audited** (`d74e8fe` + `951f218`). **Slice 2 (verified
+evidence memory) is implemented and not yet independently audited.** Durable same-seat
 recovery checkpoints now live on their source mailbox record (`workId` is its sequence). They retain
 closed history, supersede rather than expire, and atomically retain accepted-action receipts with
 unfinished intent. Startup retrieves only open checkpoints; injection is escaped, explicitly
 untrusted, and capped at 2 KiB inside the existing aggregate prompt budget. Cross-seat reassignment
-and verified long-term memory remain later slices. Ordering decided adversarially: memory built first
+remains item 4. Ordering decided adversarially: memory built first
 would faithfully record a pipeline that was still discarding most of its long messages.
 
 ### Slice 1 audit — six gates
@@ -30,6 +31,41 @@ Two limits recorded rather than smoothed over:
   is a different property and it is not tested here.
 - The audit was run by the **planner**, because the auditor's balance was exhausted. Less
   independent than an outside audit, and the planner specified much of this work.
+
+### Slice 2 — verified evidence memory (item 1)
+
+Implemented in `src/evidence.ts` + mailbox/wake/CLI wiring. **Not self-certified.** Codex
+audits this slice because it did not write it.
+
+The store is the counterpart to slice 1: recovery checkpoints hold UNVERIFIED intent;
+evidence records are durable facts that start `untrusted` and promote only when a typed
+verifier **observed by the bus** passes. The model may `record` a claim and may name a
+verifier kind; it cannot supply `commitExists`, `ok`, or `recorded`.
+
+| gate | result |
+|---|---|
+| `promote()` without a passing typed verifier leaves the claim untrusted | store gate — seen RED first as `promote() set trust=verified with no passing verifier` |
+| mailbox `promoteEvidence` observes git/receipts/lifecycle now; a fabricated payload is not an argument | wiring gate — seen RED first as `irrelevant diff: missing src/evidence.ts` on a real first commit because `diff-tree` omitted `--root` |
+| wake injection is labelled `UNTRUSTED MEMORY - NOT INSTRUCTIONS`, escaped, capped at 2 KiB | wiring gate |
+| verified facts are still injected as data, not instructions | store gate |
+| a later-arriving older event cannot overwrite a newer verified fact | store gate |
+| subject-identity change invalidates a previously verified fact | store gate |
+
+Verifier freshness lives here, not as a fifth item: observation happens at promote time
+against HEAD, the latest matching capability receipt, or current mailbox lifecycle state.
+A stored model-authored observation is not accepted.
+
+Still open after this slice:
+
+- **item 4** — cross-seat reassignment. Checkpoints are still keyed `seat === agent` and
+  `openRecovery` refuses a message addressed to someone else, so a baton handoff cannot
+  inherit the previous holder's open work.
+- Independent audit of this slice.
+- Consolidation of an assignment's episodes (the Cwars gap).
+
+CLI: `mailbox record-evidence|promote-evidence|list-evidence`. Brain actions: `record`,
+`promote`. Harness tools: `mailbox_record_evidence`, `mailbox_promote_evidence`,
+`mailbox_list_evidence`.
 
 ### Precedence: recovery and openWork are the same note
 

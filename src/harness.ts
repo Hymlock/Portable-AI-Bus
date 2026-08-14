@@ -4,6 +4,7 @@ import * as http from 'node:http';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { CapabilityRunner } from './capabilities';
+import { EvidencePromotionError } from './evidence';
 import { BusHaltedError, ClaimConflictError, ClaimPathMissingError, MailboxStore } from './mailbox';
 import { credentialWorkspaceKey } from './workspace-key';
 
@@ -400,6 +401,9 @@ export class HarnessServer {
       },
       { name: 'mailbox_claim', description: 'Hold existing workspace paths now after conflict checks; success is final and requires no acceptance step.', inputSchema: object({ agent, paths, why: { type: 'string' } }, ['agent', 'paths']) },
       { name: 'mailbox_release', description: 'Release exact paths, or all claims when paths is omitted.', inputSchema: object({ agent, paths }, ['agent']) },
+      { name: 'mailbox_record_evidence', description: 'Record an UNTRUSTED evidence claim keyed to mailbox work. This is not verification.', inputSchema: object({ agent, subject: { type: 'string' }, statement: { type: 'string' }, workId: { type: 'integer', minimum: 1 } }, ['agent', 'subject', 'statement']) },
+      { name: 'mailbox_promote_evidence', description: 'Observe the world and promote an evidence claim. The caller names a verifier kind; it cannot supply the observation.', inputSchema: object({ agent, id: { type: 'string' }, kind: { type: 'string', enum: ['commit-diff', 'runner-result', 'lifecycle-transition'] }, invocation: { type: 'string' }, transition: { type: 'string' } }, ['agent', 'id', 'kind']) },
+      { name: 'mailbox_list_evidence', description: 'List evidence records, optionally filtered to one mailbox work sequence.', inputSchema: object({ workId: { type: 'integer', minimum: 1 } }) },
       { name: 'mailbox_complete_step', description: 'Record structured step completion and apply the configured step halt policy.', inputSchema: object({ agent, summary: { type: 'string' }, evidence: paths }, ['agent', 'summary']) },
       { name: 'mailbox_complete_goal', description: 'Operator-only: record structured goal completion and apply the configured goal halt policy.', inputSchema: object({ agent, summary: { type: 'string' }, evidence: paths }, ['agent', 'summary']) },
       { name: 'mailbox_configure_halting', description: 'Operator-only: configure max/designated-round, step-completion, and goal-completion halting.', inputSchema: object({ onStepCompletion: { type: 'boolean' }, onGoalCompletion: { type: 'boolean' }, atRounds: rounds, everyRounds: { type: ['integer', 'null'], minimum: 0 } }) },
@@ -649,7 +653,7 @@ export class HarnessServer {
 
   private async executeTool(principal: Principal, request: ToolRequest) {
     const input = request.input ?? {};
-    if (['mailbox_read', 'mailbox_send', 'mailbox_claim', 'mailbox_release', 'capability_run'].includes(request.name)) {
+    if (['mailbox_read', 'mailbox_send', 'mailbox_claim', 'mailbox_release', 'mailbox_record_evidence', 'mailbox_promote_evidence', 'capability_run'].includes(request.name)) {
       const status = await this.mailbox.status();
       if (status.roundWarning) {
         await this.audit({
@@ -711,6 +715,30 @@ export class HarnessServer {
         return this.mailbox.release(
           this.authorizedAgent(principal, input.agent),
           input.paths === undefined ? undefined : requireStringArray(input.paths, 'paths')
+        );
+      case 'mailbox_record_evidence':
+        return this.mailbox.recordEvidence({
+          agent: this.authorizedAgent(principal, input.agent),
+          subject: requireString(input.subject, 'subject', 500),
+          statement: requireString(input.statement, 'statement', 4_096),
+          workId: input.workId === undefined ? undefined : requireInteger(input.workId, 'workId')
+        });
+      case 'mailbox_promote_evidence': {
+        const kind = requireString(input.kind, 'kind', 40);
+        if (kind !== 'commit-diff' && kind !== 'runner-result' && kind !== 'lifecycle-transition') {
+          throw new InputValidationError('kind must be commit-diff, runner-result, or lifecycle-transition.');
+        }
+        return this.mailbox.promoteEvidence({
+          agent: this.authorizedAgent(principal, input.agent),
+          id: requireString(input.id, 'id', 200),
+          kind,
+          invocation: optionalString(input.invocation, 1_000) || undefined,
+          transition: optionalString(input.transition, 200) || undefined
+        });
+      }
+      case 'mailbox_list_evidence':
+        return this.mailbox.listEvidence(
+          input.workId === undefined ? undefined : requireInteger(input.workId, 'workId')
         );
       case 'mailbox_complete_step':
         return this.mailbox.complete({
@@ -1038,6 +1066,7 @@ function httpFailure(error: unknown) {
   if (error instanceof BusHaltedError) return new HarnessHttpError(423, 'bus_halted', error.message);
   if (error instanceof ClaimConflictError) return new HarnessHttpError(409, 'claim_conflict', error.message, true);
   if (error instanceof ClaimPathMissingError) return new HarnessHttpError(400, 'claim_path_missing', error.message);
+  if (error instanceof EvidencePromotionError) return new HarnessHttpError(409, 'evidence_not_promoted', error.message);
   if (error instanceof SyntaxError) return new HarnessHttpError(400, 'invalid_json', error.message);
   return new HarnessHttpError(500, 'internal_error', asMessage(error), true);
 }

@@ -225,6 +225,7 @@ export function cliBusClient(options: CliBusOptions): BusClient {
       return durableMailbox.recordRecoveryAction(seat, workId, actionId);
     },
     closeRecovery(seat, workId, reason) { return durableMailbox.closeRecovery(seat, workId, reason); },
+    listEvidence(workIds) { return durableMailbox.evidenceForWake(workIds); },
 
     // Kept as the destructive compatibility surface for callers outside the brain runner.
     async read(seat) {
@@ -270,6 +271,25 @@ export function cliBusClient(options: CliBusOptions): BusClient {
 
         async runCapability(id, timeoutMs = 60_000) {
           return tool(seat, 'capability_run', { id, timeoutMs }, timeoutMs + 10_000);
+        },
+
+        async recordEvidence(input) {
+          return tool(seat, 'mailbox_record_evidence', {
+            agent: seat,
+            subject: String(input?.subject ?? '').trim(),
+            statement: String(input?.statement ?? '').trim(),
+            ...(Number.isSafeInteger(input?.workId) ? { workId: input.workId } : {})
+          });
+        },
+
+        async promoteEvidence(input) {
+          return tool(seat, 'mailbox_promote_evidence', {
+            agent: seat,
+            id: String(input?.id ?? '').trim(),
+            kind: String(input?.kind ?? '').trim(),
+            ...(input?.invocation ? { invocation: String(input.invocation) } : {}),
+            ...(input?.transition ? { transition: String(input.transition) } : {})
+          });
         },
 
         async listCapabilities() {

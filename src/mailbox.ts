@@ -3,6 +3,15 @@ import * as path from 'node:path';
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
+import {
+  EvidencePromotionError,
+  EvidenceRecord,
+  EvidenceStore,
+  VerifierInput,
+  VerifierKind,
+  isVerifierKind,
+  subjectPath
+} from './evidence';
 
 const execFileAsync = promisify(execFile);
 const SCHEMA = 1;
@@ -244,6 +253,7 @@ function messageFileName(seq: number, from: string, to: string) {
 
 export class MailboxStore {
   readonly paths: MailboxPaths;
+  readonly evidence: EvidenceStore;
   private readonly renameFile: (source: string, destination: string) => Promise<void>;
 
   constructor(
@@ -252,6 +262,7 @@ export class MailboxStore {
   ) {
     const resolvedRoot = path.resolve(root);
     this.renameFile = options?.renameFile ?? fs.rename;
+    this.evidence = new EvidenceStore(resolvedRoot);
     const mailboxDir = path.join(resolvedRoot, '.ai-bus', 'runtime', 'mailbox');
     this.paths = {
       root: resolvedRoot,
@@ -530,6 +541,64 @@ export class MailboxStore {
       await this.atomicJson(file, message);
       return checkpoint;
     });
+  }
+
+  /**
+   * Record an UNTRUSTED claim. Promotion is a later, observed step.
+   *
+   * Keyed to mailbox work (a message sequence), never to a seat. A missing workId
+   * is resolved from the seat's open recovery checkpoint so a continuation wake
+   * can add evidence without re-stating the assignment.
+   */
+  async recordEvidence(input: {
+    agent: string;
+    subject: string;
+    statement: string;
+    workId?: number;
+  }): Promise<EvidenceRecord> {
+    this.assertAgent(input.agent, 'evidence recorder');
+    const subject = input.subject.trim();
+    const statement = input.statement.trim();
+    if (!subject) throw new Error('evidence subject must not be empty');
+    if (!statement) throw new Error('evidence statement must not be empty');
+    if (subject.length > 500) throw new Error('evidence subject must be at most 500 characters');
+    if (statement.length > 4_096) throw new Error('evidence statement must be at most 4096 characters');
+    const workId = await this.resolveEvidenceWorkId(input.agent, input.workId);
+    return this.evidence.record({
+      workId,
+      subject,
+      statement,
+      recordedBy: input.agent
+    });
+  }
+
+  /**
+   * Promote only after THIS process observes the world. The caller names a
+   * verifier kind; it cannot supply `commitExists`, `ok`, or `recorded`.
+   */
+  async promoteEvidence(input: {
+    agent: string;
+    id: string;
+    kind: VerifierKind;
+    invocation?: string;
+    transition?: string;
+  }): Promise<EvidenceRecord> {
+    this.assertAgent(input.agent, 'evidence promoter');
+    if (!input.id.trim()) throw new Error('evidence id must not be empty');
+    if (!isVerifierKind(input.kind)) {
+      throw new EvidencePromotionError(`unknown verifier kind: ${String(input.kind)}`);
+    }
+    const record = await this.evidence.get(input.id);
+    const verifier = await this.observeVerifier(record, input);
+    return this.evidence.promote(record.id, verifier);
+  }
+
+  async listEvidence(workId?: number): Promise<EvidenceRecord[]> {
+    return this.evidence.list(workId);
+  }
+
+  async evidenceForWake(workIds: number[]): Promise<EvidenceRecord[]> {
+    return this.evidence.forWake(workIds);
   }
 
   async closeRecovery(agent: string, workId: number, reason: string): Promise<RecoveryCheckpoint | undefined> {
@@ -1211,6 +1280,156 @@ export class MailboxStore {
     await fs.appendFile(this.paths.transcriptPath, content.endsWith('\n') ? content : `${content}\n`, 'utf8');
   }
 
+  private async resolveEvidenceWorkId(agent: string, workId?: number): Promise<number> {
+    if (workId !== undefined) {
+      if (!Number.isSafeInteger(workId) || workId < 1) {
+        throw new Error('workId must be a positive mailbox sequence');
+      }
+      const messages = await this.allMessages();
+      if (!messages.some((message) => message.seq === workId)) {
+        throw new Error(`message #${workId} does not exist`);
+      }
+      return workId;
+    }
+    const open = await this.openRecoveryFor(agent);
+    if (open) return open.workId;
+    throw new Error('record requires workId; no open recovery exists for this seat');
+  }
+
+  private async observeVerifier(
+    record: EvidenceRecord,
+    input: { kind: VerifierKind; invocation?: string; transition?: string }
+  ): Promise<VerifierInput> {
+    if (input.kind === 'commit-diff') return this.observeCommitDiff(record.subject);
+    if (input.kind === 'runner-result') return this.observeRunnerResult(record.subject, input.invocation);
+    return this.observeLifecycle(record.subject, input.transition);
+  }
+
+  private async observeCommitDiff(subject: string): Promise<VerifierInput> {
+    const relevant = subjectPath(subject);
+    const stamp = await this.gitStamp();
+    if (!stamp?.sha) {
+      return {
+        kind: 'commit-diff',
+        subject,
+        commitExists: false,
+        sha: '',
+        changedPaths: [],
+        relevantPaths: relevant ? [relevant] : []
+      };
+    }
+    let changedPaths: string[] = [];
+    try {
+      // --root is load-bearing for the first commit: without it, `diff-tree -r SHA` has
+      // no parent and reports an empty path list, so a real landing looks irrelevant.
+      const { stdout } = await execFileAsync(
+        'git',
+        ['-C', this.paths.root, 'diff-tree', '--no-commit-id', '--name-only', '-r', '--root', stamp.sha],
+        { windowsHide: true }
+      );
+      changedPaths = stdout.split(/\r?\n/).map((item) => item.trim()).filter(Boolean);
+    } catch {
+      changedPaths = [];
+    }
+    return {
+      kind: 'commit-diff',
+      subject,
+      commitExists: true,
+      sha: stamp.sha,
+      changedPaths,
+      relevantPaths: relevant ? [relevant] : []
+    };
+  }
+
+  private async observeRunnerResult(subject: string, invocation?: string): Promise<VerifierInput> {
+    const receiptsDir = path.join(this.paths.root, '.ai-bus', 'runtime', 'receipts');
+    const wanted = (invocation ?? '').trim() || subjectPath(subject);
+    const receipt = await this.findCapabilityReceipt(receiptsDir, wanted);
+    if (!receipt) {
+      return {
+        kind: 'runner-result',
+        subject,
+        revision: '',
+        invocation: wanted,
+        exitCode: 1,
+        ok: false
+      };
+    }
+    const command = [receipt.capabilityId, receipt.command?.executable, ...(receipt.command?.args ?? [])]
+      .filter((item): item is string => typeof item === 'string' && item.length > 0)
+      .join(' ');
+    return {
+      kind: 'runner-result',
+      subject,
+      revision: receipt.workspaceCommit?.sha ?? '',
+      invocation: command || receipt.capabilityId || wanted,
+      exitCode: typeof receipt.exitCode === 'number' ? receipt.exitCode : 1,
+      ok: receipt.status === 'passed' && receipt.exitCode === 0
+    };
+  }
+
+  private async findCapabilityReceipt(
+    receiptsDir: string,
+    wanted: string
+  ): Promise<{
+    capabilityId?: string;
+    command?: { executable?: string; args?: string[] };
+    workspaceCommit?: { sha?: string };
+    exitCode?: number | null;
+    status?: string;
+  } | undefined> {
+    const names = await fs.readdir(receiptsDir).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return [] as string[];
+      throw error;
+    });
+    const files = names.filter((name) => name.endsWith('.json') && name !== 'latest.json').sort();
+    const latest = names.includes('latest.json') ? ['latest.json'] : [];
+    const candidates = [...latest, ...files.reverse()];
+    for (const name of candidates) {
+      try {
+        const receipt = JSON.parse(await fs.readFile(path.join(receiptsDir, name), 'utf8')) as {
+          capabilityId?: string;
+          command?: { executable?: string; args?: string[] };
+          workspaceCommit?: { sha?: string };
+          exitCode?: number | null;
+          status?: string;
+        };
+        const haystack = [
+          receipt.capabilityId,
+          receipt.command?.executable,
+          ...(receipt.command?.args ?? [])
+        ].filter(Boolean).join(' ');
+        if (!wanted || haystack.includes(wanted) || receipt.capabilityId === wanted) {
+          return receipt;
+        }
+      } catch {
+        // A corrupt receipt is not a passing verifier.
+      }
+    }
+    return undefined;
+  }
+
+  private async observeLifecycle(subject: string, transition?: string): Promise<VerifierInput> {
+    const wanted = (transition ?? '').trim() || subjectPath(subject);
+    const state = await this.loadState();
+    let recorded = false;
+    if (wanted === 'goal-set' || wanted === 'goal-replaced') {
+      recorded = Boolean(state.goal);
+    } else {
+      recorded = state.completions.some((event) =>
+        wanted === event.scope ||
+        wanted === `complete-${event.scope}` ||
+        wanted === event.id
+      );
+    }
+    return {
+      kind: 'lifecycle-transition',
+      subject,
+      transition: wanted,
+      recorded
+    };
+  }
+
   private async gitStamp(): Promise<CommitStamp | undefined> {
     // Most mailbox roots are runtime directories, not source checkouts. Spawning Git anyway
     // was not merely wasted work on Windows: every status/send created two short-lived console
@@ -1663,6 +1882,35 @@ async function runCli(argv = process.argv.slice(2)) {
       console.log(json ? JSON.stringify(result, null, 2) : result.why);
       return result.moved || result.from === result.to ? 0 : 1;
     }
+    case 'record-evidence': {
+      const record = await store.recordEvidence({
+        agent: stringArg(args, 'agent', true),
+        subject: stringArg(args, 'subject', true),
+        statement: stringArg(args, 'statement', true),
+        workId: optionalIntArg(args, 'work-id')
+      });
+      console.log(json ? JSON.stringify(record, null, 2) : `recorded ${record.id} trust=${record.trust} work#${record.workId}`);
+      return 0;
+    }
+    case 'promote-evidence': {
+      const kind = stringArg(args, 'kind', true);
+      if (!isVerifierKind(kind)) throw new Error(`--kind must be one of ${['commit-diff', 'runner-result', 'lifecycle-transition'].join(', ')}`);
+      const record = await store.promoteEvidence({
+        agent: stringArg(args, 'agent', true),
+        id: stringArg(args, 'id', true),
+        kind,
+        invocation: stringArg(args, 'invocation') || undefined,
+        transition: stringArg(args, 'transition') || undefined
+      });
+      console.log(json ? JSON.stringify(record, null, 2) : `promoted ${record.id} trust=${record.trust}`);
+      return 0;
+    }
+    case 'list-evidence': {
+      const workId = optionalIntArg(args, 'work-id');
+      const records = await store.listEvidence(workId);
+      console.log(JSON.stringify(records, null, 2));
+      return 0;
+    }
     case 'configure-halting': {
       const state = await store.configureHalting({
         onStepCompletion: optionalBoolArg(args, 'on-step'),
@@ -1701,7 +1949,7 @@ async function runCli(argv = process.argv.slice(2)) {
     }
     default:
       throw new Error(
-        'usage: mailbox <init|send|inbox|read|parked|requeue|wait|claim|release|claims|status|doctor|goal|assign|stall-check|reassign|configure-halting|complete-step|complete-goal|halt|resume> [options]'
+        'usage: mailbox <init|send|inbox|read|parked|requeue|wait|claim|release|claims|status|doctor|goal|assign|stall-check|reassign|record-evidence|promote-evidence|list-evidence|configure-halting|complete-step|complete-goal|halt|resume> [options]'
       );
   }
 }

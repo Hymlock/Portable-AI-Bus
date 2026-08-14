@@ -512,7 +512,7 @@ class HarnessRequestError extends Error {
 
 async function runCli(argv = process.argv.slice(2)) {
   const command = argv[0];
-  const commands = new Set(['wait', 'watch', 'listen', 'status', 'inbox', 'read', 'send', 'claim', 'release', 'complete-step', 'complete-goal', 'capabilities', 'run', 'tool']);
+  const commands = new Set(['wait', 'watch', 'listen', 'status', 'inbox', 'read', 'send', 'claim', 'release', 'complete-step', 'complete-goal', 'record-evidence', 'promote-evidence', 'list-evidence', 'capabilities', 'run', 'tool']);
   if (!command || !commands.has(command)) throw new Error(cliUsage());
   validateCliArguments(command, argv.slice(1));
   const controller = new AbortController();
@@ -612,6 +612,32 @@ export function seatToolInvocation(command: string, argv: string[], seat: string
           evidence: optionalCsvOption(argv, '--evidence')
         }
       };
+    case 'record-evidence':
+      return {
+        name: 'mailbox_record_evidence',
+        input: {
+          agent: seat,
+          subject: requiredOption(argv, '--subject'),
+          statement: requiredOption(argv, '--statement'),
+          ...(workIdOption(argv) === undefined ? {} : { workId: workIdOption(argv) })
+        }
+      };
+    case 'promote-evidence':
+      return {
+        name: 'mailbox_promote_evidence',
+        input: {
+          agent: seat,
+          id: requiredOption(argv, '--id'),
+          kind: requiredOption(argv, '--kind'),
+          ...(option(argv, '--invocation') === undefined ? {} : { invocation: requiredOption(argv, '--invocation') }),
+          ...(option(argv, '--transition') === undefined ? {} : { transition: requiredOption(argv, '--transition') })
+        }
+      };
+    case 'list-evidence':
+      return {
+        name: 'mailbox_list_evidence',
+        input: workIdOption(argv) === undefined ? {} : { workId: workIdOption(argv) }
+      };
     case 'complete-step':
       return {
         name: 'mailbox_complete_step',
@@ -649,6 +675,9 @@ function cliUsage() {
     '  claim --paths PATH[,PATH...] [--why TEXT]',
     '  release [--paths PATH[,PATH...]]',
     '  complete-step --summary TEXT [--evidence ITEM[,ITEM...]]',
+    '  record-evidence --subject TEXT --statement TEXT [--work-id N]',
+    '  promote-evidence --id ID --kind KIND [--invocation TEXT] [--transition TEXT]',
+    '  list-evidence [--work-id N]',
     '  capabilities',
     '  run --capability ID [--timeout-ms N]',
     '  tool --name TOOL [--input-json JSON]',
@@ -738,6 +767,14 @@ function flag(argv: string[], name: string) {
   return argv.includes(name);
 }
 
+function workIdOption(argv: string[]) {
+  const raw = option(argv, '--work-id');
+  if (raw === undefined) return undefined;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 1) throw new Error('--work-id must be a positive integer.');
+  return value;
+}
+
 function integerOption(argv: string[], name: string, fallback: number) {
   const raw = option(argv, name);
   if (raw === undefined) return fallback;
@@ -774,6 +811,9 @@ function validateCliArguments(command: string, args: string[]) {
     release: ['--paths'],
     'complete-step': ['--summary', '--evidence'],
     'complete-goal': ['--summary', '--evidence'],
+    'record-evidence': ['--subject', '--statement', '--work-id'],
+    'promote-evidence': ['--id', '--kind', '--invocation', '--transition'],
+    'list-evidence': ['--work-id'],
     capabilities: [],
     run: ['--capability', '--timeout-ms'],
     tool: ['--name', '--input-json']

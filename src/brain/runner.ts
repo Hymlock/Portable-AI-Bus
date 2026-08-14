@@ -30,6 +30,7 @@ export type BusClient = {
   openRecovery?(seat: string, workId: number, note: string): Promise<RecoveryCheckpoint>;
   recordRecoveryAction?(seat: string, workId: number, actionId: string): Promise<RecoveryCheckpoint>;
   closeRecovery?(seat: string, workId: number, reason: string): Promise<unknown>;
+  listEvidence?(workIds: number[]): Promise<import('../evidence').EvidenceRecord[]>;
   tools(seat: string): BrainTools;
 };
 
@@ -260,6 +261,14 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
       if (messages[0] && bus.openRecovery) {
         recovery = await bus.openRecovery(seat, messages[0].seq, openWork ?? messages[0].subject);
       }
+      const evidenceWorkIds = [...new Set([
+        ...messages.map((message) => message.seq),
+        ...(recovery?.workId ? [recovery.workId] : []),
+        ...(workId ? [workId] : [])
+      ].filter((item): item is number => Number.isSafeInteger(item) && item > 0))];
+      const evidence = bus.listEvidence && evidenceWorkIds.length > 0
+        ? await bus.listEvidence(evidenceWorkIds)
+        : undefined;
       const presentedThrough = messages.reduce((highest, message) => Math.max(highest, message.seq), 0);
       const receiveController = new AbortController();
       let listeningThrough = presentedThrough;
@@ -307,6 +316,7 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
           messages,
           openWork,
           recoveryData,
+          evidence,
           recoveryActionIds: recovery?.actionReceipts,
           recordRecoveryAction: workId && bus.recordRecoveryAction
             ? async (actionId: string) => { recovery = await bus.recordRecoveryAction!(seat, workId, actionId); }
@@ -499,6 +509,12 @@ function wrapWithBudget(tools: BrainTools, onCall: () => void): BrainTools {
     // makes once to avoid guessing, and charging for it would push a seat toward guessing
     // again - which is the behaviour that cost whole wakes to `shell`, `workspace_runner` and
     // `read_write_test`, none of which exist.
-    listCapabilities: () => tools.listCapabilities()
+    listCapabilities: () => tools.listCapabilities(),
+    ...(tools.recordEvidence
+      ? { recordEvidence: (input) => { onCall(); return tools.recordEvidence!(input); } }
+      : {}),
+    ...(tools.promoteEvidence
+      ? { promoteEvidence: (input) => { onCall(); return tools.promoteEvidence!(input); } }
+      : {})
   };
 }
