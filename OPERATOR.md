@@ -436,6 +436,30 @@ When a goal is met, an **adversarial round decides the next goal** before any pl
 Two adversarial gates, not one: the **goal** is argued before the plan, and the **plan** is argued
 before the code. Otherwise the planner's error becomes the direction everyone builds in.
 
+### Deliberation and work orders are different messages
+
+Measured repeatedly on 2026-08-14, in both directions:
+
+- A brief that opens with context or credit, carries more than one ask, and is sent as a
+  `decision` gets **acknowledged and not acted on**. Three in a row produced three ack-only wakes
+  and no edits.
+- The same seat, given **one imperative action** with an explicit *"do not reply with an
+  acknowledgement — reply when it is committed, with the hash"*, executed immediately and replied
+  with only the hash.
+
+Both message types are necessary. The rich briefs are where the gates happen: they produced every
+correction that reshaped a goal — a duplicate-send hazard in the planner's own instruction, an
+overclaimed completion bar, a regression that would have suppressed actions for every NPC, and a
+field the plan depended on that **did not exist in the production contract**. That value is real and
+it is not a work order.
+
+So: **argue in one message, command in another.** Never both. When a plan is settled, restate it as
+a numbered imperative with a single deliverable. A seat that has just been thanked, briefed and
+asked three questions will answer the questions.
+
+*(The planner recorded this rule at 08:00 and broke it twice before 16:00. It is here rather than in
+private notes for that reason.)*
+
 ### Roles are assignments, not identities
 
 Any seat can hold any role, and they rotate — most obviously when a vendor runs out of credit,
