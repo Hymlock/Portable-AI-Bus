@@ -439,3 +439,127 @@ test('GATE recent-bound: resolved recent stays at 32 and the retained rows are t
   assert.equal(snap.recent[RECENT_BOUND - 1].durationMs, N);
   tmp.dispose();
 });
+
+// ---------------------------------------------------------------------------
+// Item 12 dead wire: providers must pass stallLedger/stallSeat into runProcess.
+// Measured 2026-08-15 against current dist (real ConPTY spawn): execProvider
+// ask succeeded in 1881 ms and ledger.started stayed 0. resolveChain same
+// (3195 ms, started 0). A real spawn also left the test runner hanging —
+// process-host does not close the HPCON on success — so these gates inject
+// runProcess and assert the options that would have made that write happen.
+// The write itself is already gated in "process-host: a stall pair is persisted".
+// ---------------------------------------------------------------------------
+
+function capturingRun(captured, result = { code: 0, stdout: 'ok', stderr: '' }) {
+  return async (_command, _args, options) => {
+    captured.options = options;
+    if (result.stall && options.stallLedger && options.stallSeat) {
+      const open = options.stallLedger.start({
+        seat: options.stallSeat,
+        source: 'process-host',
+        thresholdMs: typeof options.stallMs === 'number' ? options.stallMs : 0
+      });
+      options.stallLedger.resolve(open.id, 'returned', result.durationMs ?? 400);
+    }
+    return { code: result.code ?? 0, stdout: result.stdout ?? 'ok', stderr: result.stderr ?? '' };
+  };
+}
+
+test('ITEM 12 RED: a provider spawn that succeeds then stalls writes a process-host edge', async () => {
+  const tmp = tmpLedger('grok');
+  const ledger = createStallLedger({ seat: 'grok', filePath: tmp.filePath });
+  const captured = {};
+  const { execProvider } = require('../dist/brain/providers.js');
+  const provider = execProvider({
+    command: 'model',
+    args: ['{prompt}'],
+    stallMs: 50,
+    stallLedger: ledger,
+    stallSeat: 'grok',
+    timeoutMs: 10_000,
+    run: capturingRun(captured, { stall: true, durationMs: 400 })
+  });
+
+  const reply = await provider.ask('x');
+  assert.equal(reply.isError, false, `provider must succeed: ${reply.text}`);
+  assert.equal(
+    captured.options?.stallLedger,
+    ledger,
+    'today providers drop stallLedger and process-host cannot write'
+  );
+  assert.equal(captured.options?.stallSeat, 'grok');
+  assert.equal(captured.options?.stallMs, 50);
+  const done = JSON.parse(fs.readFileSync(tmp.filePath, 'utf8'));
+  assert.equal(done.started, 1);
+  assert.equal(done.resolved, 1);
+  assert.equal(done.open.length, 0);
+  assert.equal(done.recent[0].source, 'process-host');
+  assert.equal(done.recent[0].outcome, 'returned');
+  tmp.dispose();
+});
+
+test('ITEM 12 GREEN: a fast provider call writes no stall edges', async () => {
+  const tmp = tmpLedger('grok');
+  const ledger = createStallLedger({ seat: 'grok', filePath: tmp.filePath });
+  const captured = {};
+  const { execProvider } = require('../dist/brain/providers.js');
+  const provider = execProvider({
+    command: 'model',
+    args: ['{prompt}'],
+    stallMs: 30_000,
+    stallLedger: ledger,
+    stallSeat: 'grok',
+    timeoutMs: 10_000,
+    run: capturingRun(captured)
+  });
+
+  const reply = await provider.ask('x');
+  assert.equal(reply.isError, false, `fast provider must succeed: ${reply.text}`);
+  assert.equal(captured.options?.stallLedger, ledger, 'the wire must be live even when nothing fires');
+  assert.equal(captured.options?.stallSeat, 'grok');
+  assert.equal(captured.options?.stallMs, 30_000);
+  const done = JSON.parse(fs.readFileSync(tmp.filePath, 'utf8'));
+  assert.equal(done.started, 0, 'a fast call must not invent a stall');
+  assert.equal(done.resolved, 0);
+  assert.equal(done.open.length, 0);
+  tmp.dispose();
+});
+
+test('ITEM 12: resolveChain forwards stallLedger/stallSeat into each provider', async () => {
+  const tmp = tmpLedger('codex');
+  const ledger = createStallLedger({ seat: 'codex', filePath: tmp.filePath });
+  const captured = {};
+  const { resolveChain } = require('../dist/brain/providers.js');
+  const chain = resolveChain(
+    [{
+      kind: 'exec',
+      exec: {
+        command: 'model',
+        args: ['{prompt}'],
+        stallMs: 50,
+        timeoutMs: 10_000,
+        run: capturingRun(captured, { stall: true, durationMs: 400 })
+      }
+    }],
+    { stallLedger: ledger, stallSeat: 'codex' }
+  );
+
+  const reply = await chain.ask('x');
+  assert.equal(reply.isError, false, `chain must succeed: ${reply.text}`);
+  assert.equal(
+    captured.options?.stallLedger,
+    ledger,
+    'resolveChain must hand the ledger through, not only runBrain'
+  );
+  assert.equal(captured.options?.stallSeat, 'codex');
+  const done = JSON.parse(fs.readFileSync(tmp.filePath, 'utf8'));
+  assert.equal(done.started, 1);
+  assert.equal(done.recent[0].source, 'process-host');
+  tmp.dispose();
+});
+
+test('ITEM 12: every providers.ts runProcess site goes through providerRunOptions', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'brain', 'providers.ts'), 'utf8');
+  const calls = src.match(/providerRunOptions\(\{/g) || [];
+  assert.equal(calls.length, 4, 'cli, exec, codex, grok must each build host options via the helper');
+});

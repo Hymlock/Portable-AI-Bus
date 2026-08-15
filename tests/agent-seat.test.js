@@ -1,7 +1,10 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
-const { providerConfigs } = require('../brains/agent-seat.js');
+const { providerConfigs, providerHostOptions } = require('../brains/agent-seat.js');
 
 test('each named brain spends only its own vendor credits', () => {
   assert.deepEqual(providerConfigs({}, 'claude').map((provider) => provider.kind),
@@ -49,4 +52,21 @@ test('the Grok extractor diagnostic is wired to the brain log', () => {
     providerConfigs({ PORTABLE_AI_BUS_PROVIDER_CHAIN: 'grok' }, 'grok', 'C:\\repo', log),
     [{ kind: 'grok', grok: { cwd: 'C:\\repo', log } }]
   );
+});
+
+test('ITEM 12: agent-seat resolveChain receives a stall ledger for the seat', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'portable-ai-bus-seat-stall-'));
+  try {
+    const log = () => {};
+    const options = providerHostOptions('grok', root, log);
+    assert.equal(options.stallSeat, 'grok');
+    assert.equal(options.log, log);
+    const snap = options.stallLedger.snapshot();
+    assert.equal(snap.seat, 'grok');
+    assert.equal(snap.started, 0);
+    const expected = path.join(root, '.ai-bus', 'runtime', 'stalls', 'grok.json');
+    assert.equal(fs.existsSync(expected), true, 'ledger file must exist so a restart can read open=0');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

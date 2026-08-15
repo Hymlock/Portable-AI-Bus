@@ -10,6 +10,7 @@ function runtimeModule(relative) {
 
 const { createAgentBrain } = require(runtimeModule('brains/index.js'));
 const { resolveChain } = require(runtimeModule('providers.js'));
+const { createStallLedger, stallLedgerPath } = require(runtimeModule('stall-ledger.js'));
 
 const SUPPORTED_KINDS = new Set(['codex', 'grok', 'cli', 'oauth', 'api']);
 const VENDOR_BY_KIND = {
@@ -72,10 +73,27 @@ const SYSTEM = [
   'Do not declare a goal complete unless its explicit completion requirements were verified.'
 ].join('\n');
 
+function providerHostOptions(seat, root, log) {
+  // Same file the runner opens in cli.ts. Two handles on one path are already
+  // the item-5 contract; what was missing is that resolveChain never received
+  // either handle, so process-host could not write.
+  let stallLedger;
+  try {
+    stallLedger = createStallLedger({ seat, filePath: stallLedgerPath(root, seat) });
+  } catch (error) {
+    log?.('stall-ledger-unreadable', { seat, error: error?.message ?? String(error) });
+    stallLedger = createStallLedger({ seat });
+  }
+  return { log, stallLedger, stallSeat: seat };
+}
+
 module.exports = ({ seat, root, workdir = root, log }) => {
   // The chain and the provider adapter both emit evidence. Pass the same brain logger into the
   // Grok adapter so `grok-extract-fellback` cannot silently disappear behind its no-op default.
-  const provider = resolveChain(providerConfigs(process.env, seat, workdir, log), { log });
+  const provider = resolveChain(
+    providerConfigs(process.env, seat, workdir, log),
+    providerHostOptions(seat, root, log)
+  );
   const brain = createAgentBrain({ seat, provider, log, systemPrompt: SYSTEM });
   return {
     ...brain,
@@ -90,3 +108,4 @@ module.exports = ({ seat, root, workdir = root, log }) => {
 };
 
 module.exports.providerConfigs = providerConfigs;
+module.exports.providerHostOptions = providerHostOptions;

@@ -11,7 +11,8 @@
  * user already pays for. The others exist so a seat is never blocked on one vendor's tooling.
  */
 
-import { processAvailable, runProcess, type ProcessResult } from './process-host';
+import { processAvailable, runProcess, type ProcessResult, type RunProcessOptions } from './process-host';
+import type { StallLedger } from './stall-ledger';
 
 /**
  * Keep the process-host failure TEXT so `classifyFailure` can tell BROKEN from SPENT.
@@ -30,6 +31,56 @@ export function providerFailureText(result: ProcessResult, fallback: string): st
 }
 
 const PROVIDER_STALL_MS = 30_000;
+
+export type ProviderStallOptions = {
+  /**
+   * Durable pair shared with the runner. Absent means process-host logs stall
+   * edges only and cannot persist them — the dead wire item 12 is removing.
+   */
+  stallLedger?: StallLedger;
+  stallSeat?: string;
+  /** Override the 30s process-host stall watch. Tests use a short value. */
+  stallMs?: number;
+};
+
+/**
+ * The options every CLI adapter must hand to `runProcess`.
+ *
+ * Four call sites used to assemble this object by hand and silently drop the
+ * ledger pair. One helper means a missing `stallLedger` is a missing argument
+ * here, not a missing field at one of four sites.
+ */
+export function providerRunOptions(
+  options: ProviderStallOptions & {
+    cwd?: string;
+    env?: NodeJS.ProcessEnv;
+    timeoutMs: number;
+    windowsHide?: boolean;
+    log?: (event: string, data?: unknown) => void;
+  }
+): RunProcessOptions {
+  return {
+    cwd: options.cwd,
+    env: options.env,
+    timeoutMs: options.timeoutMs,
+    windowsHide: options.windowsHide,
+    stallMs: options.stallMs ?? PROVIDER_STALL_MS,
+    log: options.log,
+    stallLedger: options.stallLedger,
+    stallSeat: options.stallSeat
+  };
+}
+
+function inheritStall(
+  target: ProviderStallOptions | undefined,
+  inherited?: ProviderStallOptions
+): ProviderStallOptions {
+  return {
+    stallLedger: target?.stallLedger ?? inherited?.stallLedger,
+    stallSeat: target?.stallSeat ?? inherited?.stallSeat,
+    stallMs: target?.stallMs ?? inherited?.stallMs
+  };
+}
 
 export type ProviderKind = 'cli' | 'api' | 'oauth' | 'exec' | 'codex' | 'grok';
 
@@ -168,7 +219,7 @@ function nonRepoCwd(): string {
   }
 }
 
-export type CliProviderOptions = {
+export type CliProviderOptions = ProviderStallOptions & {
   /** Executable name or path. `claude` on PATH by default. */
   command?: string;
   /** Extra args inserted before the prompt. */
@@ -190,9 +241,15 @@ export function cliProvider(options: CliProviderOptions = {}): ModelProvider {
   const cwd = options.cwd ?? nonRepoCwd();
 
   async function run(args: string[], timeoutMs: number): Promise<{ code: number; stdout: string; stderr: string }> {
-    return runProcess(command, args, {
-      cwd, timeoutMs, windowsHide: hideWindows(), stallMs: PROVIDER_STALL_MS, log
-    });
+    return runProcess(command, args, providerRunOptions({
+      cwd,
+      timeoutMs,
+      windowsHide: hideWindows(),
+      stallMs: options.stallMs,
+      stallLedger: options.stallLedger,
+      stallSeat: options.stallSeat,
+      log
+    }));
   }
 
   return {
@@ -354,7 +411,7 @@ export function sdkProvider(kind: 'api' | 'oauth', options: SdkProviderOptions =
 // exec - any vendor, no adapter required
 // ---------------------------------------------------------------------------
 
-export type ExecProviderOptions = {
+export type ExecProviderOptions = ProviderStallOptions & {
   command: string;
   /** `{prompt}` and `{system}` are substituted. Anything else is passed through. */
   args: string[];
@@ -362,6 +419,8 @@ export type ExecProviderOptions = {
   resultPath?: string;
   timeoutMs?: number;
   log?: (event: string, data?: unknown) => void;
+  /** Test inject. Production uses `runProcess`. */
+  run?: typeof runProcess;
 };
 
 /**
@@ -383,9 +442,15 @@ export function execProvider(options: ExecProviderOptions): ModelProvider {
   }
 
   async function run(args: string[], timeoutMs: number) {
-    return runProcess(options.command, args, {
-      timeoutMs, windowsHide: true, stallMs: PROVIDER_STALL_MS, log
-    });
+    const launch = options.run ?? runProcess;
+    return launch(options.command, args, providerRunOptions({
+      timeoutMs,
+      windowsHide: true,
+      stallMs: options.stallMs,
+      stallLedger: options.stallLedger,
+      stallSeat: options.stallSeat,
+      log
+    }));
   }
 
   return {
@@ -463,7 +528,7 @@ export function resolveCodexCommand(explicit?: string): string {
   return exe;
 }
 
-export type CodexProviderOptions = {
+export type CodexProviderOptions = ProviderStallOptions & {
   command?: string;
   /** Passed to `--model`. Omit to use whatever Codex is configured for. */
   model?: string;
@@ -501,9 +566,15 @@ export function codexProvider(options: CodexProviderOptions = {}): ModelProvider
   async function run(args: string[], timeoutMs: number) {
     // The process host never writes stdin. `codex exec` would otherwise wait for additional
     // piped input forever.
-    return runProcess(command, args, {
-      cwd, timeoutMs, windowsHide: hideWindows(), stallMs: PROVIDER_STALL_MS, log
-    });
+    return runProcess(command, args, providerRunOptions({
+      cwd,
+      timeoutMs,
+      windowsHide: hideWindows(),
+      stallMs: options.stallMs,
+      stallLedger: options.stallLedger,
+      stallSeat: options.stallSeat,
+      log
+    }));
   }
 
   return {
@@ -728,7 +799,7 @@ export function resolveGrokCommand(explicit?: string): string {
   return exe;
 }
 
-export type GrokProviderOptions = {
+export type GrokProviderOptions = ProviderStallOptions & {
   command?: string;
   model?: string;
   cwd?: string;
@@ -772,9 +843,16 @@ export function grokProvider(options: GrokProviderOptions = {}): ModelProvider {
       ...(userHome && !process.env.HOME ? { HOME: userHome } : {}),
       ...(grokHome ? { GROK_HOME: grokHome } : {})
     };
-    return runProcess(command, args, {
-      cwd, timeoutMs, windowsHide: hideWindows(), env, stallMs: PROVIDER_STALL_MS, log
-    });
+    return runProcess(command, args, providerRunOptions({
+      cwd,
+      timeoutMs,
+      windowsHide: hideWindows(),
+      env,
+      stallMs: options.stallMs,
+      stallLedger: options.stallLedger,
+      stallSeat: options.stallSeat,
+      log
+    }));
   }
 
   return {
@@ -836,7 +914,7 @@ export function grokProvider(options: GrokProviderOptions = {}): ModelProvider {
 
 // ---------------------------------------------------------------------------
 
-export type ResolveOptions = {
+export type ResolveOptions = ProviderStallOptions & {
   kind?: ProviderKind;
   cli?: CliProviderOptions;
   sdk?: SdkProviderOptions;
@@ -852,13 +930,14 @@ export type ResolveOptions = {
  */
 export function resolveProvider(options: ResolveOptions = {}): ModelProvider {
   const kind = options.kind ?? (process.env.PORTABLE_AI_BUS_PROVIDER as ProviderKind | undefined) ?? 'cli';
-  if (kind === 'cli') return cliProvider(options.cli);
+  const inherited = { stallLedger: options.stallLedger, stallSeat: options.stallSeat, stallMs: options.stallMs };
+  if (kind === 'cli') return cliProvider({ ...options.cli, ...inheritStall(options.cli, inherited) });
   if (kind === 'api' || kind === 'oauth') return sdkProvider(kind, options.sdk);
-  if (kind === 'codex') return codexProvider(options.codex);
-  if (kind === 'grok') return grokProvider(options.grok);
+  if (kind === 'codex') return codexProvider({ ...options.codex, ...inheritStall(options.codex, inherited) });
+  if (kind === 'grok') return grokProvider({ ...options.grok, ...inheritStall(options.grok, inherited) });
   if (kind === 'exec') {
     if (!options.exec) throw new Error('provider "exec" needs { command, args }');
-    return execProvider(options.exec);
+    return execProvider({ ...options.exec, ...inheritStall(options.exec, inherited) });
   }
   throw new Error(`unknown provider "${kind}" - expected cli, codex, api, oauth, or exec`);
 }
@@ -872,11 +951,19 @@ export function resolveProvider(options: ResolveOptions = {}): ModelProvider {
  */
 export function resolveChain(
   configs: ResolveOptions[],
-  chainOptions?: { log?: (event: string, data?: unknown) => void }
+  chainOptions?: import('./chain').ChainOptions & ProviderStallOptions
 ) {
   if (configs.length === 0) throw new Error('resolveChain needs at least one provider config');
   // Imported lazily so `providers.ts` stays usable on its own and the two modules do not form
   // an import cycle.
   const { chainProviders } = require('./chain') as typeof import('./chain');
-  return chainProviders(configs.map((config) => resolveProvider(config)), chainOptions);
+  return chainProviders(
+    configs.map((config) => resolveProvider({
+      ...config,
+      stallLedger: config.stallLedger ?? chainOptions?.stallLedger,
+      stallSeat: config.stallSeat ?? chainOptions?.stallSeat,
+      stallMs: config.stallMs ?? chainOptions?.stallMs
+    })),
+    chainOptions
+  );
 }
