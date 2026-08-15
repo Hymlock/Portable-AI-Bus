@@ -216,6 +216,28 @@ test('a symlink alias cannot bypass an existing physical-file claim', async () =
   );
 });
 
+test('a directory junction cannot bypass a claim on a file beneath its target', async () => {
+  const alias = path.join(root, 'source-junction');
+  await fs.symlink(path.join(root, 'src'), alias, 'junction');
+
+  await store.claim({ agent: 'codex', paths: ['src/mailbox.ts'], why: 'physical file' });
+  await assert.rejects(
+    store.claim({ agent: 'grok', paths: ['source-junction/mailbox.ts'], why: 'same file through junction' }),
+    ClaimConflictError
+  );
+});
+
+test('a hardlink alias cannot bypass an existing physical-file claim', async () => {
+  const alias = path.join(root, 'src', 'mailbox-hardlink.ts');
+  await fs.link(path.join(root, 'src', 'mailbox.ts'), alias);
+
+  await store.claim({ agent: 'codex', paths: ['src/mailbox.ts'], why: 'physical file' });
+  await assert.rejects(
+    store.claim({ agent: 'grok', paths: ['src/mailbox-hardlink.ts'], why: 'same inode through hardlink' }),
+    ClaimConflictError
+  );
+});
+
 test('repo-root claims refuse paths missing from both roots and traversal outside them', async () => {
   const otherRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'portable-ai-bus-empty-root-'));
   try {
@@ -259,6 +281,23 @@ test('same relative path in two roots remains independently claimable and releas
     assert.equal(busClaim[0].root, comparableRoot(await fs.realpath(root)));
     const healthy = await store.doctor();
     assert.equal(healthy.ok, true, healthy.problems.join('\n'));
+  } finally {
+    await removeTree(otherRoot);
+  }
+});
+
+test('repo-scoped release respects the requested root when only one lexical match is held', async () => {
+  const otherRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'portable-ai-bus-release-root-'));
+  try {
+    await fs.mkdir(path.join(otherRoot, 'src'), { recursive: true });
+    await fs.writeFile(path.join(otherRoot, 'src', 'mailbox.ts'), 'other fixture');
+    await store.claim({ agent: 'codex', paths: ['src/mailbox.ts'], why: 'bus repo' });
+
+    await assert.rejects(
+      store.release('codex', ['src/mailbox.ts'], otherRoot),
+      /does not hold exact claim/
+    );
+    assert.equal((await store.claims()).codex.length, 1);
   } finally {
     await removeTree(otherRoot);
   }

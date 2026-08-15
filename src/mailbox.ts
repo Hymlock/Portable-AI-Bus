@@ -15,6 +15,7 @@ import {
   observeLifecycle,
   observeRunnerResult
 } from './evidence';
+import { filesystemIdentityMaterial } from './workspace-key';
 
 const execFileAsync = promisify(execFile);
 const SCHEMA = 1;
@@ -25,7 +26,7 @@ export type Claim = {
   path: string;
   /** Lexical workspace root against which `path` was resolved. */
   root?: string;
-  /** Canonical filesystem identity. Symlink and junction aliases share this value. */
+  /** Stable filesystem identity. Symlink, junction, and hardlink aliases share this value. */
   identity?: string;
   why: string;
   at: string;
@@ -815,11 +816,18 @@ export class MailboxStore {
         for (const root of claimRoots) {
           const candidate = path.resolve(root, requestedPath);
           if (!(await this.exists(candidate))) continue;
-          match = {
-            path: requestedPath,
-            root: this.canonicalComparablePath(await fs.realpath(root)),
-            identity: this.canonicalComparablePath(await fs.realpath(candidate))
-          };
+          try {
+            const identity = await fs.stat(candidate, { bigint: true });
+            match = {
+              path: requestedPath,
+              root: this.canonicalComparablePath(await fs.realpath(root)),
+              identity: filesystemIdentityMaterial(identity.dev, identity.ino)
+            };
+          } catch {
+            // The path can disappear between exists() and identity discovery. Treat that as
+            // missing rather than crashing or recording an identity we did not observe.
+            continue;
+          }
           break;
         }
         if (!match) {
@@ -889,7 +897,11 @@ export class MailboxStore {
       const requestedRoot = this.canonicalComparablePath(repoRoot ?? this.paths.root);
       const selected = requested.map((requestedPath) => {
         const matches = held.filter((claim) => claim.path === requestedPath);
-        if (matches.length <= 1) return matches[0];
+        if (matches.length <= 1) {
+          const only = matches[0];
+          if (repoRoot && only?.root && only.root !== requestedRoot) return undefined;
+          return only;
+        }
         return matches.find((claim) => claim.root === requestedRoot);
       });
       const missing = requested.filter((_item, index) => !selected[index]);
@@ -1556,7 +1568,18 @@ export class MailboxStore {
     claim: Pick<Claim, 'path'> & Partial<Pick<Claim, 'root' | 'identity'>>,
     fallbackRoots: string[]
   ) {
-    if (claim.identity) return [this.canonicalComparablePath(claim.identity)];
+    if (claim.identity) {
+      const identities = [claim.identity];
+      const roots = claim.root ? [claim.root] : fallbackRoots;
+      for (const root of roots) {
+        try {
+          identities.push(this.canonicalComparablePath(realpathSync(path.resolve(root, claim.path))));
+        } catch {
+          identities.push(this.canonicalComparablePath(path.resolve(root, claim.path)));
+        }
+      }
+      return identities;
+    }
 
     // Claims written before root identity was added are deliberately conservative until
     // released: resolve every matching candidate root instead of guessing which file they held.
