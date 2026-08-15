@@ -11,15 +11,15 @@ seat that did not write it has attacked it and said so on the record.
 |---|---|---|
 | 1 | verified evidence memory | **CERTIFIED** at `ab9807a`; temporal binding **CERTIFIED** at `606d49d` |
 | 2 | consolidation of an assignment's episodes | open — deliberately last |
-| 3 | supersede a sent message | store done `4a9acc5`, **FAILED audit** — no caller can invoke it |
+| 3 | supersede a sent message | wired every layer `8349f70` after failing `4a9acc5`; audit pending |
 | 4 | cross-seat reassignment | **CERTIFIED** at `c755a42` (2026-08-14) |
 | 5 | distinguish *stalled* from *spent* | **CERTIFIED** at `78ffe75`+`48d24f4` — separates SPENT from STALLED; **BROKEN not covered** |
-| 6 | claim guard — claims unsatisfiable against repo paths | fixed across `08da916`+`21ed962`+`1b1765d`, deployed, **FAILED audit** — symlink + release/doctor |
+| 6 | claim guard — claims unsatisfiable against repo paths | re-gated `ac18943`+`8349f70` after failing; re-audit running |
 | 7 | claim schema — `why` is optional | open — specified below |
 | 8 | an ack is not a commitment | open — observed three times on 2026-08-14 |
-| 9 | a detector whose only sink is a log | implemented `f3798fe`, **not certified** — notice file + bus-tick; still no auto-restart |
+| 9 | a detector whose only sink is a log | **CERTIFIED** at `f3798fe` — notice file + bus-tick; still no auto-restart |
 | 10 | authorisation does not survive a wake | open — measured 2026-08-14 |
-| 11 | a broken link reports as *spent* | implemented, **not certified** — SPENT / STALLED / BROKEN split; auditor still required |
+| 11 | a broken link reports as *spent* | **CERTIFIED** at `5352b0d` — SPENT / STALLED / BROKEN split |
 
 Items 1–7 were the original bar. **Items 8–11 were all added on 2026-08-14/15 from measured
 failures, not planning** — three of the four were found by the system failing in front of us
