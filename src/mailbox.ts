@@ -564,6 +564,17 @@ export class MailboxStore {
       message.supersededAt = nowIso();
       message.supersedeReason = reason.trim();
       await this.atomicJson(messagePath, message);
+      await this.appendLineUnsafe(
+        [
+          '',
+          `## Supersession: message #${message.seq}`,
+          '',
+          `- supersededBy: ${message.supersededBy}`,
+          `- supersedeReason: ${message.supersedeReason}`,
+          `- time: ${message.supersededAt}`,
+          ''
+        ].join('\n')
+      );
       return message;
     });
   }
@@ -2240,7 +2251,7 @@ async function runCli(argv = process.argv.slice(2)) {
     }
     default:
       throw new Error(
-        'usage: mailbox <init|send|inbox|read|parked|requeue|wait|claim|release|claims|status|doctor|goal|assign|stall-check|reassign|record-evidence|promote-evidence|list-evidence|configure-halting|complete-step|complete-goal|halt|resume> [options]'
+        'usage: mailbox <init|send|inbox|read|parked|requeue|supersede|wait|claim|release|claims|status|doctor|goal|assign|stall-check|reassign|record-evidence|promote-evidence|list-evidence|configure-halting|complete-step|complete-goal|halt|resume> [options]'
       );
   }
 }

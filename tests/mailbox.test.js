@@ -478,6 +478,28 @@ test('superseded unread mail is skipped by delivery and unread status', async ()
   assert.deepEqual((await store.read('grok')).map((message) => message.seq), [correction.seq]);
 });
 
+test('transcript records message supersession metadata', async () => {
+  const original = await store.send({ from: 'codex', to: 'grok', subject: 'old', body: 'stale' });
+  const correction = await store.send({ from: 'codex', to: 'grok', subject: 'new', body: 'current' });
+
+  await store.supersedeMessage(original.seq, correction.seq, 'corrected instruction', 'codex');
+
+  const transcript = await fs.readFile(store.paths.transcriptPath, 'utf8');
+  assert.match(transcript, new RegExp(`supersededBy: ${correction.seq}`));
+  assert.match(transcript, /supersedeReason: corrected instruction/);
+});
+
+test('mailbox usage lists the supersede command', async () => {
+  await assert.rejects(
+    execFileAsync(process.execPath, [mailboxCli, 'not-a-command', '--root', root]),
+    (error) => {
+      assert.match(error.stderr, /usage: mailbox/);
+      assert.match(error.stderr, /supersede/);
+      return true;
+    }
+  );
+});
+
 test('mailbox CLI exposes sender-authorized supersede', async () => {
   const original = await store.send({ from: 'codex', to: 'grok', subject: 'old', body: 'stale' });
   const correction = await store.send({ from: 'codex', to: 'grok', subject: 'new', body: 'current' });
