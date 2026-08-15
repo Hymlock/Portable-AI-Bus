@@ -9,7 +9,7 @@ seat that did not write it has attacked it and said so on the record.
 
 | # | item | status |
 |---|---|---|
-| 1 | verified evidence memory | **CERTIFIED** at `ab9807a` (2026-08-14); temporal binding implemented, not certified |
+| 1 | verified evidence memory | **CERTIFIED** at `ab9807a`; temporal binding **CERTIFIED** at `606d49d` |
 | 2 | consolidation of an assignment's episodes | open — deliberately last |
 | 3 | supersede a sent message | open — specified below |
 | 4 | cross-seat reassignment | **CERTIFIED** at `c755a42` (2026-08-14) |
@@ -87,6 +87,28 @@ Certification gates (red first, all four):
 - **an honest observation whose real diff touches the subject path still promotes** — not
   optional. Without it, the first three pass trivially if `promote()` simply always refuses,
   which is a gate that cannot go green.
+
+### Temporal binding — certified at `606d49d`
+
+The slice that replaced the two named refusals with post-claim event binding:
+`observeCommitDiff` requires `committedAt > record.createdAt`, `observeLifecycle` requires
+`event.at > record.createdAt`, and `setGoal` appends structured `lifecycleEvents` rows instead
+of overloading `CompletionEvent.scope`.
+
+Certified first attempt, and the probe shape is now the house standard without being asked
+for:
+
+- **RED first** — a persisted `goal-set` row with an **empty timestamp**, injected after the
+  claim, refused with `lifecycle event was not recorded after the claim`;
+- **GREEN** — `setGoal` called after the claim produced a row with a UUID and `eventAt`
+  **1.119 s** after `claim.createdAt`; promotion succeeded;
+- **persistence, not memory** — the record was re-read through a **new `MailboxStore`
+  instance** and still read `trust=verified`, `inputIdentity=goal-set@<same UUID>`.
+
+The auditor also reported a Node heap OOM in the *other* seat's dirty in-flight
+`tests/stall-ledger.test.js` and explicitly declined to attribute it to `606d49d`. Reporting a
+failure you are not responsible for, without folding it into your verdict, is the behaviour
+that makes a certification worth having.
 
 ## Item 4 — certified at `c755a42`, first attempt
 
