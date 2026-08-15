@@ -21,9 +21,11 @@ const execFileAsync = promisify(execFile);
  * and they do so after hitting git, receipts, or mailbox state. There is no
  * exported mint.
  *
- * Only commit-diff can pass: git changed-paths against the claim's subject-path.
- * runner-result and lifecycle-transition stay as named kinds that refuse, so the
- * gap is visible rather than the capability silently absent.
+ * Each observer binds a recorded event whose identity is after the claim.
+ * Provenance without a post-claim timestamp is not enough: a HEAD that happens
+ * to list the path, a passing receipt, or Boolean(goal) can all predate the
+ * claim. The store also refuses when committedAt / finishedAt / eventAt is
+ * missing or not after record.createdAt. Models cannot supply those fields.
  */
 
 export type EvidenceTrust = 'untrusted' | 'verified';
@@ -65,6 +67,7 @@ export type CommitDiffObserved = {
   commitExists: boolean;
   sha: string;
   changedPaths: string[];
+  committedAt: string;
 };
 
 export type RunnerResultObserved = {
@@ -72,11 +75,14 @@ export type RunnerResultObserved = {
   invocation: string;
   exitCode: number;
   ok: boolean;
+  finishedAt: string;
 };
 
 export type LifecycleObserved = {
   transition: string;
   recorded: boolean;
+  eventId: string;
+  eventAt: string;
 };
 
 export type ObservedPayload = CommitDiffObserved | RunnerResultObserved | LifecycleObserved;
@@ -90,10 +96,12 @@ export type VerifierInput = CommitDiffVerifier | RunnerResultVerifier | Lifecycl
 export const VERIFIER_KINDS: readonly VerifierKind[] = ['commit-diff', 'runner-result', 'lifecycle-transition'];
 
 export const PLAIN_OBJECT_REFUSAL = 'a plain object is not an observation';
-export const RUNNER_RESULT_REFUSAL =
-  'runner-result cannot promote: this named kind refuses so the gap is visible; only commit-diff binds git changed-paths to the claim subject-path';
-export const LIFECYCLE_REFUSAL =
-  'lifecycle-transition cannot promote: this named kind refuses so the gap is visible; Boolean(goal) cannot distinguish goal-set from goal-replaced';
+export const STALE_COMMIT_REFUSAL =
+  'stale observation: committedAt is missing or not after the claim';
+export const STALE_RUNNER_REFUSAL =
+  'no passing runner result after the claim';
+export const STALE_LIFECYCLE_REFUSAL =
+  'lifecycle event was not recorded after the claim';
 
 const MINT = Symbol('BusObservation.mint');
 
@@ -359,10 +367,24 @@ function evaluateVerifier(
     return { ok: false, reason: PLAIN_OBJECT_REFUSAL };
   }
   if (observation.kind === 'runner-result') {
-    return { ok: false, reason: RUNNER_RESULT_REFUSAL };
+    const observed = observation.observed as RunnerResultObserved;
+    if (!observed.ok || observed.exitCode !== 0) {
+      return { ok: false, reason: STALE_RUNNER_REFUSAL };
+    }
+    if (!isAfterClaim(observed.finishedAt, record.createdAt)) {
+      return { ok: false, reason: STALE_RUNNER_REFUSAL };
+    }
+    return { ok: true };
   }
   if (observation.kind === 'lifecycle-transition') {
-    return { ok: false, reason: LIFECYCLE_REFUSAL };
+    const observed = observation.observed as LifecycleObserved;
+    if (!observed.recorded || !observed.eventId.trim()) {
+      return { ok: false, reason: STALE_LIFECYCLE_REFUSAL };
+    }
+    if (!isAfterClaim(observed.eventAt, record.createdAt)) {
+      return { ok: false, reason: STALE_LIFECYCLE_REFUSAL };
+    }
+    return { ok: true };
   }
   if (observation.kind !== 'commit-diff') {
     return { ok: false, reason: `unknown verifier kind: ${String((observation as BusObservation).kind)}` };
@@ -370,6 +392,9 @@ function evaluateVerifier(
   const observed = observation.observed as CommitDiffObserved;
   if (!observed.commitExists) return { ok: false, reason: 'commit does not exist' };
   if (!observed.sha.trim()) return { ok: false, reason: 'commit sha missing' };
+  if (!isAfterClaim(observed.committedAt, record.createdAt)) {
+    return { ok: false, reason: STALE_COMMIT_REFUSAL };
+  }
   const wanted = subjectPath(record.subject).replace(/\\/g, '/');
   if (!wanted) return { ok: false, reason: 'claim subject-path is empty' };
   const changed = (observed.changedPaths ?? []).map((item) => item.replace(/\\/g, '/'));
@@ -377,6 +402,14 @@ function evaluateVerifier(
     return { ok: false, reason: `irrelevant diff: missing ${wanted}` };
   }
   return { ok: true };
+}
+
+export function isAfterClaim(eventAt: string | undefined, claimAt: string): boolean {
+  if (!eventAt?.trim() || !claimAt.trim()) return false;
+  const event = Date.parse(eventAt);
+  const claim = Date.parse(claimAt);
+  if (!Number.isFinite(event) || !Number.isFinite(claim)) return false;
+  return event > claim;
 }
 
 function observationIdentity(observation: BusObservation): string {
@@ -387,13 +420,19 @@ function observationIdentity(observation: BusObservation): string {
     const observed = observation.observed as RunnerResultObserved;
     return `${observed.revision} ${observed.invocation}`.trim();
   }
-  return (observation.observed as LifecycleObserved).transition;
+  const observed = observation.observed as LifecycleObserved;
+  return observed.eventId ? `${observed.transition}@${observed.eventId}` : observed.transition;
 }
 
-export async function observeCommitDiff(root: string, _subject: string): Promise<BusObservation> {
-  const sha = await readGitHead(root);
-  if (!sha) {
-    return mintObservation('commit-diff', { commitExists: false, sha: '', changedPaths: [] });
+export async function observeCommitDiff(
+  root: string,
+  subject: string,
+  _after?: string
+): Promise<BusObservation> {
+  const wanted = subjectPath(subject).replace(/\\/g, '/');
+  const commit = await newestCommitTouching(root, wanted);
+  if (!commit) {
+    return mintObservation('commit-diff', { commitExists: false, sha: '', changedPaths: [], committedAt: '' });
   }
   let changedPaths: string[] = [];
   try {
@@ -401,30 +440,37 @@ export async function observeCommitDiff(root: string, _subject: string): Promise
     // no parent and reports an empty path list, so a real landing looks irrelevant.
     const { stdout } = await execFileAsync(
       'git',
-      ['-C', root, 'diff-tree', '--no-commit-id', '--name-only', '-r', '--root', sha],
+      ['-C', root, 'diff-tree', '--no-commit-id', '--name-only', '-r', '--root', commit.sha],
       { windowsHide: true }
     );
     changedPaths = stdout.split(/\r?\n/).map((item) => item.trim().replace(/\\/g, '/')).filter(Boolean);
   } catch {
     changedPaths = [];
   }
-  return mintObservation('commit-diff', { commitExists: true, sha, changedPaths });
+  return mintObservation('commit-diff', {
+    commitExists: true,
+    sha: commit.sha,
+    changedPaths,
+    committedAt: commit.committedAt
+  });
 }
 
 export async function observeRunnerResult(
   root: string,
   subject: string,
-  invocation?: string
+  invocation?: string,
+  after?: string
 ): Promise<BusObservation> {
   const receiptsDir = path.join(root, '.ai-bus', 'runtime', 'receipts');
   const wanted = (invocation ?? '').trim() || subjectPath(subject);
-  const receipt = await findCapabilityReceipt(receiptsDir, wanted);
+  const receipt = await findCapabilityReceipt(receiptsDir, wanted, after);
   if (!receipt) {
     return mintObservation('runner-result', {
       revision: '',
       invocation: wanted,
       exitCode: 1,
-      ok: false
+      ok: false,
+      finishedAt: ''
     });
   }
   const command = [receipt.capabilityId, receipt.command?.executable, ...(receipt.command?.args ?? [])]
@@ -434,31 +480,70 @@ export async function observeRunnerResult(
     revision: receipt.workspaceCommit?.sha ?? '',
     invocation: command || receipt.capabilityId || wanted,
     exitCode: typeof receipt.exitCode === 'number' ? receipt.exitCode : 1,
-    ok: receipt.status === 'passed' && receipt.exitCode === 0
+    ok: receipt.status === 'passed' && receipt.exitCode === 0,
+    finishedAt: receipt.finishedAt ?? ''
   });
 }
 
 export async function observeLifecycle(
   root: string,
   subject: string,
-  transition?: string
+  transition?: string,
+  after?: string
 ): Promise<BusObservation> {
   const wanted = (transition ?? '').trim() || subjectPath(subject);
   const state = await loadMailboxState(root);
-  let recorded = false;
   if (wanted === 'goal-set' || wanted === 'goal-replaced') {
-    recorded = Boolean(state.goal);
-  } else {
-    recorded = state.completions.some((event) =>
+    const match = newestAfter(
+      state.lifecycleEvents.filter((event) => event.kind === wanted),
+      after,
+      (event) => event.at
+    );
+    if (!match) {
+      return mintObservation('lifecycle-transition', {
+        transition: wanted,
+        recorded: false,
+        eventId: '',
+        eventAt: ''
+      });
+    }
+    return mintObservation('lifecycle-transition', {
+      transition: wanted,
+      recorded: true,
+      eventId: match.id,
+      eventAt: match.at
+    });
+  }
+  const match = newestAfter(
+    state.completions.filter((event) =>
       wanted === event.scope ||
       wanted === `complete-${event.scope}` ||
       wanted === event.id
-    );
+    ),
+    after,
+    (event) => event.at ?? ''
+  );
+  if (!match) {
+    return mintObservation('lifecycle-transition', {
+      transition: wanted,
+      recorded: false,
+      eventId: '',
+      eventAt: ''
+    });
   }
-  return mintObservation('lifecycle-transition', { transition: wanted, recorded });
+  return mintObservation('lifecycle-transition', {
+    transition: wanted,
+    recorded: true,
+    eventId: match.id ?? '',
+    eventAt: match.at ?? ''
+  });
 }
 
-async function readGitHead(root: string): Promise<string | undefined> {
+async function newestCommitTouching(
+  root: string,
+  relativePath: string
+): Promise<{ sha: string; committedAt: string } | undefined> {
+  if (!relativePath) return undefined;
   let candidate = path.resolve(root);
   while (!(await pathExists(path.join(candidate, '.git')))) {
     const parent = path.dirname(candidate);
@@ -466,69 +551,103 @@ async function readGitHead(root: string): Promise<string | undefined> {
     candidate = parent;
   }
   try {
-    const { stdout } = await execFileAsync('git', ['-C', root, 'rev-parse', 'HEAD'], { windowsHide: true });
-    const sha = stdout.trim();
-    return sha || undefined;
+    const { stdout: shaOut } = await execFileAsync(
+      'git',
+      ['-C', root, 'log', '-1', '--format=%H', '--', relativePath],
+      { windowsHide: true }
+    );
+    const sha = shaOut.trim();
+    if (!sha) return undefined;
+    const { stdout: atOut } = await execFileAsync(
+      'git',
+      ['-C', root, 'log', '-1', '--format=%cI', sha],
+      { windowsHide: true }
+    );
+    return { sha, committedAt: atOut.trim() };
   } catch {
     return undefined;
   }
 }
 
-async function findCapabilityReceipt(
-  receiptsDir: string,
-  wanted: string
-): Promise<{
+type CapabilityReceiptShape = {
   capabilityId?: string;
   command?: { executable?: string; args?: string[] };
   workspaceCommit?: { sha?: string };
   exitCode?: number | null;
   status?: string;
-} | undefined> {
+  finishedAt?: string;
+};
+
+async function findCapabilityReceipt(
+  receiptsDir: string,
+  wanted: string,
+  after?: string
+): Promise<CapabilityReceiptShape | undefined> {
   const names = await fs.readdir(receiptsDir).catch((error: NodeJS.ErrnoException) => {
     if (error.code === 'ENOENT') return [] as string[];
     throw error;
   });
-  const files = names.filter((name) => name.endsWith('.json') && name !== 'latest.json').sort();
-  const latest = names.includes('latest.json') ? ['latest.json'] : [];
-  const candidates = [...latest, ...files.reverse()];
-  for (const name of candidates) {
+  const files = names.filter((name) => name.endsWith('.json'));
+  const matches: CapabilityReceiptShape[] = [];
+  for (const name of files) {
     try {
-      const receipt = JSON.parse(await fs.readFile(path.join(receiptsDir, name), 'utf8')) as {
-        capabilityId?: string;
-        command?: { executable?: string; args?: string[] };
-        workspaceCommit?: { sha?: string };
-        exitCode?: number | null;
-        status?: string;
-      };
+      const receipt = JSON.parse(await fs.readFile(path.join(receiptsDir, name), 'utf8')) as CapabilityReceiptShape;
       const haystack = [
         receipt.capabilityId,
         receipt.command?.executable,
         ...(receipt.command?.args ?? [])
       ].filter(Boolean).join(' ');
       if (!wanted || haystack.includes(wanted) || receipt.capabilityId === wanted) {
-        return receipt;
+        if (after && !isAfterClaim(receipt.finishedAt, after)) continue;
+        matches.push(receipt);
       }
     } catch {
       // A corrupt receipt is not a passing verifier.
     }
   }
-  return undefined;
+  return newestAfter(matches, undefined, (item) => item.finishedAt ?? '');
+}
+
+function newestAfter<T>(
+  items: T[],
+  after: string | undefined,
+  timestamp: (item: T) => string
+): T | undefined {
+  let chosen: T | undefined;
+  let chosenAt = Number.NEGATIVE_INFINITY;
+  for (const item of items) {
+    const raw = timestamp(item);
+    if (after && !isAfterClaim(raw, after)) continue;
+    const parsed = Date.parse(raw);
+    if (!Number.isFinite(parsed)) continue;
+    if (parsed >= chosenAt) {
+      chosen = item;
+      chosenAt = parsed;
+    }
+  }
+  return chosen;
 }
 
 async function loadMailboxState(root: string): Promise<{
   goal: unknown;
-  completions: Array<{ scope?: string; id?: string }>;
+  completions: Array<{ scope?: string; id?: string; at?: string }>;
+  lifecycleEvents: Array<{ id: string; kind: string; at: string }>;
 }> {
   const statePath = path.join(root, '.ai-bus', 'runtime', 'mailbox', 'state.json');
   try {
     const state = JSON.parse(await fs.readFile(statePath, 'utf8')) as {
       goal?: unknown;
-      completions?: Array<{ scope?: string; id?: string }>;
+      completions?: Array<{ scope?: string; id?: string; at?: string }>;
+      lifecycleEvents?: Array<{ id: string; kind: string; at: string }>;
     };
-    return { goal: state.goal ?? null, completions: Array.isArray(state.completions) ? state.completions : [] };
+    return {
+      goal: state.goal ?? null,
+      completions: Array.isArray(state.completions) ? state.completions : [],
+      lifecycleEvents: Array.isArray(state.lifecycleEvents) ? state.lifecycleEvents : []
+    };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return { goal: null, completions: [] };
+      return { goal: null, completions: [], lifecycleEvents: [] };
     }
     throw error;
   }

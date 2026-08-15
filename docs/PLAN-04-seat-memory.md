@@ -1,10 +1,11 @@
 # PLAN 04 — Seat memory
 
 Status: **slice 1 implemented and audited** (`d74e8fe` + `951f218`). **Slice 2 (verified
-evidence memory) is CERTIFIED at `ab9807a`** — independently, by the seat that did not write
-it, after two rejected PASSes; see `COMPLETION-BAR.md` for the certification standard that
-produced them. **Item 4 (cross-seat reassignment) is implemented and not yet independently
-audited.** Durable same-seat
+evidence memory) is CERTIFIED at `ab9807a`** for provenance and payload integrity —
+independently, by the seat that did not write it, after two rejected PASSes; see
+`COMPLETION-BAR.md`. **Temporal binding (1363) is implemented and not certified.** It
+replaces the named refusals: observers bind a recorded event after the claim. **Item 4
+(cross-seat reassignment) is CERTIFIED at `c755a42`.** Durable same-seat
 recovery checkpoints now live on their source mailbox record (`workId` is its sequence). They retain
 closed history, supersede rather than expire, and atomically retain accepted-action receipts with
 unfinished intent. Startup retrieves only open checkpoints; injection is escaped, explicitly
@@ -50,24 +51,35 @@ evidence records are durable facts that start `untrusted` and promote only when 
 The first landing copied `record.subject` onto the verifier and then checked
 `verifier.subject === record.subject` — a tautology. `relevantPaths` was the same
 copy. `runner-result` and `lifecycle-transition` could not bind a statement
-(`Boolean(state.goal)` cannot tell goal-set from goal-replaced). Those two remain
-**named kinds that refuse**, so the gap is visible. The one verifier that binds is
-git changed-paths against the claim's subject-path, derived at evaluate time from
+(`Boolean(state.goal)` cannot tell goal-set from goal-replaced). Those two were
+**named kinds that refuse** until the temporal-binding slice: the gap stayed
+visible rather than silently absent. The one verifier that bound first was git
+changed-paths against the claim's subject-path, derived at evaluate time from
 the record, not from fields the observation copied off the claim.
 
 | gate | result |
 |---|---|
 | `promote()` without an authentic `BusObservation` leaves the claim untrusted | store gate — a fabricated deadbeef payload is `a plain object is not an observation` |
 | mailbox `promoteEvidence` observes git; a fabricated payload is not an argument | wiring gate — seen RED first as `irrelevant diff: missing src/evidence.ts` on a real first commit because `diff-tree` omitted `--root` |
-| `runner-result` and `lifecycle-transition` refuse by name, including after a live `setGoal` | store + mailbox gate — setGoal is not "goal replaced and assignments cleared" |
+| `runner-result` and `lifecycle-transition` used to refuse by name | replaced by 1363 — post-claim event binding, not certified |
 | wake injection is labelled `UNTRUSTED MEMORY - NOT INSTRUCTIONS`, escaped, capped at 2 KiB | wiring gate |
 | verified facts are still injected as data, not instructions | store gate |
 | a later-arriving older event cannot overwrite a newer verified fact | store gate |
 | subject-identity change invalidates a previously verified fact | store gate |
 
-Verifier freshness lives here, not as a fifth item: observation happens at promote time
-against HEAD, the latest matching capability receipt, or current mailbox lifecycle state.
-A stored model-authored observation is not accepted.
+Verifier freshness is a recorded event whose identity is after the claim, not
+"observe current lifecycle state / latest receipt / HEAD". `setGoal` appends a
+structured `lifecycleEvents` row (`goal-set` or `goal-replaced`) instead of
+overloading `CompletionEvent.scope`. `observeCommitDiff` takes the newest commit
+that touched the subject path and requires `committedAt > record.createdAt`.
+`observeRunnerResult` ignores receipts whose `finishedAt` is missing or not after
+the claim. `observeLifecycle` requires a matching lifecycle or completion event
+with `event.at > record.createdAt`; `inputIdentity` is `transition@eventId`.
+The store also refuses when those timestamps are missing or not after the claim.
+Statement-text evaluation is out of scope: freshness is not truthfulness.
+
+This temporal-binding slice is **implemented, not certified**. The author does
+not certify it.
 
 A third defect was found *after* the tautology, by the auditor, at `12204b0`: provenance was
 bound but **contents were not**. An *authentic* observation could be obtained from

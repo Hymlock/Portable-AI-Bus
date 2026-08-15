@@ -60,7 +60,7 @@ const buildDefaultSystem = (exampleRecipient: string) => [
   'release requires type and may include a non-empty paths string array.',
   'capability requires type and id, and may include a positive integer timeoutMs.',
   'record requires type, subject, and statement; workId is an optional positive mailbox sequence. Recording stores an UNTRUSTED claim.',
-  'promote requires type, id, and kind (commit-diff, runner-result, or lifecycle-transition). Only commit-diff can pass: the bus observes git changed-paths against the claim subject-path. runner-result and lifecycle-transition are named kinds that refuse. You cannot supply a passing verifier.',
+  'promote requires type, id, and kind (commit-diff, runner-result, or lifecycle-transition). The bus observes a recorded event after the claim: a commit that touched the subject path, a passing receipt finished after the claim, or a structured lifecycle/completion event after the claim. You cannot supply a passing verifier.',
   'done requires type and may include a note string. Never omit required fields.',
   'Acknowledge each incoming message at most once with a short receipt before other work; never repeat an acknowledgement on a repair or continuation round.',
   // Without this line an agentic CLI reaches for a shell it does not have and ABORTS the whole

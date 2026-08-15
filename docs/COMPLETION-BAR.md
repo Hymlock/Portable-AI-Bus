@@ -9,7 +9,7 @@ seat that did not write it has attacked it and said so on the record.
 
 | # | item | status |
 |---|---|---|
-| 1 | verified evidence memory | **CERTIFIED** at `ab9807a` (2026-08-14) |
+| 1 | verified evidence memory | **CERTIFIED** at `ab9807a` (2026-08-14); temporal binding implemented, not certified |
 | 2 | consolidation of an assignment's episodes | open — deliberately last |
 | 3 | supersede a sent message | open |
 | 4 | cross-seat reassignment | **CERTIFIED** at `c755a42` (2026-08-14) |
@@ -145,10 +145,10 @@ five diagnoses today were plausible and wrong. Instrument first.
 Item 2 is last on purpose: consolidation built early would faithfully compress a pipeline that
 was still discarding most of its long messages.
 
-The temporal-binding slice does **not** start until item 1 is certified. It rewrites
-`observeLifecycle` / `observeCommitDiff` / `observeRunnerResult` and would replace the named
-refusals codex was asked to attack; stacking it on an uncertified surface makes both slices
-un-auditable. That ordering was proposed by the implementer and confirmed, not imposed.
+The temporal-binding slice was blocked on item 1 certification and is now **implemented,
+not certified**. It rewrites `observeLifecycle` / `observeCommitDiff` / `observeRunnerResult`
+so each binds a recorded event after the claim (1363 A–D). Named refusals are gone; every
+kind has refusal gates and a green case. The author does not certify it.
 
 ## The rule that produced every finding here
 

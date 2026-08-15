@@ -77,6 +77,12 @@ export type MailboxState = {
   haltPolicy: HaltPolicy;
   completions: CompletionEvent[];
   /**
+   * Structured goal transitions. Do not overload CompletionEvent.scope.
+   * setGoal appends goal-set when no previous goal exists, else goal-replaced.
+   * Last 100 retained, same as completions. observeLifecycle binds these.
+   */
+  lifecycleEvents: LifecycleEvent[];
+  /**
    * What this bus is FOR, and how a human will know it is finished.
    *
    * Halt policies answered "have we talked too much?" when the question agents actually need
@@ -144,6 +150,14 @@ export type CompletionEvent = {
   evidence: string[];
   at: string;
   halted: boolean;
+};
+
+export type LifecycleEvent = {
+  id: string;
+  kind: 'goal-set' | 'goal-replaced';
+  at: string;
+  previousIdentity: string | null;
+  nextIdentity: string;
 };
 
 export type MailboxStatus = MailboxState & {
@@ -584,8 +598,9 @@ export class MailboxStore {
   /**
    * Promote only after THIS process observes the world. The caller names a
    * verifier kind; it cannot supply an observation. A plain object is not one.
-   * Only commit-diff can pass: git changed-paths against the claim subject-path.
-   * runner-result and lifecycle-transition are named kinds that refuse.
+   * Promotion binds a recorded event after the claim: a commit that touched the
+   * subject path, a passing receipt, or a structured lifecycle/completion event.
+   * Boolean(goal) and HEAD-happened-to-list-it are not enough.
    */
   async promoteEvidence(input: {
     agent: string;
@@ -862,10 +877,12 @@ export class MailboxStore {
     }
     return this.withLock(async () => {
       const state = await this.loadStateUnsafe();
+      const previous = state.goal;
+      const at = nowIso();
       state.goal = {
         statement: goal.statement.trim(),
         doneWhen: goal.doneWhen.trim(),
-        setAt: nowIso(),
+        setAt: at,
         setBy: goal.setBy ?? null,
         // A replacement goal is a new coordination contract. Carrying the previous goal's
         // assignments forward briefly tells every returning seat to perform obsolete work and
@@ -873,6 +890,15 @@ export class MailboxStore {
         // commands. Require the operator to assign the new goal deliberately.
         assignments: {}
       };
+      const event: LifecycleEvent = {
+        id: randomUUID(),
+        kind: previous ? 'goal-replaced' : 'goal-set',
+        at,
+        previousIdentity: previous?.setAt ?? null,
+        nextIdentity: at
+      };
+      state.lifecycleEvents.push(event);
+      state.lifecycleEvents = state.lifecycleEvents.slice(-100);
       await this.writeStateUnsafe(state);
       await this.appendLineUnsafe(
         `\n---\n\n## GOAL\n\n${state.goal.statement}\n\n**Done when:** ${state.goal.doneWhen}\n\n---\n`
@@ -1249,6 +1275,7 @@ export class MailboxStore {
       claims: {},
       haltPolicy: { onStepCompletion: false, onGoalCompletion: true, atRounds: [], everyRounds: null },
       completions: [],
+      lifecycleEvents: [],
       goal: null,
       baton: null
     };
@@ -1276,6 +1303,7 @@ export class MailboxStore {
       everyRounds: normalizeEveryRounds(state.haltPolicy?.everyRounds ?? null)
     };
     state.completions = Array.isArray(state.completions) ? state.completions : [];
+    state.lifecycleEvents = Array.isArray(state.lifecycleEvents) ? state.lifecycleEvents : [];
     return state;
   }
 
@@ -1374,9 +1402,11 @@ export class MailboxStore {
     record: EvidenceRecord,
     input: { kind: VerifierKind; invocation?: string; transition?: string }
   ): Promise<BusObservation> {
-    if (input.kind === 'commit-diff') return observeCommitDiff(this.paths.root, record.subject);
-    if (input.kind === 'runner-result') return observeRunnerResult(this.paths.root, record.subject, input.invocation);
-    return observeLifecycle(this.paths.root, record.subject, input.transition);
+    if (input.kind === 'commit-diff') return observeCommitDiff(this.paths.root, record.subject, record.createdAt);
+    if (input.kind === 'runner-result') {
+      return observeRunnerResult(this.paths.root, record.subject, input.invocation, record.createdAt);
+    }
+    return observeLifecycle(this.paths.root, record.subject, input.transition, record.createdAt);
   }
 
   private async gitStamp(): Promise<CommitStamp | undefined> {

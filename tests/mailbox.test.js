@@ -64,6 +64,11 @@ test('replacing a goal clears assignments from the previous coordination contrac
     setBy: 'operator'
   });
   assert.deepEqual(replaced.goal.assignments, {});
+  assert.equal(replaced.lifecycleEvents.length, 2);
+  assert.equal(replaced.lifecycleEvents[0].kind, 'goal-set');
+  assert.equal(replaced.lifecycleEvents[1].kind, 'goal-replaced');
+  assert.equal(replaced.lifecycleEvents[1].previousIdentity, replaced.lifecycleEvents[0].nextIdentity);
+  assert.equal(replaced.lifecycleEvents[1].nextIdentity, replaced.goal.setAt);
 });
 
 test('a delayed acknowledgement cannot steal the baton from a newer holder', async () => {
@@ -297,10 +302,12 @@ test('legacy mailbox state receives safe completion policy defaults', async () =
   const legacy = JSON.parse(await fs.readFile(statePath, 'utf8'));
   delete legacy.haltPolicy;
   delete legacy.completions;
+  delete legacy.lifecycleEvents;
   await fs.writeFile(statePath, `${JSON.stringify(legacy, null, 2)}\n`, 'utf8');
   const status = await store.status();
   assert.deepEqual(status.haltPolicy, { onStepCompletion: false, onGoalCompletion: true, atRounds: [], everyRounds: null });
   assert.deepEqual(status.completions, []);
+  assert.deepEqual(status.lifecycleEvents, []);
 });
 
 test('designated and recurring round checkpoints halt after durably writing the triggering message', async () => {
