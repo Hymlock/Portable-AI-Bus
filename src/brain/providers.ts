@@ -13,6 +13,8 @@
 
 import { processAvailable, runProcess } from './process-host';
 
+const PROVIDER_STALL_MS = 30_000;
+
 export type ProviderKind = 'cli' | 'api' | 'oauth' | 'exec' | 'codex' | 'grok';
 
 export type ModelReply = {
@@ -172,7 +174,9 @@ export function cliProvider(options: CliProviderOptions = {}): ModelProvider {
   const cwd = options.cwd ?? nonRepoCwd();
 
   async function run(args: string[], timeoutMs: number): Promise<{ code: number; stdout: string; stderr: string }> {
-    return runProcess(command, args, { cwd, timeoutMs, windowsHide: hideWindows() });
+    return runProcess(command, args, {
+      cwd, timeoutMs, windowsHide: hideWindows(), stallMs: PROVIDER_STALL_MS, log
+    });
   }
 
   return {
@@ -362,7 +366,9 @@ export function execProvider(options: ExecProviderOptions): ModelProvider {
   }
 
   async function run(args: string[], timeoutMs: number) {
-    return runProcess(options.command, args, { timeoutMs, windowsHide: true });
+    return runProcess(options.command, args, {
+      timeoutMs, windowsHide: true, stallMs: PROVIDER_STALL_MS, log
+    });
   }
 
   return {
@@ -477,7 +483,9 @@ export function codexProvider(options: CodexProviderOptions = {}): ModelProvider
   async function run(args: string[], timeoutMs: number) {
     // The process host never writes stdin. `codex exec` would otherwise wait for additional
     // piped input forever.
-    return runProcess(command, args, { cwd, timeoutMs, windowsHide: hideWindows() });
+    return runProcess(command, args, {
+      cwd, timeoutMs, windowsHide: hideWindows(), stallMs: PROVIDER_STALL_MS, log
+    });
   }
 
   return {
@@ -745,7 +753,9 @@ export function grokProvider(options: GrokProviderOptions = {}): ModelProvider {
       ...(userHome && !process.env.HOME ? { HOME: userHome } : {}),
       ...(grokHome ? { GROK_HOME: grokHome } : {})
     };
-    return runProcess(command, args, { cwd, timeoutMs, windowsHide: hideWindows(), env });
+    return runProcess(command, args, {
+      cwd, timeoutMs, windowsHide: hideWindows(), env, stallMs: PROVIDER_STALL_MS, log
+    });
   }
 
   return {

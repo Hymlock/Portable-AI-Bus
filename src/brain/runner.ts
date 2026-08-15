@@ -9,6 +9,7 @@
 
 import { Brain, BrainMessage, BrainTools, WakeReason, WakeResult } from './contract';
 import { RecoveryCheckpoint } from '../mailbox';
+import { StallLedger, StallOutcome } from './stall-ledger';
 
 export type BusClient = {
   /** Blocks until mail arrives or the deadline passes. Resolves 'mail' or 'timeout'. */
@@ -61,8 +62,13 @@ export type RunnerOptions = {
   maxBlockedAttempts?: number;
   /** Injected by tests so blocked-backoff coverage does not sleep in real time. */
   sleep?: (milliseconds: number) => Promise<void>;
-  /** Emit provider-stalled after an in-flight turn has exceeded this duration. */
+  /** Emit stall-start after an in-flight turn has exceeded this duration. */
   providerStallMs?: number;
+  /**
+   * Persisted stall pair. Without it, stall-start is only a log line and a restart silently
+   * forgets every unresolved stall — the exact ambiguity item 5 is removing.
+   */
+  stallLedger?: StallLedger;
   /**
    * Message kinds that are pure courtesy: they inform, and they never need an answer.
    *
@@ -117,6 +123,7 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
     maxBlockedAttempts = DEFAULT_MAX_BLOCKED_ATTEMPTS,
     blockedBackoffMs = 30_000,
     providerStallMs = DEFAULT_PROVIDER_STALL_MS,
+    stallLedger,
     sleep = (milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)),
     ackKinds = DEFAULT_ACK_KINDS,
     thinkWhenIdle = false,
@@ -312,9 +319,35 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
         }
       });
       const providerStartedAt = Date.now();
-      let providerOutcome = 'returned';
+      let providerOutcome: StallOutcome = 'returned';
+      let stallId: string | undefined;
+      let stallStarted = false;
       log('provider-thinking', { seat, reason, messages: messages.length });
       const reportStall = () => {
+        if (stallStarted) return;
+        stallStarted = true;
+        try {
+          stallId = stallLedger?.start({
+            seat,
+            source: 'runner',
+            thresholdMs: providerStallMs,
+            wakeReason: reason,
+            messages: messages.length
+          }).id;
+        } catch (error) {
+          log('stall-ledger-failed', { seat, phase: 'start', error: (error as Error)?.message ?? String(error) });
+        }
+        const payload = {
+          seat,
+          stallId,
+          source: 'runner' as const,
+          milliseconds: providerStallMs,
+          reason,
+          messages: messages.length
+        };
+        // Pair edge. `provider-stalled` stays so existing log greps and the 2026-08-14 count
+        // still match; it is the start, not a verdict.
+        log('stall-start', payload);
         log('provider-stalled', { seat, milliseconds: providerStallMs, reason, messages: messages.length });
       };
       const stallTimer = providerStallMs === 0 ? undefined : setTimeout(reportStall, providerStallMs);
@@ -355,15 +388,33 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
         if (stallTimer !== undefined) clearTimeout(stallTimer);
         receiveController.abort();
         await receiveWhileThinking;
+        const durationMs = Date.now() - providerStartedAt;
+        if (stallStarted) {
+          try {
+            if (stallId) stallLedger?.resolve(stallId, providerOutcome, durationMs);
+          } catch (error) {
+            log('stall-ledger-failed', { seat, phase: 'resolve', error: (error as Error)?.message ?? String(error) });
+          }
+          log('stall-resolution', {
+            seat,
+            stallId,
+            source: 'runner',
+            durationMs,
+            thresholdMs: providerStallMs,
+            outcome: providerOutcome
+          });
+        }
         log('provider-exited', {
           seat,
           outcome: providerOutcome,
-          milliseconds: Date.now() - providerStartedAt
+          milliseconds: durationMs
         });
       }
 
       // A brain signals a spent chain by returning `exhausted`. Distinct from an error on
       // purpose: an error is a bad wake, exhaustion is a seat that cannot have a good one.
+      // A resolved stall is not this signal. Slow and spent are different measurements;
+      // logging one must not suppress or replace the other.
       if (result.exhausted) {
         log('chain-exhausted', { seat, note: result.note });
         try {

@@ -1,7 +1,9 @@
 import { spawn as nodeSpawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { StallLedger } from './stall-ledger';
 
 export type ProcessResult = {
   code: number;
@@ -9,12 +11,34 @@ export type ProcessResult = {
   stderr: string;
 };
 
+export type ProcessOutcome = 'returned' | 'timed-out' | 'exited';
+
 export type RunProcessOptions = {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   timeoutMs: number;
   windowsHide?: boolean;
+  /**
+   * Emit stall-start if the child is still running after this many milliseconds.
+   * Absent means no stall watch — a timeout is still a timeout. 0 fires immediately
+   * (tests). This is a timer, not a spent-chain signal.
+   */
+  stallMs?: number;
+  log?: (event: string, data?: unknown) => void;
+  onStall?: (info: { elapsedMs: number; stallId: string }) => void;
+  /**
+   * Optional durable pair. When set with stallSeat, an unresolved process-host
+   * stall remains in the same file the runner uses. Absent means log edges only.
+   */
+  stallLedger?: StallLedger;
+  stallSeat?: string;
 };
+
+export function processOutcome(code: number): ProcessOutcome {
+  if (code === 124) return 'timed-out';
+  if (code === 0) return 'returned';
+  return 'exited';
+}
 
 type PtyProcess = {
   pid?: number;
@@ -196,11 +220,13 @@ async function runConPty(
     let settled = false;
     let timer: NodeJS.Timeout | undefined;
     let monitor: NodeJS.Timeout | undefined;
+    const stall = watchProcessStall(options);
     const finish = (result: ProcessResult) => {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
       if (monitor) clearInterval(monitor);
+      stall.finish(result);
       removeCaptureDir(captureDir);
       resolve(result);
     };
@@ -400,10 +426,12 @@ async function runSpawn(
     let stderr = '';
     let settled = false;
     let timer: NodeJS.Timeout | undefined;
+    const stall = watchProcessStall(options);
     const finish = (result: ProcessResult) => {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
+      stall.finish(result);
       resolve(result);
     };
     child.stdout.on('data', (chunk) => { stdout += String(chunk); });
@@ -419,4 +447,58 @@ async function runSpawn(
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function watchProcessStall(options: RunProcessOptions) {
+  const startedAt = Date.now();
+  const log = options.log ?? (() => {});
+  let fired = false;
+  let stallId: string | undefined;
+  let timer: NodeJS.Timeout | undefined;
+  const fire = () => {
+    if (fired) return;
+    fired = true;
+    const elapsedMs = Date.now() - startedAt;
+    const thresholdMs = typeof options.stallMs === 'number' ? options.stallMs : 0;
+    try {
+      if (options.stallLedger && options.stallSeat) {
+        stallId = options.stallLedger.start({
+          seat: options.stallSeat,
+          source: 'process-host',
+          thresholdMs
+        }).id;
+      }
+    } catch { /* ledger failure must not take the child */ }
+    if (!stallId) stallId = randomUUID();
+    log('stall-start', {
+      stallId,
+      source: 'process-host',
+      milliseconds: options.stallMs,
+      elapsedMs
+    });
+    try { options.onStall?.({ elapsedMs, stallId }); } catch { /* stall observation must not take the child */ }
+  };
+  if (options.stallMs === 0) fire();
+  else if (typeof options.stallMs === 'number' && options.stallMs > 0) {
+    timer = setTimeout(fire, options.stallMs);
+  }
+  return {
+    finish(result: ProcessResult) {
+      if (timer) clearTimeout(timer);
+      if (!fired) return;
+      const durationMs = Date.now() - startedAt;
+      const outcome = processOutcome(result.code);
+      try {
+        if (stallId) options.stallLedger?.resolve(stallId, outcome, durationMs);
+      } catch { /* ledger failure must not take the child */ }
+      log('stall-resolution', {
+        stallId,
+        source: 'process-host',
+        durationMs,
+        thresholdMs: options.stallMs,
+        outcome,
+        code: result.code
+      });
+    }
+  };
 }

@@ -367,9 +367,13 @@ test('mail arriving during a stalled provider is received but remains unread aft
   assert.equal(fixture.acknowledgements, 1, 'the presented wake commits exactly once');
   assert.deepEqual(fixture.unread.map((message) => message.seq), [202],
     'mail received during the call belongs to the next transactional wake');
-  for (const event of ['provider-thinking', 'provider-stalled', 'provider-exited', 'seat-listening']) {
+  for (const event of ['provider-thinking', 'provider-stalled', 'stall-start', 'stall-resolution', 'provider-exited', 'seat-listening']) {
     assert.equal(events.some((entry) => entry.event === event), true, `${event} must be explicit in logs`);
   }
+  const resolution = events.find((entry) => entry.event === 'stall-resolution');
+  assert.equal(resolution.data.outcome, 'returned');
+  assert.equal(events.some((entry) => entry.event === 'chain-exhausted'), false,
+    'a stall that resolves is not exhaustion');
   fixture.client.listen = originalListen;
 });
 

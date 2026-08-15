@@ -13,6 +13,7 @@ import { Brain, BrainFactory } from './contract';
 import { cliBusClient } from './bus-client';
 import { MailboxStore } from '../mailbox';
 import { runBrain } from './runner';
+import { createStallLedger, stallLedgerPath } from './stall-ledger';
 
 export type ExhaustionHandlerOptions = {
   seat: string;
@@ -205,6 +206,13 @@ export async function main(argv: string[]): Promise<number> {
   });
 
   const onExhausted = createExhaustionHandler({ seat, root: resolvedRoot, log });
+  let stallLedger;
+  try {
+    stallLedger = createStallLedger({ seat, filePath: stallLedgerPath(resolvedRoot, seat) });
+  } catch (error) {
+    log('stall-ledger-unreadable', { seat, error: (error as Error)?.message ?? String(error) });
+    stallLedger = createStallLedger({ seat });
+  }
 
   const summary = await runBrain({
     seat,
@@ -214,6 +222,7 @@ export async function main(argv: string[]): Promise<number> {
     // must not keep the baton - a holder that cannot act is the stall we spent this project
     // diagnosing. Hand off to any other registered seat and say why.
     onExhausted,
+    stallLedger,
     budgetPerWake: integerOption(argv, '--budget', 30),
     listenSeconds: integerOption(argv, '--listen-s', 300),
     log,
