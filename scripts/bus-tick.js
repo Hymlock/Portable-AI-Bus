@@ -49,6 +49,7 @@ const intervalMs = Math.max(30, Number(option('--interval-s', '240'))) * 1000;
 const once = process.argv.includes('--once');
 
 const runtime = path.join(root, '.ai-bus', 'runtime');
+const { readStaleCodeNotices } = require('./bus-supervise');
 
 /** Courtesy kinds, matching the runner's `ackKinds` and the brain's `RECEIPT_KINDS`. */
 const RECEIPT_KINDS = new Set(['ack', 'receipt', 'ping']);
@@ -158,6 +159,11 @@ function tick() {
     bus.unread.length ? `unread:${bus.unread.join(' ')}` : 'unread:none'
   ];
   if (bus.halted) parts.push('HALTED');
+
+  const stale = readStaleCodeNotices(root);
+  if (stale.seats.length > 0) {
+    parts.push(`STALE-CODE ${stale.seats.map((item) => item.seat).join(',')} - running brains predate dist; bus-restart, do not treat as current`);
+  }
 
   const quietMinutes = lastActivityMinutes();
 

@@ -165,6 +165,9 @@ fresh burst; this avoids both hot loops and permanent abandonment.
 The supervisor also compares each live brain's loaded-code marker with the current dist tree.
 A `stale-code` line is evidence that a process predates the build, but it never triggers an
 automatic restart: liveness supervision does not guess whether an operator wants a code rollout.
+The same condition is persisted to `.ai-bus/runtime/stale-code.json` and repeated on the
+`bus-tick` line, because a warning that lives only in `bus-supervise.log` is a detector whose
+only sink is a file nobody is reading.
 
 ### Supervisor now built
 

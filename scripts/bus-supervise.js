@@ -102,6 +102,69 @@ function staleCodeWarning({ coordinationRoot, seat, pid, distRoot = DIST }) {
   return undefined;
 }
 
+/**
+ * Item 9: the detector already existed. Its only sink was bus-supervise.log, which nobody
+ * reads. Persist the current stale set next to the other runtime signals so bus-tick (the
+ * operator wake line) and anything else watching disk can see it.
+ *
+ * This is deliberately not a mailbox send. send() always moves or steals the baton except
+ * on a delayed ack, and delayed acks are skipped by the runner. Mailing "you are stale"
+ * would either look like progress (item 8) or seize leadership. A file plus the tick line
+ * is the sink an operator actually receives.
+ */
+function staleCodeNoticePath(coordinationRoot) {
+  return path.join(coordinationRoot, '.ai-bus', 'runtime', 'stale-code.json');
+}
+
+function emptyStaleCodeNotices() {
+  return { version: 1, autoRestart: false, seats: [] };
+}
+
+function readStaleCodeNotices(coordinationRoot) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(staleCodeNoticePath(coordinationRoot), 'utf8'));
+    if (!parsed || parsed.version !== 1 || !Array.isArray(parsed.seats)) return emptyStaleCodeNotices();
+    return {
+      version: 1,
+      autoRestart: false,
+      updatedAt: typeof parsed.updatedAt === 'string' ? parsed.updatedAt : undefined,
+      seats: parsed.seats.filter((item) => item && typeof item.seat === 'string' && typeof item.warning === 'string')
+    };
+  } catch {
+    return emptyStaleCodeNotices();
+  }
+}
+
+function writeStaleCodeNotices(coordinationRoot, seats, now = () => new Date().toISOString()) {
+  const file = staleCodeNoticePath(coordinationRoot);
+  if (!Array.isArray(seats) || seats.length === 0) {
+    try { fs.unlinkSync(file); } catch { /* absent is the green case */ }
+    return undefined;
+  }
+  const snapshot = {
+    version: 1,
+    autoRestart: false,
+    updatedAt: now(),
+    seats: [...seats].sort((left, right) => left.seat.localeCompare(right.seat))
+  };
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, `${JSON.stringify(snapshot, null, 2)}\n`, 'utf8');
+  return snapshot;
+}
+
+/**
+ * Merge just-checked seats into the durable notice. Seats we did not inspect (assumedLive)
+ * keep whatever was already recorded; inventing a clear would hide a real stale condition.
+ */
+function syncStaleCodeNotices(coordinationRoot, checked, now = () => new Date().toISOString()) {
+  const current = new Map(readStaleCodeNotices(coordinationRoot).seats.map((item) => [item.seat, item]));
+  for (const [seat, warning] of checked) {
+    if (warning) current.set(seat, { seat, warning, at: now() });
+    else current.delete(seat);
+  }
+  return writeStaleCodeNotices(coordinationRoot, [...current.values()], now);
+}
+
 /** Seats with the exact live brain process this supervisor owns. */
 function liveBrains() {
   try {
@@ -133,6 +196,7 @@ function startBrain(seat) {
 
 function sweep() {
   const live = liveBrains();
+  const checkedStale = new Map();
   for (const seat of seats) {
     const running = live.get(seat);
     if (running) {
@@ -148,10 +212,14 @@ function sweep() {
         if (warning && staleWarnings.get(seat) !== warning) console.log(`tick ${stamp()} ${warning} - NOT restarting.`);
         if (warning) staleWarnings.set(seat, warning);
         else staleWarnings.delete(seat);
+        checkedStale.set(seat, warning);
       }
       continue;
     }
     healthySince.delete(seat);
+    // A dead seat is not running stale code; it is not running. Drop its notice so a corpse
+    // cannot keep the operator-facing tick red after the process is gone.
+    checkedStale.set(seat, undefined);
     const count = restarts.get(seat) ?? 0;
     if (count >= maxRestarts) {
       const exhaustedAt = budgetExhaustedAt.get(seat) ?? Date.now();
@@ -171,6 +239,7 @@ function sweep() {
     restarts.set(seat, nextCount);
     console.log(`tick ${stamp()} ${seat} was dead - restarted pid ${pid} (${nextCount}/${maxRestarts})`);
   }
+  syncStaleCodeNotices(root, checkedStale);
 }
 
 if (require.main === module) {
@@ -181,4 +250,11 @@ if (require.main === module) {
   setInterval(sweep, intervalMs);
 }
 
-module.exports = { latestTreeMtimeMs, staleCodeWarning };
+module.exports = {
+  latestTreeMtimeMs,
+  staleCodeWarning,
+  staleCodeNoticePath,
+  readStaleCodeNotices,
+  writeStaleCodeNotices,
+  syncStaleCodeNotices
+};

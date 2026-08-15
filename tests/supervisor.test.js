@@ -8,7 +8,7 @@ const { execFileSync } = require('node:child_process');
 const SUPERVISOR = path.join(__dirname, '..', 'scripts', 'bus-supervise.js');
 const BUS_UP = path.join(__dirname, '..', 'scripts', 'bus-up.js');
 const BUS_RESTART = path.join(__dirname, '..', 'scripts', 'bus-restart.js');
-const { staleCodeWarning } = require(SUPERVISOR);
+const { staleCodeWarning, syncStaleCodeNotices, readStaleCodeNotices, staleCodeNoticePath } = require(SUPERVISOR);
 const { unreadyBrainCodeMarkers } = require(BUS_RESTART);
 
 /**
@@ -140,4 +140,48 @@ test('stale-code detection warns but never restarts', () => {
   const source = fs.readFileSync(SUPERVISOR, 'utf8');
   assert.match(source, /\$\{warning\} - NOT restarting\./,
     'a code change mid-wake is hazardous; the supervisor must report it without surprise restart');
+  assert.match(source, /syncStaleCodeNotices/,
+    'a log line nobody reads is not a signal; the notice must land on disk for bus-tick');
+  assert.doesNotMatch(source, /startBrain\(seat\).*stale|stale[\s\S]{0,80}startBrain/,
+    'stale-code must not become an automatic rollout');
+});
+
+test('stale-code persists a notice an operator surface can read, and deletes it when clear', () => {
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'portable-ai-bus-stale-notice-'));
+  try {
+    const warning = 'codex stale-code: dist changed after pid 42 loaded it';
+    const written = syncStaleCodeNotices(fixture, new Map([['codex', warning]]), () => '2026-08-14T23:07:33.000Z');
+    assert.equal(written.autoRestart, false);
+    assert.equal(written.seats.length, 1);
+    assert.equal(written.seats[0].seat, 'codex');
+    assert.equal(written.seats[0].warning, warning);
+
+    const fromDisk = readStaleCodeNotices(fixture);
+    assert.deepEqual(fromDisk.seats.map((item) => item.seat), ['codex']);
+    assert.equal(fromDisk.autoRestart, false);
+
+    const cleared = syncStaleCodeNotices(fixture, new Map([['codex', undefined]]));
+    assert.equal(cleared, undefined);
+    assert.equal(fs.existsSync(staleCodeNoticePath(fixture)), false);
+    assert.deepEqual(readStaleCodeNotices(fixture).seats, []);
+  } finally {
+    fs.rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+test('stale-code notice merge leaves unchecked seats alone and drops a dead seat', () => {
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'portable-ai-bus-stale-merge-'));
+  try {
+    syncStaleCodeNotices(fixture, new Map([
+      ['codex', 'codex stale-code: dist changed'],
+      ['grok', 'grok stale-code: dist changed']
+    ]));
+    const afterUnchecked = syncStaleCodeNotices(fixture, new Map([['claude', undefined]]));
+    assert.deepEqual(afterUnchecked.seats.map((item) => item.seat), ['codex', 'grok']);
+
+    const afterDeath = syncStaleCodeNotices(fixture, new Map([['grok', undefined]]));
+    assert.deepEqual(afterDeath.seats.map((item) => item.seat), ['codex']);
+  } finally {
+    fs.rmSync(fixture, { recursive: true, force: true });
+  }
 });

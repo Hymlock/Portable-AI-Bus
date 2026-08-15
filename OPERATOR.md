@@ -384,10 +384,11 @@ window, exits the brain; an alive-but-deaf process must not look healthy. The su
 restarts dead brains. It permits a bounded burst (`--max-restarts`, default 5), cools down for
 one lease-stale interval, and opens a new burst rather than spinning hot or giving up forever.
 
-Long-lived brains write loaded-code markers. `bus-supervise.log` emits a `stale-code` warning
-when the running PID loaded another dist tree or predates a rebuilt dist. This warning is
-diagnostic only and explicitly does **not** auto-restart a live brain; use `bus-restart` when a
-code upgrade should replace running processes.
+Long-lived brains write loaded-code markers. The supervisor still logs `stale-code` and still
+does **not** auto-restart a live brain. It also writes `.ai-bus/runtime/stale-code.json`, and
+`bus-tick` repeats `STALE-CODE <seats>` on the operator wake line until the running PIDs match
+the current dist (or die). Use `bus-restart` when a code upgrade should replace running
+processes. A missing notice file is the healthy case, not an error.
 
 ### Claim guard identity and the round ceiling
 

@@ -16,7 +16,7 @@ seat that did not write it has attacked it and said so on the record.
 | 5 | distinguish *stalled* from *spent* | **CERTIFIED** at `78ffe75`+`48d24f4` — separates SPENT from STALLED; **BROKEN not covered** |
 | 11 | a broken link reports as *spent* | open — measured 2026-08-15 |
 | 6 | claim guard — claims unsatisfiable against repo paths | **fixed** across `08da916`+`21ed962`+`1b1765d`, deployed, audit running |
-| 9 | a detector whose only sink is a log | open — measured 2026-08-14 |
+| 9 | a detector whose only sink is a log | implemented, **not certified** — notice file + bus-tick; still no auto-restart |
 | 10 | authorisation does not survive a wake | open — measured 2026-08-14 |
 | 7 | claim schema — `why` is optional | open — specified below |
 | 8 | an ack is not a commitment | open — observed twice on 2026-08-14 |
@@ -347,6 +347,18 @@ Wanted: a stale-code condition reaches a seat or the mailbox, not just a log. Ga
 - **green case**: matching markers produce no noise. A warning that fires when nothing is wrong
   gets ignored, which is how this one became invisible in the first place.
 
+**Implemented, not certified.** `scripts/bus-supervise.js` now persists the current stale set
+to `.ai-bus/runtime/stale-code.json` (`autoRestart: false` is part of the record). `bus-tick`
+prints `STALE-CODE <seats> - running brains predate dist; bus-restart...` on the operator wake
+line. Matching markers delete the file, so the tick stays quiet. A dead seat drops its notice.
+
+Not a mailbox send, on purpose: `send()` moves or steals the baton except on a delayed ack, and
+delayed acks are skipped by the runner. Mailing this would either seize leadership or look like
+progress (item 8). The tick is the surface the operator is already being woken by.
+
+The author does not certify it. Restart the supervisor and any `bus-tick` after this lands, or
+the running processes will keep writing only to the log.
+
 ## Item 10 — authorisation does not survive a wake
 
 Measured tonight, three times with the same seat. I authorised proceeding without a claim
@@ -504,6 +516,51 @@ Recorded because they are real and unattributed. The auditor explicitly refused 
 - **`409 lease_held` surviving a restart.** Both seats: *"Seat &lt;x&gt; already has a live worker
   lease"* — after the processes holding those leases were killed. Retriable, and it did retry,
   but a lease that outlives its holder deserves a look.
+
+### Ledger author on #1538 — BROKEN is separable; the wedge is not the SHELL failure
+
+Answered 2026-08-15 from the code, not from a new probe.
+
+**Yes, BROKEN is separable at the point the chain gives up.** Item 5's ledger never writes
+`chain-exhausted` and should not start now — spent is a fallthrough, not a stall. The
+distinction is already in `attempts[]` (`reason` + `detail`). What collapses it is the
+handoff copy in `createExhaustionHandler`: subject `"out of providers"` and body `"Every
+provider in my chain is spent"`, regardless of why the links failed.
+
+`classifyFailure` does not currently name the measured fault. The regex for `unavailable` is
+`enoent|not found|not installed|command not found|econnrefused|unreachable`. The note was
+`ConPTY unavailable: Cannot find module 'node-pty'`. That text has neither `not found` (space
+required) nor any of the other tokens; `unavailable` is in the string and **not** in the
+regex. So the attempt is stored as `error`, then every `error` falls through, then the handler
+announces SPENT. The note already told the truth; nothing that an operator reads did.
+
+A give-up classifier can inspect the attempt vector without a new enum in the ledger:
+
+- every reason is `quota` / `auth` → SPENT
+- every reason is `unavailable`, or `error` whose detail is transport/module/ConPTY → BROKEN
+- mixed → say mixed; do not collapse to "out of providers"
+
+Widening `unavailable` so `Cannot find module` and `ConPTY unavailable` classify as
+`unavailable` is the cheap half. The expensive half is stopping the handler from lying.
+
+This does **not** reopen item 5. The certified gates tested "slow vs spent" and "exhaustion
+must not become a stall". BROKEN is a third surface on the fallthrough, not a fourth stall
+outcome.
+
+**The wedge is a second fault.** The later SHELL failure is fast: `loadNodePty()` throws,
+`runConPty` returns `code: -1` immediately, the chain logs `link-failed` and gives up. That
+cannot occupy fourteen minutes. The runner logs `provider-thinking`, then arms
+`setTimeout(reportStall, 30_000)`, then `takeTurn`. `stall-start` does not require a child —
+it requires the event loop to fire that timer. Fourteen minutes of thinking with ledger
+`open=0` means the timer never ran. The SHELL `Cannot find module` path does not do that.
+
+The signature (thinking, no child, no stall-start) is an event-loop block between
+`provider-thinking` and spawn — a hung native `require('node-pty')` would fit, a missing
+entry point would not. I cannot prove they are the same incident. I can prove they are not
+the same code path as the measured link-failed. Separate ledger gap: **stall-start cannot
+observe a blocked event loop**, because the timer lives on that loop.
+
+`409 lease_held` after restart is a third thing. Not answering it here.
 
 ## The rule that produced every finding here
 
