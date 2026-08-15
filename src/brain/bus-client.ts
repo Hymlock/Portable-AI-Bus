@@ -177,25 +177,20 @@ export function cliBusClient(options: CliBusOptions): BusClient {
     async peek(seat) {
       const messages: BrainMessage[] = [];
       let afterSeq = 0;
-      let expected: number | undefined;
 
-      // The harness deliberately pages tool results. The inbox response predates explicit page
-      // metadata, so the status unread count is the truncation hint. Follow afterSeq cursors
-      // until the complete snapshot is presented; mail arriving after this method returns is
-      // outside the batch and acknowledge() leaves it unread.
-      const status = await tool(seat, 'mailbox_status', {});
-      const unread = (status as { unread?: Record<string, unknown> })?.unread?.[seat];
-      if (Number.isSafeInteger(unread) && Number(unread) >= 0) expected = Number(unread);
-
-      while (expected === undefined || messages.length < expected) {
+      // The harness deliberately pages tool results. Follow its explicit truncation bit and
+      // advance only through the final sequence actually presented on each page.
+      while (true) {
         const result = await tool(seat, 'mailbox_inbox', { agent: seat, all: true, afterSeq });
-        if (!Array.isArray(result) || result.length === 0) break;
-        const page = result as BrainMessage[];
+        const response = result as { messages?: unknown; hasMore?: unknown };
+        if (!Array.isArray(response?.messages) || typeof response.hasMore !== 'boolean') break;
+        const page = response.messages as BrainMessage[];
+        if (page.length === 0) break;
         messages.push(...page);
         const cursor = page.at(-1)?.seq;
         if (!Number.isSafeInteger(cursor) || Number(cursor) <= afterSeq) break;
         afterSeq = Number(cursor);
-        if (expected === undefined) break;
+        if (!response.hasMore) break;
       }
       return messages;
     },
@@ -204,7 +199,9 @@ export function cliBusClient(options: CliBusOptions): BusClient {
       // The queue may change after peek(). The harness/store boundary validates this complete
       // sequence set before mutating mail; it never substitutes the current FIFO head.
       const result = await tool(seat, 'mailbox_read', { agent: seat, seqs });
-      if (Array.isArray(result)) return result as BrainMessage[];
+      if (Array.isArray((result as { messages?: unknown })?.messages)) {
+        return (result as { messages: BrainMessage[] }).messages;
+      }
       const refusal = result as { error?: unknown; status?: unknown; code?: unknown };
       const error = new Error(typeof refusal?.error === 'string'
         ? refusal.error
@@ -231,7 +228,9 @@ export function cliBusClient(options: CliBusOptions): BusClient {
     // Kept as the destructive compatibility surface for callers outside the brain runner.
     async read(seat) {
       const result = await tool(seat, 'mailbox_read', { agent: seat, all: true });
-      return Array.isArray(result) ? (result as BrainMessage[]) : [];
+      return Array.isArray((result as { messages?: unknown })?.messages)
+        ? (result as { messages: BrainMessage[] }).messages
+        : [];
     },
 
     tools(seat): BrainTools {

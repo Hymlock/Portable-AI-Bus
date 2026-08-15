@@ -67,8 +67,9 @@ test('three provider-neutral seat processes acquire, wake, and release independe
   for (let index = 0; index < seats.length; index += 1) {
     assert.equal(reads[index].code, 0, reads[index].stderr);
     const response = JSON.parse(reads[index].stdout.trim());
-    assert.equal(response.result.length, 1);
-    assert.equal(response.result[0].to, seats[index]);
+    assert.equal(response.result.messages.length, 1);
+    assert.equal(response.result.messages[0].to, seats[index]);
+    assert.equal(response.result.hasMore, false);
   }
 
   const claims = await Promise.all(seats.map((seat) => runWorker(root, credentialsDir, seat, [

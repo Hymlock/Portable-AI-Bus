@@ -680,14 +680,17 @@ export class HarnessServer {
       case 'mailbox_inbox': {
         const afterSeq = input.afterSeq === undefined ? 0 : requireInteger(input.afterSeq, 'afterSeq');
         if (afterSeq < 0) throw new InputValidationError('afterSeq must be non-negative.');
-        const messages = (await this.mailbox.inbox(this.authorizedAgent(principal, input.agent))).filter((message) => message.seq > afterSeq);
-        return input.all === true ? this.pageWakeMessages(messages.slice(0, MAX_TOOL_MESSAGES)) : messages.slice(0, 1);
+        const pending = (await this.mailbox.inbox(this.authorizedAgent(principal, input.agent))).filter((message) => message.seq > afterSeq);
+        const limit = input.all === true ? MAX_TOOL_MESSAGES : 1;
+        const messages = this.pageWakeMessages(pending.slice(0, limit));
+        return { messages, hasMore: pending.length > messages.length };
       }
       case 'mailbox_read': {
         const agent = this.authorizedAgent(principal, input.agent);
-        return input.seqs === undefined
+        const messages = await (input.seqs === undefined
           ? this.mailbox.read(agent, input.all === true, MAX_TOOL_MESSAGES)
-          : this.mailbox.acknowledge(agent, input.seqs as number[]);
+          : this.mailbox.acknowledge(agent, input.seqs as number[]));
+        return { messages, hasMore: (await this.mailbox.inbox(agent)).length > 0 };
       }
       case 'mailbox_supersede': {
         const agent = this.authorizedAgent(principal, input.agent);

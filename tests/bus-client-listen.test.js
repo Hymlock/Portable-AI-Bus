@@ -160,7 +160,7 @@ test('DELTA G: cli bus tool preserves structured harness claim-conflict classifi
   assert.match(result.error, /grok.*src\/brain/);
 });
 
-test('real harness peek is non-destructive and acknowledgement commits only its complete page set', async (t) => {
+test('real harness peek follows explicit truncation and acknowledgement commits only its complete page set', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'portable-ai-bus-client-harness-'));
   const credentialsDir = path.join(root, '.credentials');
   await fs.mkdir(path.join(root, '.ai-bus'), { recursive: true });
@@ -196,7 +196,7 @@ test('real harness peek is non-destructive and acknowledgement commits only its 
 
   const presented = await client.peek('worker');
   assert.equal(presented.length, 6,
-    'status unread count must drive through the harness four-message truncation boundary');
+    'hasMore must drive through the harness four-message truncation boundary');
   assert.equal((await server.mailbox.inbox('worker')).length, 6, 'peek must not acknowledge');
 
   const late = await server.mailbox.send({

@@ -109,7 +109,8 @@ test('harness request ids make repeated send requests idempotent', async (t) => 
     method: 'POST',
     body: JSON.stringify({ requestId: 'peek', name: 'mailbox_inbox', input: { agent: 'grok', all: true } })
   });
-  assert.equal(inbox.body.result.length, 1);
+  assert.equal(inbox.body.result.messages.length, 1);
+  assert.equal(inbox.body.result.hasMore, false);
 });
 
 test('concurrent duplicate request ids execute only once', async (t) => {
@@ -226,10 +227,30 @@ test('mailbox inbox tool pages with afterSeq without acknowledging messages', as
     method: 'POST', body: JSON.stringify({ requestId, name: 'mailbox_inbox', input: { agent: 'grok', all: true, afterSeq } })
   });
   const first = await tool('inbox-page-one', 0);
-  const second = await tool('inbox-page-two', first.body.result.at(-1).seq);
-  assert.deepEqual(first.body.result.map((message) => message.seq), sent.slice(0, 4).map((message) => message.seq));
-  assert.deepEqual(second.body.result.map((message) => message.seq), sent.slice(4).map((message) => message.seq));
+  const second = await tool('inbox-page-two', first.body.result.messages.at(-1).seq);
+  assert.deepEqual(first.body.result.messages.map((message) => message.seq), sent.slice(0, 4).map((message) => message.seq));
+  assert.equal(first.body.result.hasMore, true);
+  assert.deepEqual(second.body.result.messages.map((message) => message.seq), sent.slice(4).map((message) => message.seq));
+  assert.equal(second.body.result.hasMore, false);
   assert.equal((await server.mailbox.status()).unread.grok, 6);
+});
+
+test('mailbox read tool reports truncated and complete pages explicitly', async (t) => {
+  const { root, server, request } = await setup(['codex', 'grok']);
+  t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
+  const sent = [];
+  for (let index = 0; index < 6; index += 1) {
+    sent.push(await server.mailbox.send({ from: 'codex', to: 'grok', subject: `message-${index}`, body: 'one' }));
+  }
+  const read = async (requestId) => request('/v1/tool', {
+    method: 'POST', body: JSON.stringify({ requestId, name: 'mailbox_read', input: { agent: 'grok', all: true } })
+  });
+  const first = await read('read-page-one');
+  const second = await read('read-page-two');
+  assert.deepEqual(first.body.result.messages.map((message) => message.seq), sent.slice(0, 4).map((message) => message.seq));
+  assert.equal(first.body.result.hasMore, true);
+  assert.deepEqual(second.body.result.messages.map((message) => message.seq), sent.slice(4).map((message) => message.seq));
+  assert.equal(second.body.result.hasMore, false);
 });
 
 test('seat credentials cannot impersonate or acknowledge another seat', async (t) => {

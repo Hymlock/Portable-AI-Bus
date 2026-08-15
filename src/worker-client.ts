@@ -61,6 +61,8 @@ export type WorkerClientOptions = {
 export type WakeResult = {
   wake: 'message' | 'timeout';
   messages: unknown[];
+  /** Explicitly reports that the harness bounded this page and more messages remain. */
+  hasMore: boolean;
   instanceId: string;
   afterSeq: number;
 };
@@ -385,7 +387,7 @@ async function wake(
   if (value.generation !== undefined && value.generation !== lease.generation) {
     throw new Error('Harness wake response does not match the active lease generation.');
   }
-  if ((value.wake !== 'message' && value.wake !== 'timeout') || !Array.isArray(value.messages)) {
+  if ((value.wake !== 'message' && value.wake !== 'timeout') || !Array.isArray(value.messages) || typeof value.hasMore !== 'boolean') {
     throw new Error('Harness returned a malformed wake response.');
   }
   if (value.wake === 'timeout' && value.messages.length !== 0) {
@@ -399,7 +401,7 @@ async function wake(
     if ((seq as number) > afterSeq) fresh.push(message);
     nextSeq = Math.max(nextSeq, seq as number);
   }
-  return { wake: value.wake, messages: fresh, instanceId: connection.instanceId, afterSeq: nextSeq };
+  return { wake: value.wake, messages: fresh, hasMore: value.hasMore, instanceId: connection.instanceId, afterSeq: nextSeq };
 }
 
 async function release(
