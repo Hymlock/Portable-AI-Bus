@@ -205,6 +205,83 @@ test('re-claiming an already held path is an idempotent confirmation, not a new 
   assert.equal(transcriptAfter, transcriptBefore, 'a retry does not append another claim event');
 });
 
+test('a symlink alias cannot bypass an existing physical-file claim', async () => {
+  const alias = path.join(root, 'src', 'mailbox-alias.ts');
+  await fs.symlink(path.join(root, 'src', 'mailbox.ts'), alias, 'file');
+
+  await store.claim({ agent: 'codex', paths: ['src/mailbox.ts'], why: 'physical file' });
+  await assert.rejects(
+    store.claim({ agent: 'grok', paths: ['src/mailbox-alias.ts'], why: 'same file through alias' }),
+    ClaimConflictError
+  );
+});
+
+test('repo-root claims refuse paths missing from both roots and traversal outside them', async () => {
+  const otherRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'portable-ai-bus-empty-root-'));
+  try {
+    await assert.rejects(
+      store.claim({ agent: 'codex', paths: ['missing.txt'], repoRoot: otherRoot }),
+      /Claim refused.*missing\.txt.*No claim was recorded/i
+    );
+    await assert.rejects(
+      store.claim({ agent: 'codex', paths: ['../outside.txt'], repoRoot: otherRoot }),
+      /escapes the workspace/
+    );
+    assert.deepEqual(await store.claims(), {});
+  } finally {
+    await removeTree(otherRoot);
+  }
+});
+
+test('same relative path in two roots remains independently claimable and releasable', async () => {
+  const otherRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'portable-ai-bus-other-root-'));
+  try {
+    await fs.mkdir(path.join(otherRoot, 'src'), { recursive: true });
+    await fs.writeFile(path.join(otherRoot, 'src', 'mailbox.ts'), 'other fixture');
+
+    await store.claim({ agent: 'codex', paths: ['src/mailbox.ts'], repoRoot: otherRoot, why: 'other repo' });
+    const held = await store.claim({ agent: 'codex', paths: ['src/mailbox.ts'], why: 'bus repo' });
+    assert.equal(held.length, 2);
+    const comparableRoot = (value) => {
+      const normalized = path.resolve(value).replace(/\\/g, '/').replace(/\/$/, '');
+      return process.platform === 'win32' ? normalized.toLocaleLowerCase('en-US') : normalized;
+    };
+    assert.deepEqual(
+      new Set(held.map((claim) => claim.root)),
+      new Set([comparableRoot(await fs.realpath(root)), comparableRoot(await fs.realpath(otherRoot))])
+    );
+
+    const remaining = await store.release('codex', ['src/mailbox.ts']);
+    assert.equal(remaining.length, 1);
+    assert.equal(remaining[0].root, comparableRoot(await fs.realpath(otherRoot)));
+
+    const busClaim = await store.claim({ agent: 'grok', paths: ['src/mailbox.ts'], why: 'bus repo' });
+    assert.equal(busClaim[0].root, comparableRoot(await fs.realpath(root)));
+    const healthy = await store.doctor();
+    assert.equal(healthy.ok, true, healthy.problems.join('\n'));
+  } finally {
+    await removeTree(otherRoot);
+  }
+});
+
+test('same file in the same root remains mutually exclusive', async () => {
+  await store.claim({ agent: 'codex', paths: ['src/mailbox.ts'] });
+  await assert.rejects(
+    store.claim({ agent: 'grok', paths: ['src/mailbox.ts'] }),
+    ClaimConflictError
+  );
+});
+
+test('Windows claim comparison preserves case and separator exclusion', {
+  skip: process.platform !== 'win32'
+}, async () => {
+  await store.claim({ agent: 'codex', paths: ['src/mailbox.ts'] });
+  await assert.rejects(
+    store.claim({ agent: 'grok', paths: ['SRC\\MAILBOX.TS'] }),
+    ClaimConflictError
+  );
+});
+
 test('status warns well before the round guard fails mutating tools closed', async () => {
   const limitedRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'portable-ai-bus-round-warning-'));
   try {

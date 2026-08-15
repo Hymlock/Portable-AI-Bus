@@ -864,7 +864,7 @@ export class MailboxStore {
     });
   }
 
-  async release(agent: string, paths?: string[]): Promise<Claim[]> {
+  async release(agent: string, paths?: string[], repoRoot?: string): Promise<Claim[]> {
     this.assertAgent(agent, 'agent');
     return this.withLock(async () => {
       const state = await this.loadStateUnsafe();
@@ -880,13 +880,18 @@ export class MailboxStore {
       }
 
       const requested = paths.map((item) => this.normalizeClaimPath(item));
-      const heldPaths = new Set(held.map((claim) => claim.path));
-      const missing = requested.filter((item) => !heldPaths.has(item));
+      const requestedRoot = this.canonicalComparablePath(repoRoot ?? this.paths.root);
+      const selected = requested.map((requestedPath) => {
+        const matches = held.filter((claim) => claim.path === requestedPath);
+        if (matches.length <= 1) return matches[0];
+        return matches.find((claim) => claim.root === requestedRoot);
+      });
+      const missing = requested.filter((_item, index) => !selected[index]);
       if (missing.length > 0) {
         throw new Error(`${agent} does not hold exact claim(s): ${missing.join(', ')}`);
       }
-      const released = new Set(requested);
-      const remaining = held.filter((claim) => !released.has(claim.path));
+      const released = new Set(selected.map((claim) => `${claim!.root}\0${claim!.path}`));
+      const remaining = held.filter((claim) => !released.has(`${claim.root}\0${claim.path}`));
       if (remaining.length > 0) {
         state.claims[agent] = remaining;
       } else {
@@ -1280,7 +1285,7 @@ export class MailboxStore {
             const [rightOwner, rightClaims] = owners[rightIndex];
             for (const leftClaim of leftClaims) {
               for (const rightClaim of rightClaims) {
-                if (this.pathsOverlap(leftClaim.path, rightClaim.path)) {
+                if (this.claimsOverlap(leftClaim, rightClaim, [this.paths.root])) {
                   problems.push(
                     `claims overlap: ${leftOwner}:${leftClaim.path} and ${rightOwner}:${rightClaim.path}`
                   );
@@ -1929,7 +1934,11 @@ async function runCli(argv = process.argv.slice(2)) {
     }
     case 'release': {
       const paths = listArg(args, 'paths');
-      const claims = await store.release(stringArg(args, 'agent', true), paths.length > 0 ? paths : undefined);
+      const claims = await store.release(
+        stringArg(args, 'agent', true),
+        paths.length > 0 ? paths : undefined,
+        stringArg(args, 'repo') || undefined
+      );
       console.log(json ? JSON.stringify(claims, null, 2) : `remaining: ${claims.map((claim) => claim.path).join(', ') || 'none'}`);
       return 0;
     }
