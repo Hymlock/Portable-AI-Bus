@@ -4,7 +4,14 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const { HarnessServer } = require('../dist/harness.js');
-const { callSeatTool, waitForMailbox, watchMailbox } = require('../dist/worker-client.js');
+const { callSeatTool, waitForMailbox, watchMailbox, seatToolInvocation } = require('../dist/worker-client.js');
+
+test('worker-client supersede verb maps exact message identities and reason', () => {
+  assert.deepEqual(
+    seatToolInvocation('supersede', ['--seq', '12', '--by', '14', '--reason', 'corrected'], 'worker'),
+    { name: 'mailbox_supersede', input: { agent: 'worker', seq: 12, by: 14, reason: 'corrected' } }
+  );
+});
 
 const TOKEN_A = `pab1.worker.${'a'.repeat(48)}`;
 const TOKEN_B = `pab1.worker.${'b'.repeat(48)}`;

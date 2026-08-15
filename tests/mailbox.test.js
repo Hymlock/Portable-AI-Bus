@@ -272,6 +272,67 @@ test('same file in the same root remains mutually exclusive', async () => {
   );
 });
 
+async function writeLegacyClaim(agent = 'codex', claimPath = 'src/mailbox.ts') {
+  const statePath = path.join(root, '.ai-bus', 'runtime', 'mailbox', 'state.json');
+  const state = JSON.parse(await fs.readFile(statePath, 'utf8'));
+  state.claims[agent] = [{ path: claimPath, why: 'legacy hold', at: new Date().toISOString() }];
+  await fs.writeFile(statePath, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+}
+
+test('a legacy claim with no root or identity still blocks a conflicting claim', async () => {
+  await writeLegacyClaim();
+  await assert.rejects(
+    store.claim({ agent: 'grok', paths: ['src/mailbox.ts'], why: 'collision' }),
+    ClaimConflictError
+  );
+});
+
+test('a legacy claim can still be released exactly by its holder', async () => {
+  await writeLegacyClaim();
+  assert.deepEqual(await store.release('codex', ['src/mailbox.ts']), []);
+  assert.deepEqual(await store.claims(), {});
+});
+
+test('doctor accepts a non-overlapping legacy claim without inventing filesystem identity', async () => {
+  await writeLegacyClaim();
+  const report = await store.doctor();
+  assert.equal(report.ok, true, report.problems.join('\n'));
+  const held = (await store.claims()).codex[0];
+  assert.equal(held.root, undefined);
+  assert.equal(held.identity, undefined);
+});
+
+test('superseded unread mail is skipped by delivery and unread status', async () => {
+  const original = await store.send({ from: 'codex', to: 'grok', subject: 'old', body: 'stale' });
+  const correction = await store.send({ from: 'codex', to: 'grok', subject: 'new', body: 'current' });
+  assert.equal((await store.status()).unread.grok, 2);
+  assert.deepEqual((await store.inbox('grok')).map((message) => message.seq), [original.seq, correction.seq],
+    'red-first gate: send alone still delivers the stale original first');
+  await store.supersedeMessage(original.seq, correction.seq, 'corrected instruction', 'codex');
+  assert.equal((await store.status()).unread.grok, 1);
+  assert.deepEqual((await store.inbox('grok')).map((message) => message.seq), [correction.seq]);
+  assert.deepEqual((await store.read('grok')).map((message) => message.seq), [correction.seq]);
+});
+
+test('mailbox CLI exposes sender-authorized supersede', async () => {
+  const original = await store.send({ from: 'codex', to: 'grok', subject: 'old', body: 'stale' });
+  const correction = await store.send({ from: 'codex', to: 'grok', subject: 'new', body: 'current' });
+  await execFileAsync(process.execPath, [
+    mailboxCli, 'supersede', '--root', root, '--from', 'codex', '--seq', String(original.seq),
+    '--by', String(correction.seq), '--reason', 'CLI correction'
+  ]);
+  assert.deepEqual((await store.inbox('grok')).map((message) => message.seq), [correction.seq]);
+});
+
+test('a sender cannot supersede another seat\'s mail', async () => {
+  const original = await store.send({ from: 'claude', to: 'grok', subject: 'old', body: 'first' });
+  const correction = await store.send({ from: 'codex', to: 'grok', subject: 'new', body: 'second' });
+  await assert.rejects(
+    store.supersedeMessage(original.seq, correction.seq, 'not mine', 'codex'),
+    /only messages it sent itself/
+  );
+});
+
 test('Windows claim comparison preserves case and separator exclusion', {
   skip: process.platform !== 'win32'
 }, async () => {

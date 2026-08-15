@@ -384,6 +384,7 @@ export class HarnessServer {
       { name: 'mailbox_status', description: 'Read rounds, registered agents, unread counts, claims, and workspace commit.', inputSchema: object({}) },
       { name: 'mailbox_inbox', description: 'Peek at a bounded page of unread messages without acknowledging them; use afterSeq to advance.', inputSchema: object({ agent, all: { type: 'boolean' }, afterSeq: { type: 'integer', minimum: 0 } }, ['agent']) },
       { name: 'mailbox_read', description: 'Read and acknowledge one or all unread messages.', inputSchema: object({ agent, all: { type: 'boolean' } }, ['agent']) },
+      { name: 'mailbox_supersede', description: 'Replace one message you sent with a newer message you also sent.', inputSchema: object({ agent, seq: { type: 'integer', minimum: 1 }, by: { type: 'integer', minimum: 1 }, reason: { type: 'string' } }, ['agent', 'seq', 'by', 'reason']) },
       {
         name: 'mailbox_send',
         description: 'Send one durable coordination message.',
@@ -657,7 +658,7 @@ export class HarnessServer {
 
   private async executeTool(principal: Principal, request: ToolRequest) {
     const input = request.input ?? {};
-    if (['mailbox_read', 'mailbox_send', 'mailbox_claim', 'mailbox_release', 'mailbox_record_evidence', 'mailbox_promote_evidence', 'capability_run'].includes(request.name)) {
+    if (['mailbox_read', 'mailbox_send', 'mailbox_supersede', 'mailbox_claim', 'mailbox_release', 'mailbox_record_evidence', 'mailbox_promote_evidence', 'capability_run'].includes(request.name)) {
       const status = await this.mailbox.status();
       if (status.roundWarning) {
         await this.audit({
@@ -684,6 +685,22 @@ export class HarnessServer {
       }
       case 'mailbox_read':
         return this.mailbox.read(this.authorizedAgent(principal, input.agent), input.all === true, MAX_TOOL_MESSAGES);
+      case 'mailbox_supersede': {
+        const agent = this.authorizedAgent(principal, input.agent);
+        try {
+          return await this.mailbox.supersedeMessage(
+            requireInteger(input.seq, 'seq'),
+            requireInteger(input.by, 'by'),
+            requireString(input.reason, 'reason', 1_000),
+            agent
+          );
+        } catch (error) {
+          if (error instanceof Error && /may supersede only messages it sent itself/.test(error.message)) {
+            throw new HarnessHttpError(403, 'forbidden', error.message);
+          }
+          throw error;
+        }
+      }
       case 'mailbox_send':
         const from = this.authorizedAgent(principal, input.from);
         const to = requireAgent(input.to);

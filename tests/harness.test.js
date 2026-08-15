@@ -46,6 +46,36 @@ test('harness rejects unauthenticated clients and exposes provider-neutral tools
   assert.equal(tools.status, 200);
   assert.ok(tools.body.tools.some((item) => item.name === 'capability_run'));
   assert.ok(tools.body.tools.some((item) => item.name === 'mailbox_send'));
+  assert.ok(tools.body.tools.some((item) => item.name === 'mailbox_supersede'));
+});
+
+test('mailbox_supersede lets a seat correct only its own sent mail', async (t) => {
+  const { root, server } = await setup(['codex', 'grok']);
+  t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
+  const endpoint = JSON.parse(await fs.readFile(path.join(root, '.ai-bus', 'runtime', 'harness', 'endpoint.json'), 'utf8'));
+  const asCodex = async (name, input, requestId) => {
+    const response = await fetch(`http://127.0.0.1:${endpoint.port}/v1/tool`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer test-codex-token', 'content-type': 'application/json' },
+      body: JSON.stringify({ requestId, name, input })
+    });
+    return { status: response.status, body: await response.json() };
+  };
+  const original = await server.mailbox.send({ from: 'codex', to: 'grok', subject: 'old', body: 'stale' });
+  const correction = await server.mailbox.send({ from: 'codex', to: 'grok', subject: 'new', body: 'current' });
+  const result = await asCodex('mailbox_supersede', {
+    agent: 'codex', seq: original.seq, by: correction.seq, reason: 'corrected'
+  }, 'supersede-own');
+  assert.equal(result.status, 200);
+  assert.equal((await server.mailbox.status()).unread.grok, 1);
+
+  const foreign = await server.mailbox.send({ from: 'grok', to: 'codex', subject: 'foreign', body: 'not mine' });
+  const own = await server.mailbox.send({ from: 'codex', to: 'codex', subject: 'own', body: 'mine' });
+  const denied = await asCodex('mailbox_supersede', {
+    agent: 'codex', seq: foreign.seq, by: own.seq, reason: 'forged correction'
+  }, 'supersede-foreign');
+  assert.equal(denied.status, 403);
+  assert.match(denied.body.error.message, /only messages it sent itself/);
 });
 
 test('harness keeps coordination state separate from capability workdir', async (t) => {

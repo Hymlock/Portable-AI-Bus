@@ -27,6 +27,7 @@ function tools() {
     sent,
     api: {
       async send(input) { sent.push(input); return { ok: true }; },
+      async supersede() { return {}; },
       async status() { return {}; },
       async claim() { return {}; },
       async release() { return {}; },
@@ -64,6 +65,34 @@ test('parsePlan accepts bare JSON and rejects fences-without-object as malformed
   const prose = parsePlan('Sure, I will help with that.');
   assert.equal(prose.malformed, true);
   assert.equal(prose.plan.note, 'no-json-object');
+});
+
+test('BrainAction parses and executes a sender-authorized supersede request', async () => {
+  const parsed = parsePlan(JSON.stringify({
+    actions: [{ type: 'supersede', seq: 12, by: 14, reason: 'corrected instruction' }],
+    done: true
+  }));
+  assert.equal(parsed.malformed, false);
+
+  const calls = [];
+  const api = {
+    ...tools().api,
+    async supersede(input) { calls.push(input); return {}; }
+  };
+  assert.deepEqual(await executePlan(api, parsed.plan), []);
+  assert.deepEqual(calls, [{ seq: 12, by: 14, reason: 'corrected instruction' }]);
+});
+
+test('BrainAction rejects malformed supersede identities before reaching the bus', () => {
+  for (const action of [
+    { type: 'supersede', seq: 0, by: 2, reason: 'bad original' },
+    { type: 'supersede', seq: 1, by: 1.5, reason: 'bad replacement' },
+    { type: 'supersede', seq: 1, by: 2, reason: '' }
+  ]) {
+    const parsed = parsePlan(JSON.stringify({ actions: [action], done: true }));
+    assert.equal(parsed.malformed, true);
+    assert.deepEqual(parsed.plan.actions, []);
+  }
 });
 
 test('DELTA I: malformed-plan logging retains a reparsable payload', async () => {

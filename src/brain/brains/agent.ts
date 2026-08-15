@@ -14,6 +14,7 @@ import { EvidenceRecord, formatEvidenceForPrompt, isVerifierKind } from '../../e
 /** Vendor-neutral action the model may request. Keep this tiny on purpose. */
 export type BrainAction =
   | { type: 'send'; to: string; kind?: string; subject: string; body: string; keepBaton?: boolean }
+  | { type: 'supersede'; seq: number; by: number; reason: string }
   | { type: 'claim'; paths: string[]; why: string }
   | { type: 'release'; paths?: string[] }
   | { type: 'capability'; id: string; timeoutMs?: number }
@@ -56,6 +57,7 @@ const buildDefaultSystem = (exampleRecipient: string) => [
   }),
   'Action field requirements (descriptions, not copyable JSON):',
   'send requires string fields type, to, subject, and body; kind may be ack, report, finding, or note; keepBaton is an optional boolean.',
+  'supersede requires type, positive integer seq and by fields, and a non-empty reason; both messages must have been sent by this seat.',
   'claim requires type, a non-empty paths string array, and a non-empty why string.',
   'release requires type and may include a non-empty paths string array.',
   'capability requires type and id, and may include a positive integer timeoutMs.',
@@ -108,12 +110,15 @@ export const PLAN_SCHEMA = {
       items: {
         type: 'object',
         properties: {
-          type: { type: 'string', enum: ['send', 'claim', 'release', 'capability', 'record', 'promote', 'done'] },
+          type: { type: 'string', enum: ['send', 'supersede', 'claim', 'release', 'capability', 'record', 'promote', 'done'] },
           to: { type: 'string' },
           kind: { type: 'string' },
           subject: { type: 'string' },
           body: { type: 'string' },
           keepBaton: { type: 'boolean' },
+          seq: { type: 'number' },
+          by: { type: 'number' },
+          reason: { type: 'string' },
           paths: { type: 'array', items: { type: 'string' } },
           why: { type: 'string' },
           id: { type: 'string' },
@@ -404,6 +409,10 @@ function isAction(value: unknown): value is BrainAction {
         typeof action.subject === 'string' && typeof action.body === 'string' &&
         (action.kind === undefined || typeof action.kind === 'string') &&
         (action.keepBaton === undefined || typeof action.keepBaton === 'boolean');
+    case 'supersede':
+      return Number.isSafeInteger(action.seq) && Number(action.seq) > 0 &&
+        Number.isSafeInteger(action.by) && Number(action.by) > 0 &&
+        typeof action.reason === 'string' && action.reason.trim().length > 0;
     case 'claim':
       return strings(action.paths) && typeof action.why === 'string' && action.why.trim().length > 0;
     case 'release':
@@ -574,6 +583,18 @@ export async function executePlan(
           failures.push({ action: `send to ${action.to}`, detail: problem });
           return failures;
         }
+        break;
+      }
+      case 'supersede': {
+        const failure = failureFor(
+          `supersede #${action.seq} by #${action.by}`,
+          await tools.supersede({ seq: action.seq, by: action.by, reason: action.reason })
+        );
+        if (failure) {
+          failures.push(failure);
+          return failures;
+        }
+        await options.onActionCommitted?.(id);
         break;
       }
       case 'claim': {

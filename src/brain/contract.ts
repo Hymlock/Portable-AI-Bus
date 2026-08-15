@@ -68,6 +68,8 @@ export type WakeContext = {
  */
 export type BrainTools = {
   send(input: { to: string; kind: string; subject: string; body: string; keepBaton?: boolean }): Promise<unknown>;
+  /** Replace an earlier message sent by this seat with a newer message from the same seat. */
+  supersede(input: { seq: number; by: number; reason: string }): Promise<unknown>;
   status(): Promise<Record<string, unknown>>;
   claim(paths: string[], why: string): Promise<unknown>;
   release(paths?: string[]): Promise<unknown>;

@@ -588,6 +588,16 @@ export function seatToolInvocation(command: string, argv: string[], seat: string
           ...(flag(argv, '--keep-baton') ? { keepBaton: true } : {})
         }
       };
+    case 'supersede':
+      return {
+        name: 'mailbox_supersede',
+        input: {
+          agent: seat,
+          seq: positiveSequence(requiredOption(argv, '--seq'), '--seq'),
+          by: positiveSequence(requiredOption(argv, '--by'), '--by'),
+          reason: requiredOption(argv, '--reason')
+        }
+      };
     case 'claim':
       return { name: 'mailbox_claim', input: { agent: seat, paths: csvOption(argv, '--paths'), why: option(argv, '--why') } };
     case 'release': {
@@ -672,6 +682,7 @@ function cliUsage() {
     '  inbox [--all] [--after-seq N]',
     '  read [--all]',
     '  send --to AGENT --subject TEXT (--body-file PATH | --body TEXT) [--kind KIND]',
+    '  supersede --seq N --by N --reason TEXT',
     '  claim --paths PATH[,PATH...] [--why TEXT]',
     '  release [--paths PATH[,PATH...]]',
     '  complete-step --summary TEXT [--evidence ITEM[,ITEM...]]',
@@ -783,6 +794,12 @@ function integerOption(argv: string[], name: string, fallback: number) {
   return value;
 }
 
+function positiveSequence(raw: string, name: string) {
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 1) throw new Error(`${name} must be a positive integer.`);
+  return value;
+}
+
 function positiveInteger(raw: string, name: string, maximum: number) {
   const value = Number(raw);
   if (!Number.isSafeInteger(value) || value < 100 || value > maximum) throw new Error(`${name} must be 100..${maximum}.`);
@@ -807,6 +824,7 @@ function validateCliArguments(command: string, args: string[]) {
     inbox: ['--after-seq'],
     read: [],
     send: ['--to', '--kind', '--subject', '--body', '--body-file'],
+    supersede: ['--seq', '--by', '--reason'],
     claim: ['--paths', '--why'],
     release: ['--paths'],
     'complete-step': ['--summary', '--evidence'],

@@ -568,6 +568,7 @@ export class BudgetExceededError extends Error {
 function wrapWithBudget(tools: BrainTools, onCall: () => void): BrainTools {
   return {
     send: (input) => { onCall(); return tools.send(input); },
+    supersede: (input) => { onCall(); return tools.supersede(input); },
     status: () => { onCall(); return tools.status(); },
     claim: (paths, why) => { onCall(); return tools.claim(paths, why); },
     release: (paths) => { onCall(); return tools.release(paths); },

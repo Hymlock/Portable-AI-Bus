@@ -24,9 +24,9 @@ const LOCK_TIMEOUT_MS = 10_000;
 export type Claim = {
   path: string;
   /** Lexical workspace root against which `path` was resolved. */
-  root: string;
+  root?: string;
   /** Canonical filesystem identity. Symlink and junction aliases share this value. */
-  identity: string;
+  identity?: string;
   why: string;
   at: string;
 };
@@ -483,7 +483,7 @@ export class MailboxStore {
    * superseded row, so an unread stale instruction cannot be acknowledged as current while an
    * already-read instruction and its correction remain auditable as two separate rows.
    */
-  async supersedeMessage(seq: number, by: number, reason: string): Promise<BusMessage> {
+  async supersedeMessage(seq: number, by: number, reason: string, actor?: string): Promise<BusMessage> {
     if (!Number.isSafeInteger(seq) || seq < 1) throw new Error('message sequence must be a positive integer');
     if (!Number.isSafeInteger(by) || by < 1) throw new Error('superseding message sequence must be a positive integer');
     if (seq === by) throw new Error('a message cannot supersede itself');
@@ -499,6 +499,12 @@ export class MailboxStore {
         this.readJson<BusMessage>(messagePath),
         this.readJson<BusMessage>(replacementPath)
       ]);
+      if (actor !== undefined) {
+        this.assertAgent(actor, 'actor');
+        if (message.from !== actor || replacement.from !== actor) {
+          throw new Error(`${actor} may supersede only messages it sent itself`);
+        }
+      }
       if (replacement.seq <= message.seq) {
         throw new Error(`superseding message #${by} must be newer than message #${seq}`);
       }
@@ -852,7 +858,7 @@ export class MailboxStore {
         held.push({ ...requestedClaim, why: input.why?.trim() || '', at: timestamp });
         changed = true;
       }
-      held.sort((left, right) => `${left.root}\0${left.path}`.localeCompare(`${right.root}\0${right.path}`));
+      held.sort((left, right) => `${left.root ?? ''}\0${left.path}`.localeCompare(`${right.root ?? ''}\0${right.path}`));
       if (changed) {
         state.claims[input.agent] = held;
         await this.writeStateUnsafe(state);
@@ -890,8 +896,11 @@ export class MailboxStore {
       if (missing.length > 0) {
         throw new Error(`${agent} does not hold exact claim(s): ${missing.join(', ')}`);
       }
-      const released = new Set(selected.map((claim) => `${claim!.root}\0${claim!.path}`));
-      const remaining = held.filter((claim) => !released.has(`${claim.root}\0${claim.path}`));
+      // Migration decision: legacy claims are NOT backfilled on load. Missing root/identity is
+      // an honest unknown-root value; conflict checks resolve it conservatively against the
+      // roots observed by the current operation, while exact release remains lexical.
+      const released = new Set(selected.map((claim) => `${claim!.root ?? ''}\0${claim!.path}`));
+      const remaining = held.filter((claim) => !released.has(`${claim.root ?? ''}\0${claim.path}`));
       if (remaining.length > 0) {
         state.claims[agent] = remaining;
       } else {
@@ -1200,7 +1209,9 @@ export class MailboxStore {
     ]);
     const unread: Record<string, number> = {};
     for (const agent of state.agents) {
-      unread[agent] = messages.filter((message) => message.to === agent && !message.read).length;
+      unread[agent] = messages.filter(
+        (message) => message.to === agent && !message.read && message.supersededBy === undefined
+      ).length;
     }
     const remaining = state.maxRounds - state.round;
     const warningAt = Math.max(10, Math.ceil(state.maxRounds * 0.1));
@@ -1311,7 +1322,7 @@ export class MailboxStore {
         warnings,
         metrics: {
           messages: messages.length,
-          unread: messages.filter((message) => !message.read).length,
+          unread: messages.filter((message) => !message.read && message.supersededBy === undefined).length,
           claims: state
             ? Object.values(state.claims).reduce((total, claims) => total + claims.length, 0)
             : 0,
@@ -1874,6 +1885,16 @@ async function runCli(argv = process.argv.slice(2)) {
         body
       });
       console.log(json ? JSON.stringify(message, null, 2) : `sent #${message.seq} [round ${message.round}]`);
+      return 0;
+    }
+    case 'supersede': {
+      const message = await store.supersedeMessage(
+        intArg(args, 'seq', 0),
+        intArg(args, 'by', 0),
+        stringArg(args, 'reason', true),
+        stringArg(args, 'from', true)
+      );
+      console.log(json ? JSON.stringify(message, null, 2) : `superseded #${message.seq} by #${message.supersededBy}`);
       return 0;
     }
     case 'inbox': {

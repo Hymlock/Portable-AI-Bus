@@ -255,6 +255,15 @@ export function cliBusClient(options: CliBusOptions): BusClient {
           return (result as Record<string, unknown>) ?? {};
         },
 
+        async supersede(input) {
+          return tool(seat, 'mailbox_supersede', {
+            agent: seat,
+            seq: input.seq,
+            by: input.by,
+            reason: input.reason
+          });
+        },
+
         async claim(paths, why) {
           // `paths.join(...)` on an absent field threw and killed a wake once. Validate at the
           // boundary between the model and the bus, because that is the only place the shape
