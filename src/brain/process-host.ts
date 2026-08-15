@@ -39,6 +39,12 @@ export type RunProcessOptions = {
    */
   stallLedger?: StallLedger;
   stallSeat?: string;
+  /**
+   * Deadline for pty.spawn itself. The post-spawn stall timer cannot fire while
+   * node-pty is blocked in ConnectNamedPipe. A sibling process writes the ledger
+   * if spawn has not returned by this time. 0 / absent means no spawn watchdog.
+   */
+  spawnStallMs?: number;
 };
 
 export function processOutcome(code: number): ProcessOutcome {
@@ -215,6 +221,7 @@ async function runConPty(
   const scriptLauncherPath = path.join(captureDir, 'launch-script.ps1');
 
   return new Promise((resolve) => {
+    const spawnWatch = armSpawnWatchdog(options, captureDir);
     let child: PtyProcess;
     try {
       // Keep the provider in the headless pseudoconsole process tree, but redirect its data stream
@@ -233,6 +240,7 @@ async function runConPty(
         }
       );
     } catch (error) {
+      spawnWatch.returned('threw');
       removeCaptureDir(captureDir);
       resolve({
         code: -1,
@@ -242,6 +250,7 @@ async function runConPty(
       });
       return;
     }
+    spawnWatch.returned('returned');
 
     let diagnostic = '';
     let settled = false;
@@ -254,6 +263,9 @@ async function runConPty(
       if (timer) clearTimeout(timer);
       if (monitor) clearInterval(monitor);
       stall.finish(result);
+      // PtyKill is the only node-pty path that calls ClosePseudoConsole. The success
+      // path used to skip it and leak a headless conhost per wake.
+      try { child.kill(); } catch { /* already gone; still the only close we can invoke */ }
       removeCaptureDir(captureDir);
       resolve(result);
     };
@@ -484,6 +496,75 @@ async function runSpawn(
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function spawnWatchdogBudgetMs(options: RunProcessOptions): number | undefined {
+  if (typeof options.spawnStallMs === 'number' && options.spawnStallMs > 0) {
+    return options.spawnStallMs;
+  }
+  if (typeof options.stallMs === 'number' && options.stallMs >= 100) {
+    return options.stallMs;
+  }
+  return undefined;
+}
+
+/**
+ * A sibling Node process, not a timer on this loop. pty.spawn on Windows is a
+ * synchronous native call; if it blocks, setTimeout here never runs.
+ */
+function armSpawnWatchdog(options: RunProcessOptions, captureDir: string): {
+  returned(outcome: 'returned' | 'threw'): void;
+} {
+  const budgetMs = spawnWatchdogBudgetMs(options);
+  const filePath = options.stallLedger?.filePath;
+  const seat = options.stallSeat;
+  if (!budgetMs || !filePath || !seat || !options.stallLedger) {
+    return { returned() { /* no durable pair, nothing to watch */ } };
+  }
+
+  const markerPath = path.join(captureDir, 'spawn-returned');
+  const ledgerModule = path.join(__dirname, 'stall-ledger.js');
+  const script = `
+    const fs = require('node:fs');
+    const { createStallLedger } = require(${JSON.stringify(ledgerModule)});
+    const markerPath = process.argv[1];
+    const filePath = process.argv[2];
+    const seat = process.argv[3];
+    const thresholdMs = Number(process.argv[4]);
+    setTimeout(() => {
+      try {
+        if (fs.existsSync(markerPath)) return;
+        const ledger = createStallLedger({ seat, filePath });
+        ledger.start({ seat, source: 'process-host', thresholdMs });
+      } catch { /* visibility must not take the parent */ }
+    }, thresholdMs);
+  `;
+  let watchdog: ReturnType<typeof nodeSpawn> | undefined;
+  try {
+    watchdog = nodeSpawn(process.execPath, ['-e', script, markerPath, filePath, seat, String(budgetMs)], {
+      stdio: 'ignore',
+      windowsHide: true
+    });
+    watchdog.unref();
+  } catch {
+    watchdog = undefined;
+  }
+
+  const armedAtMs = Date.now();
+  return {
+    returned(outcome) {
+      try { fs.writeFileSync(markerPath, '1'); } catch { /* marker is best-effort */ }
+      try { watchdog?.kill(); } catch { /* already exited */ }
+      try {
+        const snap = options.stallLedger?.snapshot();
+        for (const open of snap?.open ?? []) {
+          if (open.source !== 'process-host') continue;
+          if (open.startedAtMs + 5 < armedAtMs) continue;
+          options.stallLedger?.resolve(open.id, outcome);
+        }
+      } catch { /* resolving a race write must not take the child */ }
+    }
+  };
 }
 
 function watchProcessStall(options: RunProcessOptions) {

@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
-const { spawnSync } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
+const { createStallLedger } = require('../dist/brain/stall-ledger');
 const { EventEmitter } = require('node:events');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -136,7 +137,9 @@ test('Windows process host uses headless ConPTY and strips terminal controls', a
       return {
         onData(listener) { dataListener = listener; },
         onExit(listener) { exitListener = listener; },
-        kill() { throw new Error('successful process must not be killed'); }
+        kill() {
+          if (!received) throw new Error('successful process must not be killed before spawn returns');
+        }
       };
     }
   };
@@ -245,7 +248,7 @@ test('ConPTY observes an exited provider promptly when node-pty loses its exit e
         return {
           onData() {},
           onExit() {}, // Simulate node-pty losing the notification from its console agent.
-          kill() { throw new Error('an exited provider must not wait for or hit the backstop'); }
+          kill() { /* HPCON close after we already observed completion */ }
         };
       }
     })
@@ -292,7 +295,7 @@ test('ConPTY reports a dead host separately from a live-child timeout', async ()
           pid: 4242,
           onData() {},
           onExit() {},
-          kill() { throw new Error('dead host must not wait for the backstop'); }
+          kill() { /* leftover HPCON still needs ClosePseudoConsole */ }
         };
       }
     }),
@@ -308,6 +311,138 @@ test('ConPTY reports a dead host separately from a live-child timeout', async ()
 
 test('stripAnsi handles CSI and OSC commands emitted by ConPTY clients', () => {
   assert.equal(stripAnsi('\u001b[2Jbefore\u001b]0;title\u0007after\u001b[?25h'), 'beforeafter');
+});
+
+function tmpStallFile(seat) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'portable-ai-bus-spawn-stall-'));
+  return {
+    dir,
+    filePath: path.join(dir, `${seat}.json`),
+    dispose() { fs.rmSync(dir, { recursive: true, force: true }); }
+  };
+}
+
+// Item 12 remainder: a spawn that never returns is invisible because watchProcessStall
+// and timeoutMs are armed only AFTER pty.spawn returns. node-pty's Windows constructor
+// blocks in ConnectNamedPipe before CreateProcess. A timer on the blocked loop cannot
+// fire. The RED is a sibling process: parent sees open=0 while the child is still
+// stuck inside spawn.
+test('ITEM 12 RED: a spawn that never returns writes nothing the parent can read', async () => {
+  const tmp = tmpStallFile('grok');
+  const probe = `
+    const { runProcess } = require(${JSON.stringify(path.join(process.cwd(), 'dist', 'brain', 'process-host.js'))});
+    const { createStallLedger } = require(${JSON.stringify(path.join(process.cwd(), 'dist', 'brain', 'stall-ledger.js'))});
+    const ledger = createStallLedger({ seat: 'grok', filePath: ${JSON.stringify(tmp.filePath)} });
+    runProcess(process.execPath, ['-e', 'process.exit(0)'], {
+      timeoutMs: 30_000,
+      stallMs: 30_000,
+      spawnStallMs: 80,
+      stallLedger: ledger,
+      stallSeat: 'grok'
+    }, {
+      platform: 'win32',
+      loadPty: () => ({
+        spawn() {
+          while (true) { /* ConnectNamedPipe never returns */ }
+        }
+      })
+    });
+  `;
+  const child = spawn(process.execPath, ['-e', probe], {
+    cwd: process.cwd(),
+    stdio: 'ignore',
+    windowsHide: true
+  });
+  try {
+    const deadline = Date.now() + 2_000;
+    let snap = { started: 0, open: [] };
+    while (Date.now() < deadline) {
+      if (fs.existsSync(tmp.filePath)) {
+        snap = JSON.parse(fs.readFileSync(tmp.filePath, 'utf8'));
+        if (snap.open && snap.open.length > 0) break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert.ok(snap.open.length >= 1, 'a sibling watchdog must record the blocked spawn; the parent loop cannot');
+    assert.equal(snap.open[0].source, 'process-host');
+    assert.equal(snap.resolved, 0);
+  } finally {
+    try { child.kill(); } catch { /* already gone */ }
+    tmp.dispose();
+  }
+});
+
+test('ITEM 12 GREEN: a fast ConPTY call still writes no stall edges', async () => {
+  const tmp = tmpStallFile('grok');
+  const ledger = createStallLedger({ seat: 'grok', filePath: tmp.filePath });
+  let cleaned = false;
+  let exited = false;
+  const result = await runProcess(process.execPath, ['-p', 'PONG'], {
+    timeoutMs: 1_000,
+    stallMs: 30_000,
+    spawnStallMs: 80,
+    stallLedger: ledger,
+    stallSeat: 'grok'
+  }, {
+    platform: 'win32',
+    loadPty: () => ({
+      spawn(_command, args) {
+        let exitListener;
+        queueMicrotask(() => {
+          fs.writeFileSync(args[3], 'ok');
+          fs.writeFileSync(args[4], JSON.stringify({ code: 0 }));
+          exited = true;
+          exitListener({ exitCode: 0 });
+        });
+        return {
+          onData() {},
+          onExit(listener) { exitListener = listener; },
+          kill() {
+            if (!exited) throw new Error('successful process must not be killed before it exits');
+            cleaned = true;
+          }
+        };
+      }
+    })
+  });
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(cleaned, true, 'success path must close the HPCON (PtyKill / ClosePseudoConsole)');
+  const done = JSON.parse(fs.readFileSync(tmp.filePath, 'utf8'));
+  assert.equal(done.started, 0, 'a fast call must not invent a stall');
+  assert.equal(done.resolved, 0);
+  assert.equal(done.open.length, 0);
+  tmp.dispose();
+});
+
+test('ITEM 12: success-path cleanup runs after exit, not instead of waiting for it', async () => {
+  let cleaned = false;
+  let exited = false;
+  const result = await runProcess(process.execPath, ['-p', 'PONG'], {
+    timeoutMs: 1_000
+  }, {
+    platform: 'win32',
+    loadPty: () => ({
+      spawn(_command, args) {
+        let exitListener;
+        queueMicrotask(() => {
+          fs.writeFileSync(args[3], '{"result":"PONG"}\r\n');
+          fs.writeFileSync(args[4], JSON.stringify({ code: 0 }));
+          exited = true;
+          exitListener({ exitCode: 0 });
+        });
+        return {
+          onData() {},
+          onExit(listener) { exitListener = listener; },
+          kill() {
+            if (!exited) throw new Error('successful process must not be killed before it exits');
+            cleaned = true;
+          }
+        };
+      }
+    })
+  });
+  assert.equal(result.code, 0);
+  assert.equal(cleaned, true, 'ClosePseudoConsole must run on the success path');
 });
 
 function runWindowsProcessHostProbe(providerScript) {

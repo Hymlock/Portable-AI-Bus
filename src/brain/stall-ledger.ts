@@ -61,6 +61,8 @@ export type StallStartInput = {
 };
 
 export type StallLedger = {
+  /** Present when this handle persists. A spawn watchdog in another process needs the path. */
+  filePath?: string;
   start(input: StallStartInput): OpenStall;
   resolve(id: string, outcome: StallOutcome, durationMs?: number, nowMs?: number): ResolvedStall | undefined;
   snapshot(): StallLedgerSnapshot;
@@ -103,6 +105,7 @@ export function createStallLedger(options: StallLedgerOptions): StallLedger {
   };
 
   return {
+    filePath: options.filePath,
     start(input: StallStartInput): OpenStall {
       refresh();
       if (input.seat !== state.seat) {
