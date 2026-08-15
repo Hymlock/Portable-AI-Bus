@@ -61,6 +61,8 @@ type HarnessOptions = {
   maxWakeResponseBytes?: number;
   /** Repository used by capabilities; mailbox state and credentials remain under workspaceRoot. */
   workdir?: string;
+  /** Repository against which mailbox claim paths are resolved. Defaults to workspaceRoot. */
+  claimRepo?: string;
 };
 
 const DEFAULT_PORT = 47_831;
@@ -90,6 +92,7 @@ export class HarnessServer {
   readonly recoveryLockPath: string;
   readonly instanceId: string;
   readonly workdir: string;
+  readonly claimRepo: string;
   private readonly maxBodyBytes: number;
   private readonly maxConcurrentRuns: number;
   private readonly leaseStaleMs: number;
@@ -119,6 +122,7 @@ export class HarnessServer {
   constructor(readonly workspaceRoot: string, options: HarnessOptions = {}) {
     this.workspaceRoot = path.resolve(workspaceRoot);
     this.workdir = path.resolve(options.workdir ?? this.workspaceRoot);
+    this.claimRepo = path.resolve(options.claimRepo ?? this.workspaceRoot);
     this.mailbox = new MailboxStore(this.workspaceRoot);
     this.capabilities = new CapabilityRunner(this.workdir, { configRoot: this.workspaceRoot });
     this.runtimeDir = path.join(this.workspaceRoot, '.ai-bus', 'runtime', 'harness');
@@ -703,7 +707,7 @@ export class HarnessServer {
           agent: this.authorizedAgent(principal, input.agent),
           paths: requested,
           why: optionalString(input.why, 1_000),
-          repoRoot: this.workdir
+          repoRoot: this.claimRepo
         });
         return {
           status: 'HELD NOW',
@@ -1244,15 +1248,20 @@ function mintToken(principal: string) {
 async function runCli(argv = process.argv.slice(2)) {
   const command = argv[0];
   if (command !== 'serve') {
-    throw new Error('Usage: harness.js serve [--root PATH] [--workdir REPO] [--port N]');
+    throw new Error('Usage: harness.js serve [--root PATH] [--workdir REPO] [--claim-repo PATH] [--port N]');
   }
   const root = option(argv, '--root') ?? path.resolve(__dirname, '..', '..');
   const workdir = option(argv, '--workdir') ?? root;
+  const claimRepo = path.resolve(uniqueOption(argv, '--claim-repo') ?? root);
   const port = Number(option(argv, '--port') ?? DEFAULT_PORT);
   if (!Number.isInteger(port) || port < 0 || port > 65_535) {
     throw new Error('port must be an integer from 0 through 65535.');
   }
-  const server = new HarnessServer(root, { workdir });
+  const claimRepoStat = await fs.stat(claimRepo).catch(() => undefined);
+  if (!claimRepoStat?.isDirectory()) {
+    throw new Error(`--claim-repo is not a directory: ${claimRepo}`);
+  }
+  const server = new HarnessServer(root, { workdir, claimRepo });
   const endpoint = await server.start(port);
   process.stdout.write(`Portable AI Bus harness listening at http://${endpoint.host}:${endpoint.port}\n`);
   process.stdout.write(`Bearer token: ${endpoint.tokenPath}\n`);
@@ -1267,6 +1276,15 @@ async function runCli(argv = process.argv.slice(2)) {
 function option(argv: string[], name: string) {
   const index = argv.indexOf(name);
   return index >= 0 ? argv[index + 1] : undefined;
+}
+
+function uniqueOption(argv: string[], name: string) {
+  const indexes = argv.flatMap((value, index) => value === name ? [index] : []);
+  if (indexes.length > 1) throw new Error(`Duplicate option: ${name}`);
+  if (indexes.length === 0) return undefined;
+  const value = argv[indexes[0] + 1];
+  if (value === undefined || value.startsWith('--')) throw new Error(`Missing value for ${name}.`);
+  return value;
 }
 
 if (require.main === module) {

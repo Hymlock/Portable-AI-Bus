@@ -15,6 +15,15 @@ function option(name, fallback) {
   return index >= 0 && index + 1 < process.argv.length ? process.argv[index + 1] : fallback;
 }
 
+function uniqueOption(name) {
+  const indexes = process.argv.flatMap((value, index) => value === name ? [index] : []);
+  if (indexes.length > 1) throw new Error(`Duplicate option: ${name}`);
+  if (indexes.length === 0) return undefined;
+  const value = process.argv[indexes[0] + 1];
+  if (value === undefined || value.startsWith('--')) throw new Error(`Missing value for ${name}.`);
+  return value;
+}
+
 /**
  * A lease proves that a seat is currently between receiving and completing a wake, not that its
  * brain is alive. Verify the long-lived process and the code marker it writes after loading
@@ -36,6 +45,7 @@ async function main() {
   const repo = REPO;
   const root = path.resolve(option('--root', process.cwd()));
   const workdir = path.resolve(option('--workdir', root));
+  const claimRepo = path.resolve(uniqueOption('--claim-repo') ?? root);
   // Same rule as bus-up: any funded vendor can pilot the chat interface, and the OTHER TWO spin
   // up as brains. Derived, not hardcoded - a fixed pair would only be right while one particular
   // seat happens to be piloting. bus-up enforces the ceiling; this must not disagree with it.
@@ -47,6 +57,7 @@ async function main() {
   const leaseTimeoutMs = Math.max(1, Number(option('--lease-timeout-s', '120'))) * 1000;
   if (!fs.statSync(root, { throwIfNoEntry: false })?.isDirectory()) throw new Error(`--root is not a directory: ${root}`);
   if (!fs.statSync(workdir, { throwIfNoEntry: false })?.isDirectory()) throw new Error(`--workdir is not a directory: ${workdir}`);
+  if (!fs.statSync(claimRepo, { throwIfNoEntry: false })?.isDirectory()) throw new Error(`--claim-repo is not a directory: ${claimRepo}`);
 
   const exact = processesForRoot(listNodeProcesses(), root);
   const owned = exact.filter((item) =>
@@ -55,7 +66,7 @@ async function main() {
   await stopExactProcesses(owned);
 
   const result = spawnSync(process.execPath, [
-    path.join(repo, 'scripts', 'bus-up.js'), '--root', root, '--workdir', workdir,
+    path.join(repo, 'scripts', 'bus-up.js'), '--root', root, '--workdir', workdir, '--claim-repo', claimRepo,
     '--console', consoleSeat, '--brains', brains.join(','), '--brain', brainFile
   ], { cwd: repo, encoding: 'utf8', windowsHide: true });
   process.stdout.write(result.stdout || '');

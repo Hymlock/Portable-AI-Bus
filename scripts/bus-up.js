@@ -2,7 +2,7 @@
 /**
  * `bus-up` — one command that brings the whole bus into a working state.
  *
- *   node scripts/bus-up.js --root "<bus root>" [--workdir "<repo>"] [--console <seat>] [--brains a,b,c]
+ *   node scripts/bus-up.js --root "<bus root>" [--workdir "<repo>"] [--claim-repo "<repo>"] [--console <seat>] [--brains a,b,c]
  *
  * What it does, in order, and each step is idempotent so it is safe to re-run:
  *
@@ -38,9 +38,22 @@ function option(name, fallback) {
   return index >= 0 && index + 1 < process.argv.length ? process.argv[index + 1] : fallback;
 }
 
+function uniqueOption(name) {
+  const indexes = process.argv.flatMap((value, index) => value === name ? [index] : []);
+  if (indexes.length > 1) throw new Error(`Duplicate option: ${name}`);
+  if (indexes.length === 0) return undefined;
+  const value = process.argv[indexes[0] + 1];
+  if (value === undefined || value.startsWith('--')) throw new Error(`Missing value for ${name}.`);
+  return value;
+}
+
 const defaultRoot = path.basename(REPO) === '.ai-bus' ? path.dirname(REPO) : process.cwd();
 const root = path.resolve(option('--root', defaultRoot));
 const workdir = path.resolve(option('--workdir', root));
+const claimRepo = path.resolve(uniqueOption('--claim-repo') ?? root);
+if (!fs.statSync(claimRepo, { throwIfNoEntry: false })?.isDirectory()) {
+  throw new Error(`--claim-repo is not a directory: ${claimRepo}`);
+}
 // The three funded vendors. ANY of them can be the pilot - whichever one is holding the chat
 // interface - and the other two spin up as brains. So the brain list is DERIVED from who is
 // piloting rather than hardcoded, and there are never more than two brains.
@@ -160,7 +173,7 @@ if (harnessAlive()) {
 } else {
   launchHidden(
     process.execPath,
-    [path.join(DIST, 'harness.js'), 'serve', '--root', root, '--workdir', workdir, '--port', '0'],
+    [path.join(DIST, 'harness.js'), 'serve', '--root', root, '--workdir', workdir, '--claim-repo', claimRepo, '--port', '0'],
     path.join(root, '.ai-bus', 'runtime', 'harness-serve.log')
   );
   const deadline = Date.now() + 15000;
