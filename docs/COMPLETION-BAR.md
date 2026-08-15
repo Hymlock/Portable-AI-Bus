@@ -916,6 +916,15 @@ Gates:
 - `providers` passes the ledger into `runProcess` so the process-host path can actually write;
 - **green**: normal operation still records start and resolution exactly once, and leaks nothing.
 
+**Parent-clock remainder (not certified).** Codex #1728 showed the sibling-local
+`setTimeout(thresholdMs)` is a different clock: 120 returning calls at spawn 20-40ms /
+`spawnStallMs=30` left the ledger at 0/0/0. The sibling now uses
+`remaining = thresholdMs - (now - parentArmedAt)` and writes immediately when remaining
+is already gone. Returning calls that still miss the sibling are backfilled by the
+parent. Sibling death while spawn never returns is **fail-open** — the parent is
+blocked and cannot write. AttachConsole helper noise after success-path `kill()` is
+still open.
+
 ## Item 13 — a claim can be too broad to be useful
 
 Measured 2026-08-15 04:10. A seat claimed **`.`** — the repository root — while intending to

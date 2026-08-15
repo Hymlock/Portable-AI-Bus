@@ -414,6 +414,135 @@ test('ITEM 12 GREEN: a fast ConPTY call still writes no stall edges', async () =
   tmp.dispose();
 });
 
+function busyWait(ms) {
+  const until = Date.now() + ms;
+  while (Date.now() < until) { /* Codex's 20-40ms synchronous spawn */ }
+}
+
+function fakeReturningPty(spawnMs) {
+  return {
+    spawn(_command, args) {
+      busyWait(spawnMs);
+      let exitListener;
+      queueMicrotask(() => {
+        fs.writeFileSync(args[3], 'ok');
+        fs.writeFileSync(args[4], JSON.stringify({ code: 0 }));
+        exitListener({ exitCode: 0 });
+      });
+      return {
+        onData() {},
+        onExit(listener) { exitListener = listener; },
+        kill() {}
+      };
+    }
+  };
+}
+
+// Codex #1728: 120 returning calls, spawn 20-40ms, spawnStallMs=30, ledger stayed 0/0/0.
+// Sibling starts late, its local timer is still waiting, parent writes the marker
+// and kills the sibling. A real parent-clock breach is invisible.
+test('ITEM 12 RED: late sibling plus returning breach writes nothing on sibling-local clock', async () => {
+  const tmp = tmpStallFile('grok');
+  const result = await runProcess(process.execPath, ['-p', 'PONG'], {
+    timeoutMs: 1_000,
+    stallMs: 30_000,
+    spawnStallMs: 30,
+    stallLedger: createStallLedger({ seat: 'grok', filePath: tmp.filePath }),
+    stallSeat: 'grok'
+  }, {
+    platform: 'win32',
+    loadPty: () => fakeReturningPty(40),
+    watchdogStartupDelayMs: 50
+  });
+  assert.equal(result.code, 0, result.stderr);
+  const snap = JSON.parse(fs.readFileSync(tmp.filePath, 'utf8'));
+  tmp.dispose();
+  assert.ok(
+    snap.started >= 1,
+    `Codex false-negative: spawn 40ms > spawnStallMs 30, late sibling, ledger started=${snap.started} resolved=${snap.resolved} open=${snap.open.length}`
+  );
+  assert.equal(snap.open.length, 0, 'a returning call must resolve the backfilled row');
+});
+
+test('ITEM 12: delayed sibling still records a never-returning spawn', async () => {
+  const tmp = tmpStallFile('grok');
+  const probe = `
+    const { runProcess } = require(${JSON.stringify(path.join(process.cwd(), 'dist', 'brain', 'process-host.js'))});
+    const { createStallLedger } = require(${JSON.stringify(path.join(process.cwd(), 'dist', 'brain', 'stall-ledger.js'))});
+    const ledger = createStallLedger({ seat: 'grok', filePath: ${JSON.stringify(tmp.filePath)} });
+    runProcess(process.execPath, ['-e', 'process.exit(0)'], {
+      timeoutMs: 30_000,
+      stallMs: 30_000,
+      spawnStallMs: 30,
+      stallLedger: ledger,
+      stallSeat: 'grok'
+    }, {
+      platform: 'win32',
+      watchdogStartupDelayMs: 40,
+      loadPty: () => ({ spawn() { while (true) { /* ConnectNamedPipe never returns */ } } })
+    });
+  `;
+  const child = spawn(process.execPath, ['-e', probe], {
+    cwd: process.cwd(),
+    stdio: 'ignore',
+    windowsHide: true
+  });
+  try {
+    const deadline = Date.now() + 2_000;
+    let snap = { started: 0, open: [] };
+    while (Date.now() < deadline) {
+      if (fs.existsSync(tmp.filePath)) {
+        snap = JSON.parse(fs.readFileSync(tmp.filePath, 'utf8'));
+        if (snap.open && snap.open.length > 0) break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert.ok(snap.open.length >= 1, 'parent-clock remaining must write even when the sibling starts late');
+    assert.equal(snap.open[0].source, 'process-host');
+  } finally {
+    try { child.kill(); } catch { /* already gone */ }
+    tmp.dispose();
+  }
+});
+
+// Sibling death is fail-open for a never-returning spawn: the parent is blocked
+// inside pty.spawn, so it cannot backfill. Say so rather than pretend.
+test('ITEM 12: sibling death is fail-open while spawn never returns', async () => {
+  const tmp = tmpStallFile('grok');
+  const probe = `
+    const { runProcess } = require(${JSON.stringify(path.join(process.cwd(), 'dist', 'brain', 'process-host.js'))});
+    const { createStallLedger } = require(${JSON.stringify(path.join(process.cwd(), 'dist', 'brain', 'stall-ledger.js'))});
+    const ledger = createStallLedger({ seat: 'grok', filePath: ${JSON.stringify(tmp.filePath)} });
+    runProcess(process.execPath, ['-e', 'process.exit(0)'], {
+      timeoutMs: 30_000,
+      stallMs: 30_000,
+      spawnStallMs: 30,
+      stallLedger: ledger,
+      stallSeat: 'grok'
+    }, {
+      platform: 'win32',
+      watchdogDieImmediately: true,
+      loadPty: () => ({ spawn() { while (true) { /* parent blocked, sibling already dead */ } } })
+    });
+  `;
+  const child = spawn(process.execPath, ['-e', probe], {
+    cwd: process.cwd(),
+    stdio: 'ignore',
+    windowsHide: true
+  });
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const snap = fs.existsSync(tmp.filePath)
+      ? JSON.parse(fs.readFileSync(tmp.filePath, 'utf8'))
+      : { started: 0, open: [] };
+    assert.equal(snap.started, 0, 'dead sibling + blocked parent cannot write; fail-open');
+    assert.equal(snap.open.length, 0);
+  } finally {
+    try { child.kill(); } catch { /* already gone */ }
+    tmp.dispose();
+  }
+});
+
 test('ITEM 12: success-path cleanup runs after exit, not instead of waiting for it', async () => {
   let cleaned = false;
   let exited = false;

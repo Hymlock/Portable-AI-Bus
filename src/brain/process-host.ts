@@ -40,9 +40,11 @@ export type RunProcessOptions = {
   stallLedger?: StallLedger;
   stallSeat?: string;
   /**
-   * Deadline for pty.spawn itself. The post-spawn stall timer cannot fire while
-   * node-pty is blocked in ConnectNamedPipe. A sibling process writes the ledger
-   * if spawn has not returned by this time. 0 / absent means no spawn watchdog.
+   * Parent-clock deadline for pty.spawn itself. The post-spawn stall timer
+   * cannot fire while node-pty is blocked in ConnectNamedPipe. A sibling
+   * process writes the ledger if spawn has not returned by this time, using
+   * remaining = spawnStallMs - (now - parentArmedAt). 0 / absent means no
+   * spawn watchdog. Returning calls that miss the sibling are backfilled.
    */
   spawnStallMs?: number;
 };
@@ -96,6 +98,16 @@ export type ProcessHostDependencies = {
   loadPty?: () => PtyModule;
   spawn?: SpawnProcess;
   isProcessAlive?: (pid: number) => boolean;
+  /**
+   * Test hook: wait this many ms inside the sibling before arming its timer.
+   * Production must leave this unset. Used to reproduce Codex's late-start miss.
+   */
+  watchdogStartupDelayMs?: number;
+  /**
+   * Test hook: sibling exits before arming. Documents fail-open for a
+   * never-returning spawn when the only writer dies.
+   */
+  watchdogDieImmediately?: boolean;
 };
 
 /** Check command reachability without spawning a short-lived console process. */
@@ -156,7 +168,8 @@ export async function runProcess(
       args,
       options,
       dependencies.loadPty ?? loadNodePty,
-      dependencies.isProcessAlive ?? processIsAlive
+      dependencies.isProcessAlive ?? processIsAlive,
+      dependencies
     );
   }
   return runSpawn(command, args, options, dependencies.spawn ?? (nodeSpawn as unknown as SpawnProcess));
@@ -173,7 +186,8 @@ async function runConPty(
   args: string[],
   options: RunProcessOptions,
   loadPty: () => PtyModule,
-  isProcessAlive: (pid: number) => boolean
+  isProcessAlive: (pid: number) => boolean,
+  dependencies: ProcessHostDependencies = {}
 ): Promise<ProcessResult> {
   let pty: PtyModule;
   try {
@@ -221,7 +235,7 @@ async function runConPty(
   const scriptLauncherPath = path.join(captureDir, 'launch-script.ps1');
 
   return new Promise((resolve) => {
-    const spawnWatch = armSpawnWatchdog(options, captureDir);
+    const spawnWatch = armSpawnWatchdog(options, captureDir, dependencies);
     let child: PtyProcess;
     try {
       // Keep the provider in the headless pseudoconsole process tree, but redirect its data stream
@@ -512,7 +526,11 @@ function spawnWatchdogBudgetMs(options: RunProcessOptions): number | undefined {
  * A sibling Node process, not a timer on this loop. pty.spawn on Windows is a
  * synchronous native call; if it blocks, setTimeout here never runs.
  */
-function armSpawnWatchdog(options: RunProcessOptions, captureDir: string): {
+function armSpawnWatchdog(
+  options: RunProcessOptions,
+  captureDir: string,
+  dependencies: ProcessHostDependencies = {}
+): {
   returned(outcome: 'returned' | 'threw'): void;
 } {
   const budgetMs = spawnWatchdogBudgetMs(options);
@@ -524,6 +542,9 @@ function armSpawnWatchdog(options: RunProcessOptions, captureDir: string): {
 
   const markerPath = path.join(captureDir, 'spawn-returned');
   const ledgerModule = path.join(__dirname, 'stall-ledger.js');
+  const parentArmedAtMs = Date.now();
+  const startupDelayMs = Math.max(0, dependencies.watchdogStartupDelayMs ?? 0);
+  const dieImmediately = dependencies.watchdogDieImmediately === true;
   const script = `
     const fs = require('node:fs');
     const { createStallLedger } = require(${JSON.stringify(ledgerModule)});
@@ -531,17 +552,34 @@ function armSpawnWatchdog(options: RunProcessOptions, captureDir: string): {
     const filePath = process.argv[2];
     const seat = process.argv[3];
     const thresholdMs = Number(process.argv[4]);
-    setTimeout(() => {
+    const parentArmedAtMs = Number(process.argv[5]);
+    const startupDelayMs = Number(process.argv[6] || 0);
+    const dieImmediately = process.argv[7] === '1';
+    if (dieImmediately) process.exit(0);
+    function writeIfMissing() {
       try {
         if (fs.existsSync(markerPath)) return;
         const ledger = createStallLedger({ seat, filePath });
         ledger.start({ seat, source: 'process-host', thresholdMs });
       } catch { /* visibility must not take the parent */ }
-    }, thresholdMs);
+    }
+    function arm() {
+      // Parent-clock remaining, not sibling-local setTimeout(thresholdMs).
+      // Codex's false-negative: sibling started late, its timer was still
+      // waiting, parent wrote the marker and killed it. A real breach vanished.
+      const remaining = thresholdMs - (Date.now() - parentArmedAtMs);
+      if (remaining <= 0) writeIfMissing();
+      else setTimeout(writeIfMissing, remaining);
+    }
+    if (startupDelayMs > 0) setTimeout(arm, startupDelayMs);
+    else arm();
   `;
   let watchdog: ReturnType<typeof nodeSpawn> | undefined;
   try {
-    watchdog = nodeSpawn(process.execPath, ['-e', script, markerPath, filePath, seat, String(budgetMs)], {
+    watchdog = nodeSpawn(process.execPath, [
+      '-e', script, markerPath, filePath, seat, String(budgetMs),
+      String(parentArmedAtMs), String(startupDelayMs), dieImmediately ? '1' : '0'
+    ], {
       stdio: 'ignore',
       windowsHide: true
     });
@@ -550,16 +588,31 @@ function armSpawnWatchdog(options: RunProcessOptions, captureDir: string): {
     watchdog = undefined;
   }
 
-  const armedAtMs = Date.now();
   return {
     returned(outcome) {
       try { fs.writeFileSync(markerPath, '1'); } catch { /* marker is best-effort */ }
       try { watchdog?.kill(); } catch { /* already exited */ }
       try {
+        const elapsedMs = Date.now() - parentArmedAtMs;
         const snap = options.stallLedger?.snapshot();
-        for (const open of snap?.open ?? []) {
+        const mine = (snap?.open ?? []).filter((open) => (
+          open.source === 'process-host' && open.startedAtMs + 5 >= parentArmedAtMs
+        ));
+        // Parent backfill: spawn returned after the parent-clock deadline and
+        // the sibling missed (late start, then killed). Fail-closed for
+        // returning calls. A never-return hang still depends on the sibling
+        // (sibling death there is fail-open — the parent is blocked).
+        if (mine.length === 0 && elapsedMs >= budgetMs) {
+          options.stallLedger?.start({
+            seat,
+            source: 'process-host',
+            thresholdMs: budgetMs
+          });
+        }
+        const after = options.stallLedger?.snapshot();
+        for (const open of after?.open ?? []) {
           if (open.source !== 'process-host') continue;
-          if (open.startedAtMs + 5 < armedAtMs) continue;
+          if (open.startedAtMs + 5 < parentArmedAtMs) continue;
           options.stallLedger?.resolve(open.id, outcome);
         }
       } catch { /* resolving a race write must not take the child */ }
