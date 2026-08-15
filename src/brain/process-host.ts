@@ -70,6 +70,13 @@ type PtyModule = {
     cwd: string;
     env: NodeJS.ProcessEnv;
     useConpty: boolean;
+    /**
+     * Supported node-pty kill path. useConptyDll:false forks
+     * conpty_console_list_agent, which throws "AttachConsole failed"
+     * in a headless brain after success-path PtyKill. The DLL path
+     * still calls ClosePseudoConsole and never forks the helper.
+     */
+    useConptyDll?: boolean;
   }): PtyProcess;
 };
 
@@ -250,7 +257,12 @@ async function runConPty(
           rows: 40,
           cwd: options.cwd ?? process.cwd(),
           env: options.env ?? process.env,
-          useConpty: true
+          useConpty: true,
+          // Bypass _getConsoleProcessList. The default kill path forks
+          // conpty_console_list_agent; in a headless seat AttachConsole
+          // throws and ProcessResult still returns 0. ClosePseudoConsole
+          // still runs on this branch (ConptyClosePseudoConsole).
+          useConptyDll: true
         }
       );
     } catch (error) {

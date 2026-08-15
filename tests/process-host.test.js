@@ -156,6 +156,8 @@ test('Windows process host uses headless ConPTY and strips terminal controls', a
   assert.equal(received.request.command, process.execPath);
   assert.deepEqual(received.request.args, ['-p', 'PONG']);
   assert.equal(received.options.useConpty, true);
+  assert.equal(received.options.useConptyDll, true,
+    'useConptyDll:true is the kill path that never forks conpty_console_list_agent');
   assert.equal(received.options.cwd, 'C:\\scratch');
   assert.equal(received.options.env.TRACE, 'yes');
 });
@@ -572,6 +574,38 @@ test('ITEM 12: success-path cleanup runs after exit, not instead of waiting for 
   });
   assert.equal(result.code, 0);
   assert.equal(cleaned, true, 'ClosePseudoConsole must run on the success path');
+});
+
+// Codex #1728: success-path child.kill() forks conpty_console_list_agent, which
+// throws "AttachConsole failed" in a headless brain. ProcessResult stays 0.
+// useConptyDll:true takes the kill branch that never calls _getConsoleProcessList.
+test('ITEM 12 RED: success-path kill must not fork the AttachConsole helper', {
+  skip: process.platform !== 'win32'
+}, async () => {
+  const childProcess = require('child_process');
+  const nodeChild = require('node:child_process');
+  const forks = [];
+  const wrap = (orig) => function patchedFork(...args) {
+    forks.push(String(args[0] || ''));
+    return orig.apply(this, args);
+  };
+  const orig = childProcess.fork;
+  const origNode = nodeChild.fork;
+  childProcess.fork = wrap(orig);
+  if (nodeChild !== childProcess) nodeChild.fork = wrap(origNode);
+  try {
+    const result = await runProcess(process.execPath, ['-e', 'process.exit(0)'], { timeoutMs: 10_000 });
+    assert.equal(result.code, 0, result.stderr);
+    const helperForks = forks.filter((file) => file.includes('conpty_console_list_agent'));
+    assert.equal(
+      helperForks.length,
+      0,
+      `success-path kill forked the AttachConsole helper (ProcessResult concealed it): ${helperForks.join(', ')}`
+    );
+  } finally {
+    childProcess.fork = orig;
+    if (nodeChild !== childProcess) nodeChild.fork = origNode;
+  }
 });
 
 function runWindowsProcessHostProbe(providerScript) {

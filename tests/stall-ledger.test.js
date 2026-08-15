@@ -260,6 +260,57 @@ test('GATE D in-flight: an unresolved runner stall stays open across a new ledge
   tmp.dispose();
 });
 
+// Measured 2026-08-15: c1086c19 / e8ebb830 / d09e448d stayed open after
+// listen-failed + restart because runner finally never ran. createStallLedger
+// must still leave them visible (item 5 GATE D). A new runBrain is the
+// process-death boundary and must pair the orphan runner rows.
+test('ITEM 12 RED: a new runner reaps orphan source=runner stalls left by a dead process', async () => {
+  const tmp = tmpLedger('grok');
+  const prior = createStallLedger({ seat: 'grok', filePath: tmp.filePath });
+  const orphanA = prior.start({
+    seat: 'grok', source: 'runner', thresholdMs: 30_000, wakeReason: 'mail', messages: 1
+  });
+  const orphanB = prior.start({
+    seat: 'grok', source: 'runner', thresholdMs: 30_000, wakeReason: 'mail', messages: 1
+  });
+  const host = prior.start({ seat: 'grok', source: 'process-host', thresholdMs: 30_000 });
+  const events = [];
+  const fixture = transactionalBus(task);
+  await runBrain({
+    seat: 'grok',
+    brain: { name: 'fast', async takeTurn() { return { done: true }; } },
+    bus: fixture.client,
+    maxWakes: 1,
+    providerStallMs: 30_000,
+    stallLedger: prior,
+    log: (event, data) => events.push({ event, data })
+  });
+
+  const snap = JSON.parse(fs.readFileSync(tmp.filePath, 'utf8'));
+  const openIds = snap.open.map((item) => item.id);
+  assert.equal(openIds.includes(orphanA.id), false, 'today a dead-process runner stall stays open forever');
+  assert.equal(openIds.includes(orphanB.id), false);
+  assert.ok(openIds.includes(host.id), 'process-host rows may still be live; do not reap them');
+  const abandoned = snap.recent.filter((item) => item.outcome === 'abandoned');
+  assert.equal(abandoned.length, 2, 'orphans must be paired as abandoned, not invented as returned');
+  assert.ok(
+    events.filter((entry) => entry.event === 'stall-orphaned').length >= 2,
+    'reaping must be logged; a silent closer is item 20 in reverse'
+  );
+  tmp.dispose();
+});
+
+test('ITEM 12: createStallLedger still does not reap — item 5 GATE D stands', () => {
+  const tmp = tmpLedger('grok');
+  const first = createStallLedger({ seat: 'grok', filePath: tmp.filePath });
+  first.start({ seat: 'grok', source: 'runner', thresholdMs: 30_000, wakeReason: 'mail' });
+  const restarted = createStallLedger({ seat: 'grok', filePath: tmp.filePath });
+  const after = restarted.snapshot();
+  assert.equal(after.open.length, 1, 'a ledger reload is not process death; open must survive');
+  assert.equal(after.resolved, 0);
+  tmp.dispose();
+});
+
 test('two ledger handles on one file do not overwrite each other', () => {
   const tmp = tmpLedger('codex');
   const runner = createStallLedger({ seat: 'codex', filePath: tmp.filePath });

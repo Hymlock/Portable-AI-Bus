@@ -24,7 +24,7 @@ import { randomUUID } from 'node:crypto';
 export type StallSource = 'runner' | 'process-host';
 
 /** How a started stall ended. Absent while the stall is still open. */
-export type StallOutcome = 'returned' | 'threw' | 'timed-out' | 'exited';
+export type StallOutcome = 'returned' | 'threw' | 'timed-out' | 'exited' | 'abandoned';
 
 export type OpenStall = {
   id: string;
@@ -244,7 +244,13 @@ function cloneResolved(value: ResolvedStall): ResolvedStall {
   if (typeof value.resolvedAt !== 'string' || !Number.isFinite(value.durationMs)) {
     throw new Error('resolved stall is malformed');
   }
-  if (value.outcome !== 'returned' && value.outcome !== 'threw' && value.outcome !== 'timed-out' && value.outcome !== 'exited') {
+  if (
+    value.outcome !== 'returned' &&
+    value.outcome !== 'threw' &&
+    value.outcome !== 'timed-out' &&
+    value.outcome !== 'exited' &&
+    value.outcome !== 'abandoned'
+  ) {
     throw new Error('resolved stall outcome is not a known result');
   }
   return { ...open, resolvedAt: value.resolvedAt, durationMs: value.durationMs, outcome: value.outcome };

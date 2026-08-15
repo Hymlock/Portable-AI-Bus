@@ -164,6 +164,36 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
 
   await brain.start?.();
 
+  // Process death is not a still-open stall. Item 5 persists the pair so a
+  // restart can *see* the missing resolve; it does not say the next process
+  // should keep lying that the previous runner is still thinking.
+  // Measured 2026-08-15: c1086c19 / e8ebb830 / d09e448d stayed open after
+  // listen-failed + restart because finally never ran. source=process-host
+  // may still have a live sibling watchdog — leave those alone.
+  if (stallLedger) {
+    for (const open of stallLedger.snapshot().open) {
+      if (open.source !== 'runner') continue;
+      try {
+        stallLedger.resolve(open.id, 'abandoned');
+        log('stall-orphaned', {
+          seat,
+          stallId: open.id,
+          source: open.source,
+          startedAt: open.startedAt,
+          thresholdMs: open.thresholdMs,
+          wakeReason: open.wakeReason
+        });
+      } catch (error) {
+        log('stall-ledger-failed', {
+          seat,
+          phase: 'orphan-reap',
+          stallId: open.id,
+          error: (error as Error)?.message ?? String(error)
+        });
+      }
+    }
+  }
+
   const summary: RunnerSummary = { wakes: 0, cappedWakes: 0, errors: 0, parkedMessages: 0, stoppedBy: 'signal' };
   // Process-scoped on purpose. A runner restart gives retained mail a fresh budget; persistent
   // counters would let an old provider outage consume a message's future attempts forever.

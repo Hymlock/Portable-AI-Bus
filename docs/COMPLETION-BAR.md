@@ -922,8 +922,21 @@ Gates:
 `remaining = thresholdMs - (now - parentArmedAt)` and writes immediately when remaining
 is already gone. Returning calls that still miss the sibling are backfilled by the
 parent. Sibling death while spawn never returns is **fail-open** — the parent is
-blocked and cannot write. AttachConsole helper noise after success-path `kill()` is
-still open.
+blocked and cannot write.
+
+**AttachConsole remainder.** Codex #1728: success-path `child.kill()` forks
+`conpty_console_list_agent`, which throws `AttachConsole failed` in a headless
+seat while `ProcessResult` stays 0. Not benign. `useConptyDll: true` takes the
+supported kill path that still calls `ClosePseudoConsole` and never forks the
+helper. RED: a real returning ConPTY call must record zero
+`conpty_console_list_agent` forks.
+
+**Stale runner rows.** `c1086c19` / `e8ebb830` / `d09e448d` were missing
+`resolve` because the process died and `finally` never ran — not a clock error.
+`createStallLedger` still leaves them visible (item 5 GATE D stands). A new
+`runBrain` reaps only `source=runner` orphans as `abandoned` and logs
+`stall-orphaned`. `source=process-host` stays open: a sibling watchdog may
+still be live.
 
 ## Item 13 — a claim can be too broad to be useful
 
