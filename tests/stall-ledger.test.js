@@ -389,3 +389,53 @@ test('process-host: a fast success emits neither stall edge nor exhaustion', asy
   assert.equal(events.some((entry) => entry.event === 'stall-resolution'), false);
   assert.equal(events.some((entry) => entry.event === 'chain-exhausted'), false);
 });
+
+// The published bound. Hardcoded so changing RECENT_LIMIT without updating this
+// gate is a failure, and deleting the splice in resolve() is a failure. N is
+// much greater than 32 so a missing bound cannot hide inside slack.
+const RECENT_BOUND = 32;
+
+test('GATE recent-bound: resolved recent stays at 32 and the retained rows are the newest', () => {
+  const tmp = tmpLedger('grok');
+  const ledger = createStallLedger({ seat: 'grok', filePath: tmp.filePath });
+  const N = 80;
+  const ids = [];
+  for (let i = 0; i < N; i += 1) {
+    const id = ledger.start({
+      seat: 'grok',
+      source: i % 2 === 0 ? 'runner' : 'process-host',
+      thresholdMs: 1,
+      wakeReason: `n-${i}`
+    }).id;
+    ledger.resolve(id, 'returned', i + 1);
+    ids.push(id);
+  }
+
+  const snap = ledger.snapshot();
+  const persisted = JSON.parse(fs.readFileSync(tmp.filePath, 'utf8'));
+  assert.equal(snap.started, N);
+  assert.equal(snap.resolved, N);
+  assert.equal(snap.open.length, 0);
+  assert.equal(
+    snap.recent.length,
+    RECENT_BOUND,
+    `recent must stay at ${RECENT_BOUND}; deleting the splice leaves recent.length=${snap.recent.length} for N=${N}`
+  );
+  assert.equal(
+    persisted.recent.length,
+    RECENT_BOUND,
+    'the bound must be on disk, not only in the in-memory snapshot'
+  );
+
+  const newest = ids.slice(-RECENT_BOUND);
+  assert.deepEqual(
+    snap.recent.map((row) => row.id),
+    newest,
+    'retained rows must be the NEWEST resolved stalls, not the oldest and not an arbitrary sample'
+  );
+  assert.deepEqual(persisted.recent.map((row) => row.id), newest);
+  assert.equal(snap.recent[0].wakeReason, `n-${N - RECENT_BOUND}`);
+  assert.equal(snap.recent[RECENT_BOUND - 1].wakeReason, `n-${N - 1}`);
+  assert.equal(snap.recent[RECENT_BOUND - 1].durationMs, N);
+  tmp.dispose();
+});
