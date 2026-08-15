@@ -23,6 +23,7 @@ seat that did not write it has attacked it and said so on the record.
 | 12 | a call that never starts is invisible | open — **explained** 2026-08-15, mechanism below |
 | 13 | a claim can be too broad to be useful | open — measured 2026-08-15 |
 | 14 | an overlap check can walk an arbitrary volume | open — measured 2026-08-15, split from 6 |
+| 15 | the guard verifies claims, not builds | open — measured 2026-08-15 |
 
 Items 1–7 were the original bar. **Items 8–11 were all added on 2026-08-14/15 from measured
 failures, not planning** — three of the four were found by the system failing in front of us
@@ -396,6 +397,42 @@ Gates:
 - a depth or time cap, or a stay-under-claim-root rule, keeps the check bounded;
 - **green**: legitimate deep trees still resolve correctly, and every item 6 case stays green —
   especially directory-vs-outside-hardlink, which is what the walk exists to catch.
+
+## Item 15 — the guard verifies claims, not builds
+
+Measured 2026-08-15 05:09. `c772aa5` changed `acknowledge(seat, count)` to
+`acknowledge(seat, seqs: number[])` in `src/brain/runner.ts` and did not update
+`src/brain/bus-client.ts`, which still compared the second argument with `<`:
+
+```
+src/brain/bus-client.ts(208,27): error TS2365:
+Operator '<' cannot be applied to types 'number' and 'number[]'.
+```
+
+`npm test` exits **2 before running a single test**. The commit landed **with the hook active
+and reporting success**, because the hook answers *"is this yours to commit?"* and nothing
+answers *"does this work?"* HEAD stayed broken for over fifteen minutes while another seat
+worked, with every unrelated failure hidden behind `exit 2`.
+
+It was caught only because the planner runs the suite after every landing rather than trusting
+the report.
+
+Two things this is **not**. It is not the seat being careless — the fix as specified was
+impossible at that layer (see item 3), and it stalled exactly where the impossibility lives. It
+is not an argument for auto-blocking every commit: item 6 spent a whole session proving that a
+guard which cannot be **satisfied** gets bypassed just as surely as one that cannot go **red**.
+
+Wanted: a commit that does not compile does not land.
+
+Gates:
+
+- RED first: reproduce a non-compiling commit reaching HEAD with the hook active;
+- a commit that fails `tsc` is refused, naming the error;
+- **the escape hatch is explicit and recorded** — a deliberate WIP commit is possible by an
+  obvious, logged route, not by silently disabling the hook;
+- **green**: an ordinary compiling commit is not slowed to the point where seats start
+  bypassing. If the check makes honest commits painful, it will be bypassed, and item 6 already
+  taught that lesson once.
 
 ## Item 9 — a detector whose only sink is a log
 
