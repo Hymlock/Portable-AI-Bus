@@ -11,7 +11,7 @@ seat that did not write it has attacked it and said so on the record.
 |---|---|---|
 | 1 | verified evidence memory | **CERTIFIED** at `ab9807a`; temporal binding **CERTIFIED** at `606d49d` |
 | 2 | consolidation of an assignment's episodes | open — deliberately last |
-| 3 | supersede a sent message | wired every layer `8349f70` after failing `4a9acc5`; audit pending |
+| 3 | supersede a sent message | **CERTIFIED** at `1948082` — three audits, three commits |
 | 4 | cross-seat reassignment | **CERTIFIED** at `c755a42` (2026-08-14) |
 | 5 | distinguish *stalled* from *spent* | **CERTIFIED** at `78ffe75`+`48d24f4` — separates SPENT from STALLED; **BROKEN not covered** |
 | 6 | claim guard — satisfiable **and** mutually exclusive | **CERTIFIED** at `2dae2a7` — four audits, six commits |
@@ -24,6 +24,10 @@ seat that did not write it has attacked it and said so on the record.
 | 13 | a claim can be too broad to be useful | open — measured 2026-08-15 |
 | 14 | an overlap check can walk an arbitrary volume | open — measured 2026-08-15, split from 6 |
 | 15 | the guard verifies claims, not builds | open — measured 2026-08-15 |
+| 16 | `actor` is optional at the store | open — split from 3 |
+| 17 | truncation is invisible on inbox/read/worker | open — split from 3 |
+| 18 | send and supersede are two steps | open — split from 3 |
+| 19 | supersede polish: transcript metadata, CLI usage | open — split from 3 |
 
 Items 1–7 were the original bar. **Items 8–11 were all added on 2026-08-14/15 from measured
 failures, not planning** — three of the four were found by the system failing in front of us
@@ -397,6 +401,70 @@ Gates:
 - a depth or time cap, or a stay-under-claim-root rule, keeps the check bounded;
 - **green**: legitimate deep trees still resolve correctly, and every item 6 case stays green —
   especially directory-vs-outside-hardlink, which is what the walk exists to catch.
+
+## Item 3 — certified at `1948082`, after failing twice
+
+Three audits, three commits: `4a9acc5` → `8349f70` → `1948082`.
+
+| audit | verdict |
+|---|---|
+| 1 | **FAILED** — `supersedeMessage` worked at the store and **no caller could invoke it**. No CLI verb, no harness tool, no worker verb, no `BrainAction`, zero tests. Four gates green, 377 passing, feature unreachable. |
+| 2 | **FAILED** — reachable now, but **T1**: `peek(#1)` → `supersede(#1 by #2)` → `acknowledge(1)` **consumed the correction**. `runner.ts` acknowledged a presented *count*; supersede mutated the positions. |
+| 3 | **CERTIFIED** — `acknowledge([1])` refuses with *"message #1 is no longer current unread mail"*; the leftover inbox is the correction; green at store, harness and client. |
+
+The repair moved the invariant to the layer that can enforce it: `mailbox.ts:481`
+`acknowledge(agent, seqs: number[])` with validation, `mailbox_read` routing supplied seqs. The
+first attempt changed only the signature and **could not have worked** — `mailbox_read`
+consumes the head and takes no seq, so looping it N times is T1 unchanged. That attempt also
+broke the build for 25 minutes (item 15).
+
+**The negative control is what makes the pass meaningful.** `T1-FIFO-RED`: the same scenario
+using `store.read()` — FIFO head instead of seqs — **still eats the correction**. The
+instrument can still express the original bug.
+
+### Why the auditor's own control nearly held the item open
+
+The auditor initially withheld certification because **C1 was red** — already-read plus a plain
+`send` also delivers the correction on the next poll, so `M1` is not unique supersede work. It
+then corrected itself, and the reasoning generalises to every item on this bar:
+
+> *"C1 is the auditor control. It is supposed to stay RED. A control that must stay red cannot
+> be the thing that keeps an item open. Same shape as treating T1-FIFO-RED as a regression."*
+
+And it ruled out the tempting fix: *"Do not open an item to turn C1 green. That would mean
+plain send after consume stops delivering, which is a different and worse product."*
+
+**A red control is the instrument working, not a defect.** Counting controls as failures would
+keep every item permanently open.
+
+**Limit, recorded, not a gate:** a seat inside a turn holds a frozen snapshot; there is no
+retraction feed into a held payload (`M2` — the held object stays `{seq:1, read:true,
+supersededBy: undefined}`). Agreed as a recorded limit rather than scope.
+
+### The nine reds, triaged
+
+Two are controls that **must stay red** (`T1-FIFO-RED`, `C1`). The other seven became items
+16–19 rather than holding item 3 open — the same split that let item 6 finish. The auditor
+named the one it would have argued for and then declined to argue it: *"R1 is the one I would
+have argued for; I am not arguing for it."*
+
+## Items 16–19 — split from item 3
+
+- **16 — `actor` is optional at the store.** `actor?: string`; omit it and there is no check, so
+  a direct `MailboxStore` call forges a foreign retract. CLI and harness both pass one, so the
+  invocable surfaces are safe and the store is not. Gate: forged foreign retract refused **at
+  the store**, not only at the edges.
+- **17 — truncation is invisible.** `mailbox_inbox all:true` returned 4 of 6 as a bare array;
+  `mailbox_read all:true` acked 4 and left `[5,6]`; `WakeResult` has no `hasMore` and the worker
+  never reads it. `SNAP-WAKE` and `SNAP-WORKER-CURSOR` were green, so the hole is **discarded
+  metadata, not a skipped seq**. Gate: truncation visible on all three, and a green case where
+  an untruncated page says so.
+- **18 — send and supersede are two steps.** Between `send(correction)` and `supersedeMessage`
+  both messages are current. A real race, not a written gate. Wanted: atomic
+  `send({ supersedes })`.
+- **19 — supersede polish.** The transcript keeps both bodies without `supersededBy`/reason
+  (unlike `closeCheckpoints`), and the CLI usage string at `mailbox.ts:2108` omits the verb even
+  though the verb works at every layer.
 
 ## Item 15 — the guard verifies claims, not builds
 
