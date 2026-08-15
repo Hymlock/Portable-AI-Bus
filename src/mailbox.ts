@@ -1,5 +1,5 @@
 import * as fs from 'node:fs/promises';
-import { realpathSync } from 'node:fs';
+import { realpathSync, readdirSync, statSync } from 'node:fs';
 import * as path from 'node:path';
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -908,9 +908,8 @@ export class MailboxStore {
       if (missing.length > 0) {
         throw new Error(`${agent} does not hold exact claim(s): ${missing.join(', ')}`);
       }
-      // Migration decision: legacy claims are NOT backfilled on load. Missing root/identity is
-      // an honest unknown-root value; conflict checks resolve it conservatively against the
-      // roots observed by the current operation, while exact release remains lexical.
+      // Exact release remains lexical even when load-time migration has strengthened an older
+      // claim with an observed root and filesystem identity.
       const released = new Set(selected.map((claim) => `${claim!.root ?? ''}\0${claim!.path}`));
       const remaining = held.filter((claim) => !released.has(`${claim.root ?? ''}\0${claim.path}`));
       if (remaining.length > 0) {
@@ -1261,6 +1260,8 @@ export class MailboxStore {
         state = await this.loadState();
         if (state.schema !== SCHEMA) {
           problems.push(`state schema is ${state.schema}; expected ${SCHEMA}`);
+        } else if (await this.migrateClaimIdentities(state)) {
+          await this.writeStateUnsafe(state);
         }
       } catch (error) {
         problems.push(`state.json cannot be read: ${error instanceof Error ? error.message : String(error)}`);
@@ -1302,6 +1303,17 @@ export class MailboxStore {
         }
 
         const owners = Object.entries(state.claims);
+        for (const [owner, claims] of owners) {
+          for (const claim of claims) {
+            if (!this.isFilesystemIdentity(claim.identity)) {
+              const shape = claim.identity ? 'path-only' : 'legacy';
+              warnings.push(
+                `${owner}:${claim.path} uses weaker ${shape} claim identity; `
+                + 'filesystem alias overlap cannot be verified until the path is reachable'
+              );
+            }
+          }
+        }
         for (let leftIndex = 0; leftIndex < owners.length; leftIndex += 1) {
           const [leftOwner, leftClaims] = owners[leftIndex];
           for (let rightIndex = leftIndex + 1; rightIndex < owners.length; rightIndex += 1) {
@@ -1414,6 +1426,9 @@ export class MailboxStore {
     const state = await this.loadState();
     if (state.schema !== SCHEMA) {
       throw new Error(`Unsupported mailbox schema ${state.schema}. Expected ${SCHEMA}.`);
+    }
+    if (await this.migrateClaimIdentities(state)) {
+      await this.writeStateUnsafe(state);
     }
     const maxSeq = await this.maxMessageSequenceUnsafe();
     state.seq = Math.max(state.seq, maxSeq);
@@ -1564,36 +1579,91 @@ export class MailboxStore {
     return this.pathContains(left, right) || this.pathContains(right, left);
   }
 
+  private isFilesystemIdentity(identity: string | undefined): identity is string {
+    return identity?.startsWith('filesystem-v1:') === true;
+  }
+
+  private claimPathCandidates(
+    claim: Pick<Claim, 'path'> & Partial<Pick<Claim, 'root' | 'identity'>>,
+    fallbackRoots: string[]
+  ) {
+    const candidates = (claim.root ? [claim.root] : fallbackRoots)
+      .map((root) => path.resolve(root, claim.path));
+    if (claim.identity && !this.isFilesystemIdentity(claim.identity) && path.isAbsolute(claim.identity)) {
+      candidates.push(claim.identity);
+    }
+    return Array.from(new Set(candidates.map((candidate) => path.resolve(candidate))));
+  }
+
+  private observedFilesystemIdentity(candidate: string) {
+    try {
+      const observed = statSync(candidate, { bigint: true });
+      return filesystemIdentityMaterial(observed.dev, observed.ino);
+    } catch {
+      return undefined;
+    }
+  }
+
   private claimIdentities(
     claim: Pick<Claim, 'path'> & Partial<Pick<Claim, 'root' | 'identity'>>,
     fallbackRoots: string[]
   ) {
-    if (claim.identity) {
-      const identities = [claim.identity];
-      const roots = claim.root ? [claim.root] : fallbackRoots;
-      for (const root of roots) {
+    const identities = new Set<string>();
+    if (this.isFilesystemIdentity(claim.identity)) identities.add(claim.identity);
+    for (const candidate of this.claimPathCandidates(claim, fallbackRoots)) {
+      const observed = this.observedFilesystemIdentity(candidate);
+      if (observed) identities.add(observed);
+      try {
+        identities.add(this.canonicalComparablePath(realpathSync(candidate)));
+      } catch {
+        identities.add(this.canonicalComparablePath(candidate));
+      }
+    }
+    return [...identities];
+  }
+
+  private directoryContainsClaim(
+    parent: Pick<Claim, 'path'> & Partial<Pick<Claim, 'root' | 'identity'>>,
+    child: Pick<Claim, 'path'> & Partial<Pick<Claim, 'root' | 'identity'>>,
+    fallbackRoots: string[]
+  ) {
+    const targets = new Set(
+      this.claimIdentities(child, fallbackRoots).filter((identity) => this.isFilesystemIdentity(identity))
+    );
+    if (targets.size === 0) return false;
+
+    for (const candidate of this.claimPathCandidates(parent, fallbackRoots)) {
+      try {
+        if (!statSync(candidate).isDirectory()) continue;
+      } catch {
+        continue;
+      }
+      const pending = [candidate];
+      const visitedDirectories = new Set<string>();
+      while (pending.length > 0) {
+        const directory = pending.pop()!;
+        const directoryIdentity = this.observedFilesystemIdentity(directory);
+        if (!directoryIdentity || visitedDirectories.has(directoryIdentity)) continue;
+        visitedDirectories.add(directoryIdentity);
+        let entries;
         try {
-          identities.push(this.canonicalComparablePath(realpathSync(path.resolve(root, claim.path))));
+          entries = readdirSync(directory, { withFileTypes: true });
         } catch {
-          identities.push(this.canonicalComparablePath(path.resolve(root, claim.path)));
+          continue;
+        }
+        for (const entry of entries) {
+          const entryPath = path.join(directory, entry.name);
+          const identity = this.observedFilesystemIdentity(entryPath);
+          if (identity && targets.has(identity)) return true;
+          try {
+            if (statSync(entryPath).isDirectory()) pending.push(entryPath);
+          } catch {
+            // A disappearing or unreadable descendant cannot supply an observed identity.
+          }
         }
       }
-      return identities;
     }
-
-    // Claims written before root identity was added are deliberately conservative until
-    // released: resolve every matching candidate root instead of guessing which file they held.
-    const identities: string[] = [];
-    for (const root of fallbackRoots) {
-      try {
-        identities.push(this.canonicalComparablePath(realpathSync(path.resolve(root, claim.path))));
-      } catch {
-        // A stale legacy claim can name a file that has since disappeared. It has no inode to
-        // collide with; retain its lexical identity so same-spelling exclusion is not weakened.
-        identities.push(this.canonicalComparablePath(path.resolve(root, claim.path)));
-      }
-    }
-    return identities;
+    return false;
   }
 
   private claimsOverlap(
@@ -1605,7 +1675,8 @@ export class MailboxStore {
       this.claimIdentities(right, fallbackRoots).some((rightIdentity) =>
         this.pathsOverlap(leftIdentity, rightIdentity)
       )
-    );
+    ) || this.directoryContainsClaim(left, right, fallbackRoots)
+      || this.directoryContainsClaim(right, left, fallbackRoots);
   }
 
   private claimContains(
@@ -1617,7 +1688,30 @@ export class MailboxStore {
       this.claimIdentities(child, fallbackRoots).some((childIdentity) =>
         this.pathContains(parentIdentity, childIdentity)
       )
-    );
+    ) || this.directoryContainsClaim(parent, child, fallbackRoots);
+  }
+
+  private async migrateClaimIdentities(state: MailboxState) {
+    let changed = false;
+    for (const claims of Object.values(state.claims)) {
+      for (const claim of claims) {
+        if (this.isFilesystemIdentity(claim.identity)) continue;
+        const roots = claim.root ? [claim.root] : [this.paths.root];
+        for (const root of roots) {
+          const candidate = path.resolve(root, claim.path);
+          try {
+            const observed = await fs.stat(candidate, { bigint: true });
+            claim.root = this.canonicalComparablePath(await fs.realpath(root));
+            claim.identity = filesystemIdentityMaterial(observed.dev, observed.ino);
+            changed = true;
+            break;
+          } catch {
+            // Preserve the weaker row when its path cannot be observed. Doctor reports it.
+          }
+        }
+      }
+    }
+    return changed;
   }
 
   private uniqueAgents(agents: string[]) {

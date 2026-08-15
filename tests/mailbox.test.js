@@ -238,6 +238,32 @@ test('a hardlink alias cannot bypass an existing physical-file claim', async () 
   );
 });
 
+test('a directory claim covers a hardlink to one of its files outside the directory', async () => {
+  const other = path.join(root, 'other');
+  const alias = path.join(other, 'mailbox-hardlink.ts');
+  await fs.mkdir(other);
+  await fs.link(path.join(root, 'src', 'mailbox.ts'), alias);
+
+  await store.claim({ agent: 'codex', paths: ['src'], why: 'source tree' });
+  await assert.rejects(
+    store.claim({ agent: 'grok', paths: ['other/mailbox-hardlink.ts'], why: 'same inode outside tree' }),
+    ClaimConflictError
+  );
+});
+
+test('a directory claim is refused when a hardlink to one of its files is already held', async () => {
+  const other = path.join(root, 'other');
+  const alias = path.join(other, 'mailbox-hardlink.ts');
+  await fs.mkdir(other);
+  await fs.link(path.join(root, 'src', 'mailbox.ts'), alias);
+
+  await store.claim({ agent: 'codex', paths: ['other/mailbox-hardlink.ts'], why: 'file inode' });
+  await assert.rejects(
+    store.claim({ agent: 'grok', paths: ['src'], why: 'tree containing the inode' }),
+    ClaimConflictError
+  );
+});
+
 test('repo-root claims refuse paths missing from both roots and traversal outside them', async () => {
   const otherRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'portable-ai-bus-empty-root-'));
   try {
@@ -318,6 +344,54 @@ async function writeLegacyClaim(agent = 'codex', claimPath = 'src/mailbox.ts') {
   await fs.writeFile(statePath, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
 }
 
+async function writeClaims(claims) {
+  const statePath = path.join(root, '.ai-bus', 'runtime', 'mailbox', 'state.json');
+  const state = JSON.parse(await fs.readFile(statePath, 'utf8'));
+  state.claims = claims;
+  await fs.writeFile(statePath, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+}
+
+test('doctor detects directory coverage of an out-of-tree hardlink', async () => {
+  const other = path.join(root, 'other');
+  const alias = path.join(other, 'mailbox-hardlink.ts');
+  await fs.mkdir(other);
+  await fs.link(path.join(root, 'src', 'mailbox.ts'), alias);
+  await store.claim({ agent: 'codex', paths: ['src'], why: 'source tree' });
+  const directoryClaim = (await store.claims()).codex[0];
+  await store.release('codex');
+  await store.claim({ agent: 'grok', paths: ['other/mailbox-hardlink.ts'], why: 'file inode' });
+  const fileClaim = (await store.claims()).grok[0];
+  await writeClaims({ codex: [directoryClaim], grok: [fileClaim] });
+
+  const report = await store.doctor();
+  assert.equal(report.ok, false);
+  assert.match(report.problems.join('\n'), /claims overlap: codex:src and grok:other\/mailbox-hardlink\.ts/);
+});
+
+test('doctor migrates reachable legacy and path-identity claims before hardlink comparison', async () => {
+  const other = path.join(root, 'other');
+  const alias = path.join(other, 'mailbox-hardlink.ts');
+  await fs.mkdir(other);
+  await fs.link(path.join(root, 'src', 'mailbox.ts'), alias);
+  const at = new Date().toISOString();
+  const pathIdentity = await fs.realpath(path.join(root, 'src', 'mailbox.ts'));
+  await store.claim({ agent: 'grok', paths: ['other/mailbox-hardlink.ts'], why: 'inode shape' });
+  const inodeClaim = (await store.claims()).grok[0];
+
+  for (const oldClaim of [
+    { path: 'src/mailbox.ts', why: 'legacy shape', at },
+    { path: 'src/mailbox.ts', root, identity: pathIdentity, why: 'path-identity shape', at }
+  ]) {
+    await writeClaims({ codex: [oldClaim], grok: [inodeClaim] });
+    const report = await store.doctor();
+    assert.equal(report.ok, false, `doctor missed ${oldClaim.why}`);
+    assert.match(report.problems.join('\n'), /claims overlap/);
+    const migrated = (await store.claims()).codex[0];
+    assert.match(migrated.identity, /^filesystem-v1:/);
+    assert.ok(migrated.root, 'migration records the observed root');
+  }
+});
+
 test('a legacy claim with no root or identity still blocks a conflicting claim', async () => {
   await writeLegacyClaim();
   await assert.rejects(
@@ -332,10 +406,23 @@ test('a legacy claim can still be released exactly by its holder', async () => {
   assert.deepEqual(await store.claims(), {});
 });
 
-test('doctor accepts a non-overlapping legacy claim without inventing filesystem identity', async () => {
+test('doctor upgrades a reachable non-overlapping legacy claim from observed filesystem identity', async () => {
   await writeLegacyClaim();
   const report = await store.doctor();
   assert.equal(report.ok, true, report.problems.join('\n'));
+  const held = (await store.claims()).codex[0];
+  assert.ok(held.root);
+  assert.match(held.identity, /^filesystem-v1:/);
+});
+
+test('doctor names an unreachable legacy claim as weaker instead of inventing an inode', async () => {
+  await writeLegacyClaim('codex', 'src/vanished.ts');
+  const report = await store.doctor();
+  assert.equal(report.ok, true, report.problems.join('\n'));
+  assert.match(
+    report.warnings.join('\n'),
+    /codex:src\/vanished\.ts uses weaker legacy claim identity.*cannot be verified/
+  );
   const held = (await store.claims()).codex[0];
   assert.equal(held.root, undefined);
   assert.equal(held.identity, undefined);
