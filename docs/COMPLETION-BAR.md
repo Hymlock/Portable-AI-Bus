@@ -12,7 +12,7 @@ seat that did not write it has attacked it and said so on the record.
 | 1 | verified evidence memory | **CERTIFIED** at `ab9807a` (2026-08-14) |
 | 2 | consolidation of an assignment's episodes | open — deliberately last |
 | 3 | supersede a sent message | open |
-| 4 | cross-seat reassignment | implemented (`c755a42`), audit open |
+| 4 | cross-seat reassignment | **CERTIFIED** at `c755a42` (2026-08-14) |
 | 5 | distinguish *stalled* from *spent* | open — measured 2026-08-14, see below |
 | 6 | claim guard cannot express sibling paths | open |
 | 7 | claim schema | open |
@@ -86,6 +86,27 @@ Certification gates (red first, all four):
 - **an honest observation whose real diff touches the subject path still promotes** — not
   optional. Without it, the first three pass trivially if `promote()` simply always refuses,
   which is a gate that cannot go green.
+
+## Item 4 — certified at `c755a42`, first attempt
+
+The attack worth naming: **do action receipts travel with the checkpoint across a handoff?**
+Same-seat tests could never catch that, and if receipts were lost the successor would replay
+an action the predecessor already completed — reintroducing exactly the failure slice 1's
+crash-boundary gate exists to prevent.
+
+They travel. The auditor's own temp-mailbox probe recorded a completed send on one seat,
+forced reassignment, and read the mailbox JSON **directly from disk**: the successor
+checkpoint retained `workId 1`, `inheritedFrom codex`, and the exact receipt; the predecessor
+was closed `reassigned to grok: provider loss`. Running the successor with the identical
+planned send produced **0 side effects**.
+
+**RED control, unprompted:** the auditor removed *only* the inherited receipt from the
+persisted checkpoint and reran the same successor — **1 side effect**. The instrument detects
+the failure it is meant to catch. Third-seat theft and courtesy-handoff `workId` preservation
+also held (5/5).
+
+Note what happened here. On item 1 the negative control had to be demanded twice. On item 4
+the auditor built one before being asked. The standard propagated.
 
 ## Item 5 — measured, and it is not the shape the name suggests
 
