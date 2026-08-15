@@ -497,6 +497,16 @@ test('a sender cannot supersede another seat\'s mail', async () => {
   );
 });
 
+test('the mailbox store requires an actor to supersede mail', async () => {
+  const original = await store.send({ from: 'claude', to: 'grok', subject: 'old', body: 'first' });
+  const correction = await store.send({ from: 'claude', to: 'grok', subject: 'new', body: 'second' });
+  await assert.rejects(
+    store.supersedeMessage(original.seq, correction.seq, 'forged retract'),
+    /actor/
+  );
+  assert.deepEqual((await store.inbox('grok')).map((message) => message.seq), [original.seq, correction.seq]);
+});
+
 test('Windows claim comparison preserves case and separator exclusion', {
   skip: process.platform !== 'win32'
 }, async () => {

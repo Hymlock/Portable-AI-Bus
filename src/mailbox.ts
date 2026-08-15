@@ -527,7 +527,7 @@ export class MailboxStore {
    * superseded row, so an unread stale instruction cannot be acknowledged as current while an
    * already-read instruction and its correction remain auditable as two separate rows.
    */
-  async supersedeMessage(seq: number, by: number, reason: string, actor?: string): Promise<BusMessage> {
+  async supersedeMessage(seq: number, by: number, reason: string, actor: string): Promise<BusMessage> {
     if (!Number.isSafeInteger(seq) || seq < 1) throw new Error('message sequence must be a positive integer');
     if (!Number.isSafeInteger(by) || by < 1) throw new Error('superseding message sequence must be a positive integer');
     if (seq === by) throw new Error('a message cannot supersede itself');
@@ -543,11 +543,9 @@ export class MailboxStore {
         this.readJson<BusMessage>(messagePath),
         this.readJson<BusMessage>(replacementPath)
       ]);
-      if (actor !== undefined) {
-        this.assertAgent(actor, 'actor');
-        if (message.from !== actor || replacement.from !== actor) {
-          throw new Error(`${actor} may supersede only messages it sent itself`);
-        }
+      this.assertAgent(actor, 'actor');
+      if (message.from !== actor || replacement.from !== actor) {
+        throw new Error(`${actor} may supersede only messages it sent itself`);
       }
       if (replacement.seq <= message.seq) {
         throw new Error(`superseding message #${by} must be newer than message #${seq}`);
