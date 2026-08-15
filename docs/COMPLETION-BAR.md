@@ -14,7 +14,7 @@ seat that did not write it has attacked it and said so on the record.
 | 3 | supersede a sent message | open |
 | 4 | cross-seat reassignment | **CERTIFIED** at `c755a42` (2026-08-14) |
 | 5 | distinguish *stalled* from *spent* | open — measured 2026-08-14, see below |
-| 6 | claim guard cannot express sibling paths | open |
+| 6 | claim guard — claims unsatisfiable against repo paths | **fixed** at `08da916`, audit open |
 | 7 | claim schema | open |
 
 ## Item 1 — certified at `ab9807a`, after failing twice
@@ -107,6 +107,52 @@ also held (5/5).
 
 Note what happened here. On item 1 the negative control had to be demanded twice. On item 4
 the auditor built one before being asked. The standard propagated.
+
+## Item 6 — the guard could not be satisfied, and it cost more than it caught
+
+The bar used to call this "cannot express sibling paths." That was the symptom. The cause:
+
+- `src/mailbox.ts:732` resolved every claim path against `this.paths.root` — the **bus
+  runtime root** (`ai-bus`);
+- `claim-guard-cli` enforced against **staged paths in the git repo**, and accepted `--repo`;
+- `claim` had no `--repo`, so no file in this repository could ever be claimed.
+
+Every refusal was individually correct-sounding, so it read as operator error rather than a
+broken tool. **It failed closed and it failed politely** — which is why it survived so long.
+
+What it cost in a single session, all of it recorded rather than reconstructed:
+
+1. **Five bypassed commits** — `649ce8e`, `ab9807a`, `b94d737`, `5d9ef66`, `606d49d`. A guard
+   bypassed on 100% of commits protects nothing.
+2. **A near-collision it could not prevent.** Two seats were about to write `src/mailbox.ts`
+   at once; the only thing that sequenced them was the planner noticing in time.
+3. **Provenance loss** — one seat's `git add -A` swept another author's doc edits into its
+   commit. Content survived; authorship did not.
+4. **Both implementations blocked.** One seat tried to claim the very file containing the bug
+   — *the defect blocks its own repair* — and the other burned a wake hunting for a path
+   spelling that does not exist. Both behaved **correctly**: they refused to edit unclaimed
+   and refused to declare progress off a failed claim. Good discipline converted directly
+   into lost work.
+
+**A guard that cannot be satisfied ends the same way as one that cannot go red: bypassed.**
+That is the general lesson, and it is the inverse of the item 1 finding — same disease,
+opposite symptom.
+
+Fixed at `08da916`: `MailboxStore.claim` accepts `repoRoot`, checks requested paths against
+both the repository and the bus root, and the claim CLI forwards `--repo`.
+
+Verified independently, by a seat that did not write the fix:
+
+| check | result |
+|---|---|
+| claim a repo file (`docs/COMPLETION-BAR.md`) | `HELD NOW` — impossible one hour earlier |
+| **RED control**: claim a path in neither root | refused, exit 1 — the guard was not weakened |
+| bus-root-relative claim still works | holds |
+| **stage by name and commit with the hook ACTIVE, no `--no-verify`** | **the gate — passes** |
+
+The last row is the whole item. The green case is what proves the guard is *satisfiable*;
+the RED control is what proves the fix was making claims resolvable rather than making the
+check quieter.
 
 ## Item 5 — measured, and it is not the shape the name suggests
 
