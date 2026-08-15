@@ -66,6 +66,31 @@ test('targeted acknowledgement refuses a stale sequence without consuming curren
   assert.deepEqual((await store.inbox('codex')).map((message) => message.seq), [current.seq]);
 });
 
+test('acknowledging a presented message refuses it after supersession without consuming its replacement', async () => {
+  const original = await store.send({ from: 'claude', to: 'codex', subject: 'old', body: 'present this first' });
+  const replacement = await store.send({ from: 'claude', to: 'codex', subject: 'new', body: 'must remain unread' });
+  const [presented] = await store.inbox('codex');
+  assert.equal(presented.seq, original.seq);
+
+  await store.supersedeMessage(original.seq, replacement.seq, 'corrected instruction', 'claude');
+  await assert.rejects(
+    store.acknowledge('codex', [presented.seq]),
+    /no longer current unread mail/,
+    'a sequence that became stale after presentation must not acknowledge its replacement'
+  );
+  assert.deepEqual((await store.inbox('codex')).map((message) => message.seq), [replacement.seq]);
+});
+
+test('acknowledging a presented current message consumes only that message', async () => {
+  const original = await store.send({ from: 'claude', to: 'codex', subject: 'first', body: 'present this first' });
+  const next = await store.send({ from: 'claude', to: 'codex', subject: 'second', body: 'must remain unread' });
+  const [presented] = await store.inbox('codex');
+  assert.equal(presented.seq, original.seq);
+
+  assert.deepEqual((await store.acknowledge('codex', [presented.seq])).map((message) => message.seq), [original.seq]);
+  assert.deepEqual((await store.inbox('codex')).map((message) => message.seq), [next.seq]);
+});
+
 test('replacing a goal clears assignments from the previous coordination contract', async () => {
   await store.setGoal({ statement: 'old work', doneWhen: 'old evidence exists', setBy: 'operator' });
   await store.assignGoal('codex', 'implement the old work');
