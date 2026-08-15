@@ -16,7 +16,7 @@ seat that did not write it has attacked it and said so on the record.
 | 5 | distinguish *stalled* from *spent* | **CERTIFIED** at `78ffe75`+`48d24f4` — separates SPENT from STALLED; **BROKEN not covered** |
 | 6 | claim guard — satisfiable **and** mutually exclusive | **CERTIFIED** at `2dae2a7` — four audits, six commits |
 | 7 | claim schema — `why` is optional | open — specified below |
-| 8 | an ack is not a commitment | open — observed three times on 2026-08-14 |
+| 8 | an ack is not a commitment | open — **mechanism found** 2026-08-15, `runner.ts:525` + the prompt |
 | 9 | a detector whose only sink is a log | **CERTIFIED** at `f3798fe` — notice file + bus-tick; still no auto-restart |
 | 10 | authorisation does not survive a wake | open — measured 2026-08-14 |
 | 11 | a broken link reports as *spent* | **CERTIFIED** at `5352b0d` — SPENT / STALLED / BROKEN split |
@@ -24,10 +24,11 @@ seat that did not write it has attacked it and said so on the record.
 | 13 | a claim can be too broad to be useful | open — measured 2026-08-15 |
 | 14 | an overlap check can walk an arbitrary volume | open — measured 2026-08-15, split from 6 |
 | 15 | the guard verifies claims, not builds | open — measured 2026-08-15 |
-| 16 | `actor` is optional at the store | open — split from 3 |
-| 17 | truncation is invisible on inbox/read/worker | open — split from 3 |
-| 18 | send and supersede are two steps | open — split from 3 |
-| 19 | supersede polish: transcript metadata, CLI usage | open — split from 3 |
+| 16 | `actor` is optional at the store | **done** `e43d5a8`, audit pending |
+| 17 | truncation is invisible on inbox/read/worker | **done** `d86b620`, audit pending |
+| 18 | send and supersede are two steps | design accepted, in progress |
+| 19 | supersede polish: transcript metadata, CLI usage | **done** `eb8e10f`, audit pending |
+| 20 | a checkpoint can become unclosable | open — measured 2026-08-15 |
 
 Items 1–7 were the original bar. **Items 8–11 were all added on 2026-08-14/15 from measured
 failures, not planning** — three of the four were found by the system failing in front of us
@@ -465,6 +466,72 @@ have argued for; I am not arguing for it."*
 - **19 — supersede polish.** The transcript keeps both bodies without `supersededBy`/reason
   (unlike `closeCheckpoints`), and the CLI usage string at `mailbox.ts:2108` omits the verb even
   though the verb works at every layer.
+
+## Item 8 — the mechanism, found 2026-08-15
+
+Observed five times as "acked and did nothing". It is neither a provider fault nor a parsing
+fault. **Recovery checkpoints close when the wake ends, not when the task is done.**
+
+    runner.ts:525   closeRecovery(seat, workId, result.done ? 'done' : 'settled')
+                    hasOpenWork is result.done === false
+
+So a wake whose only action was an acknowledgement returns `done:true`, the checkpoint closes
+`done`, nothing carries forward, the next wake finds no mail and idle-skips — **and the
+assignment is simply gone.** Measured live on `1694`/`1702` (grok) and `1698`/`1704`/`1706`
+(codex), every one closed `done` with its task not started.
+
+**The prompt is half the bug.** The system prompt tells seats *"done ends only this wake, not
+the bus goal"* — which is precisely the wrong semantics for a flag that closes durable work.
+Fixing the runner while the prompt still says that would reopen the defect for the next model
+that reads it carefully. Both change in one commit.
+
+`done-requires-report.js` is **not** this gate: it forces a non-ack send before the brain may
+return done, and a note saying "working on it" still closes recovery.
+
+**And it lands inside a certified item.** PLAN-04 slice 1's crash-boundary gate proves a
+durable receipt suppresses replay — that works. **Nothing proves an unfinished task stays
+open.** The gate stays green while every unfinished assignment evaporates: a gate that cannot
+go red for the property that matters, inside the memory system built to prevent exactly this.
+
+The goal's own `doneWhen` already states the property — *"a wake whose only actions were acks
+leaves the task open"* — and nothing at the runner implements it.
+
+Gates:
+
+- RED first on current `runner.ts`: an ack-only wake (and an ack-plus-note wake) leaves the
+  checkpoint **open**;
+- the system prompt no longer teaches `done` as wake-scoped;
+- **green**: a wake that genuinely meets its gates still closes — otherwise evaporating work is
+  traded for immortal work;
+- exhausted/parked/broken still close, as they do today.
+
+## Item 20 — a checkpoint can become unclosable
+
+Measured 2026-08-15 while trying to clear a stale checkpoint by hand.
+
+`closeRecovery` is defined at `mailbox.ts:746` and reachable **only** from `runner.ts` — three
+call sites (`broken`, `exhausted`, `done`/`settled`) via `bus-client.ts:225`. There is **no CLI
+verb, no harness tool, no operator path**.
+
+Consequence: a checkpoint owned by a seat with no running brain can never be closed by anyone.
+The live example is `1518`, whose open row is held by the chat-interface seat after being
+inherited from a brain seat that died when `node-pty` vanished. Its note still reads *"ONE
+ACTION: implement item 9"* — an item certified hours earlier at `f3798fe`. It will say that
+forever.
+
+The auditor refused to close it, correctly: *"`closeRecovery(agent, workId)` only closes that
+agent's open checkpoint. I will not write another seat's recovery record."*
+
+This is the standing doctrine on the recovery path — **a capability no caller can invoke is not
+implemented** — and it is the exact inverse of item 8. Item 8 closes checkpoints that should
+stay open; item 20 cannot close one that should have closed.
+
+Gates:
+
+- an operator can close a stale checkpoint by an explicit, logged route;
+- **a seat still cannot close another seat's checkpoint casually** — the refusal above is
+  correct behaviour and must survive;
+- **green**: ordinary runner-driven closes are unchanged.
 
 ## Item 15 — the guard verifies claims, not builds
 
