@@ -14,12 +14,16 @@ seat that did not write it has attacked it and said so on the record.
 | 3 | supersede a sent message | store done `4a9acc5`, **FAILED audit** — no caller can invoke it |
 | 4 | cross-seat reassignment | **CERTIFIED** at `c755a42` (2026-08-14) |
 | 5 | distinguish *stalled* from *spent* | **CERTIFIED** at `78ffe75`+`48d24f4` — separates SPENT from STALLED; **BROKEN not covered** |
-| 11 | a broken link reports as *spent* | open — measured 2026-08-15 |
-| 6 | claim guard — claims unsatisfiable against repo paths | **fixed** across `08da916`+`21ed962`+`1b1765d`, deployed, audit running |
-| 9 | a detector whose only sink is a log | implemented, **not certified** — notice file + bus-tick; still no auto-restart |
-| 10 | authorisation does not survive a wake | open — measured 2026-08-14 |
+| 6 | claim guard — claims unsatisfiable against repo paths | fixed across `08da916`+`21ed962`+`1b1765d`, deployed, **FAILED audit** — symlink + release/doctor |
 | 7 | claim schema — `why` is optional | open — specified below |
-| 8 | an ack is not a commitment | open — observed twice on 2026-08-14 |
+| 8 | an ack is not a commitment | open — observed three times on 2026-08-14 |
+| 9 | a detector whose only sink is a log | implemented `f3798fe`, **not certified** — notice file + bus-tick; still no auto-restart |
+| 10 | authorisation does not survive a wake | open — measured 2026-08-14 |
+| 11 | a broken link reports as *spent* | open — measured 2026-08-15 |
+
+Items 1–7 were the original bar. **Items 8–11 were all added on 2026-08-14/15 from measured
+failures, not planning** — three of the four were found by the system failing in front of us
+while we worked on something else. The bar is a lower bound.
 
 ## Item 1 — certified at `ab9807a`, after failing twice
 
