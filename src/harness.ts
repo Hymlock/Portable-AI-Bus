@@ -702,7 +702,8 @@ export class HarnessServer {
         const held = await this.mailbox.claim({
           agent: this.authorizedAgent(principal, input.agent),
           paths: requested,
-          why: optionalString(input.why, 1_000)
+          why: optionalString(input.why, 1_000),
+          repoRoot: this.workdir
         });
         return {
           status: 'HELD NOW',
