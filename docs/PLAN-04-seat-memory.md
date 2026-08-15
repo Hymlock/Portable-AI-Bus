@@ -1,8 +1,10 @@
 # PLAN 04 — Seat memory
 
 Status: **slice 1 implemented and audited** (`d74e8fe` + `951f218`). **Slice 2 (verified
-evidence memory) is implemented at `b4cbd62` and not yet independently audited.** **Item 4
-(cross-seat reassignment) is implemented and not yet independently audited.** Durable same-seat
+evidence memory) is CERTIFIED at `ab9807a`** — independently, by the seat that did not write
+it, after two rejected PASSes; see `COMPLETION-BAR.md` for the certification standard that
+produced them. **Item 4 (cross-seat reassignment) is implemented and not yet independently
+audited.** Durable same-seat
 recovery checkpoints now live on their source mailbox record (`workId` is its sequence). They retain
 closed history, supersede rather than expire, and atomically retain accepted-action receipts with
 unfinished intent. Startup retrieves only open checkpoints; injection is escaped, explicitly
@@ -67,9 +69,20 @@ Verifier freshness lives here, not as a fifth item: observation happens at promo
 against HEAD, the latest matching capability receipt, or current mailbox lifecycle state.
 A stored model-authored observation is not accepted.
 
+A third defect was found *after* the tautology, by the auditor, at `12204b0`: provenance was
+bound but **contents were not**. An *authentic* observation could be obtained from
+`observeCommitDiff` and then rewritten — `observation.observed = { sha: 'deadbeef',
+changedPaths: [...] }` — and the still-valid private brand carried the lie into a promoted
+claim with `inputIdentity: deadbeef`. `readonly` and `private` are erased at compile time and
+guarded nothing at runtime. A sibling one level down survived the obvious repair, because
+`Object.freeze` is shallow and `observed.changedPaths.push(...)` still succeeded.
+
+Fixed at `ab9807a` by deep-freezing the payload and the instance. **The invariant: a promoted
+claim's evidence must be what the verifier observed, not what anyone — model, caller, or test
+— can write afterward. Provenance without integrity is half a boundary.**
+
 Still open after this slice:
 
-- Independent audit of this slice.
 - Consolidation of an assignment's episodes (the Cwars gap).
 
 ### Item 4 — cross-seat reassignment

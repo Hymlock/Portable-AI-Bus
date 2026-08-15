@@ -9,7 +9,7 @@ seat that did not write it has attacked it and said so on the record.
 
 | # | item | status |
 |---|---|---|
-| 1 | verified evidence memory | **implemented, FAILED certification twice** |
+| 1 | verified evidence memory | **CERTIFIED** at `ab9807a` (2026-08-14) |
 | 2 | consolidation of an assignment's episodes | open — deliberately last |
 | 3 | supersede a sent message | open |
 | 4 | cross-seat reassignment | implemented (`c755a42`), audit open |
@@ -17,9 +17,10 @@ seat that did not write it has attacked it and said so on the record.
 | 6 | claim guard cannot express sibling paths | open |
 | 7 | claim schema | open |
 
-## Item 1 — why it is still not certified
+## Item 1 — certified at `ab9807a`, after failing twice
 
-The surface has now failed twice, each time because the guard bound the wrong quantity.
+The surface failed certification **twice** before it passed, each time because the guard
+bound the wrong quantity.
 
 1. **Tautology** (caught by grok, fixed in `12204b0`). The verifier copied `record.subject`
    onto itself and then compared the two. A check that cannot fail is not a check.
@@ -44,6 +45,38 @@ would have produced a gate that passes the probe and still cannot go red.
 The invariant to hold: **a promoted claim's evidence must be what the verifier observed, not
 what anyone — model, caller, or test — can write afterward.** Provenance without integrity is
 half a boundary.
+
+**The fix** (`ab9807a`): `deepFreezeClone` the payload including nested arrays, then
+`Object.freeze(this)`. `Readonly<T>` stays compile-time only; the runtime guard is the freeze.
+
+### How it was certified — and why the first two PASSes were rejected
+
+The auditor reported PASS three times. The first two were sent back, and the reasons
+generalise to any certification on this project:
+
+1. **PASS by running the author's test.** Codex certified with
+   `node --test --test-name-pattern` against the test grok wrote. If the author's assertion
+   binds the wrong quantity it passes vacuously and the certification inherits the flaw —
+   the tautology one level up. The instrument that found the original hole was codex
+   *hand-writing* a probe, not running a file. **Rejected: an auditor must bring its own
+   instrument.**
+2. **PASS with no negative control.** The hand-written probe returned `verified` in all four
+   cases. A readback that always printed `verified` would have produced an identical report,
+   so the instrument was unfalsified. Worse, the probe was **over-determined**: the honest
+   observation at `ab9807a` genuinely touches `src/evidence.ts`, so promotion was justified
+   with or without the mutation. Codex's original `1376` attack was sharper precisely because
+   the real diff touched only `README.md`, forcing the mutation to do the work.
+   **Rejected: a gate that cannot go red is not a gate, and that applies to the audit too.**
+3. **PASS with the negative control.** Claim `docs/COMPLETION-BAR.md`, a path absent from the
+   real diff; honest `observeCommitDiff` returns `[src/evidence.ts,
+   tests/evidence-memory.test.js]`; `changedPaths.push(...)` throws `TypeError: Cannot add
+   property 2, object is not extensible`; promotion throws `EvidencePromotionError: irrelevant
+   diff: missing docs/COMPLETION-BAR.md`; **readback gives `trust=untrusted, verifier=null`.**
+   The instrument can express a negative, so the positives mean something. **Accepted.**
+
+Read trust back **from the persisted record**, never from `promote()`'s return value. A throw
+at mutation time is evidence about the freeze; the property that matters is that no mutation
+reaches a promoted claim, and that is only observable in the stored record.
 
 Certification gates (red first, all four):
 
