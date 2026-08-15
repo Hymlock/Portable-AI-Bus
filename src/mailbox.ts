@@ -1,4 +1,5 @@
 import * as fs from 'node:fs/promises';
+import { realpathSync } from 'node:fs';
 import * as path from 'node:path';
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -22,6 +23,10 @@ const LOCK_TIMEOUT_MS = 10_000;
 
 export type Claim = {
   path: string;
+  /** Lexical workspace root against which `path` was resolved. */
+  root: string;
+  /** Canonical filesystem identity. Symlink and junction aliases share this value. */
+  identity: string;
   why: string;
   at: string;
 };
@@ -798,12 +803,23 @@ export class MailboxStore {
       const claimRoots = input.repoRoot
         ? [path.resolve(input.repoRoot), this.paths.root]
         : [this.paths.root];
+      const resolved: Array<{ path: string; root: string; identity: string }> = [];
       for (const requestedPath of requested) {
-        const existsInClaimRoot = await Promise.all(
-          claimRoots.map((root) => this.exists(path.resolve(root, requestedPath)))
-        );
-        if (!existsInClaimRoot.some(Boolean)) {
+        let match: { path: string; root: string; identity: string } | undefined;
+        for (const root of claimRoots) {
+          const candidate = path.resolve(root, requestedPath);
+          if (!(await this.exists(candidate))) continue;
+          match = {
+            path: requestedPath,
+            root: this.canonicalComparablePath(await fs.realpath(root)),
+            identity: this.canonicalComparablePath(await fs.realpath(candidate))
+          };
+          break;
+        }
+        if (!match) {
           missing.push(requestedPath);
+        } else {
+          resolved.push(match);
         }
       }
       if (missing.length > 0) {
@@ -813,8 +829,8 @@ export class MailboxStore {
         if (other === input.agent) {
           continue;
         }
-        for (const requestedPath of requested) {
-          const conflict = claims.find((claim) => this.pathsOverlap(requestedPath, claim.path));
+        for (const requestedClaim of resolved) {
+          const conflict = claims.find((claim) => this.claimsOverlap(requestedClaim, claim, claimRoots));
           if (conflict) {
             throw new ClaimConflictError(other, conflict);
           }
@@ -824,19 +840,19 @@ export class MailboxStore {
       const held = [...(state.claims[input.agent] ?? [])];
       const timestamp = nowIso();
       let changed = false;
-      for (const requestedPath of requested) {
-        if (held.some((claim) => this.pathContains(claim.path, requestedPath))) {
+      for (const requestedClaim of resolved) {
+        if (held.some((claim) => this.claimContains(claim, requestedClaim, claimRoots))) {
           continue;
         }
         for (let index = held.length - 1; index >= 0; index -= 1) {
-          if (this.pathContains(requestedPath, held[index].path)) {
+          if (this.claimContains(requestedClaim, held[index], claimRoots)) {
             held.splice(index, 1);
           }
         }
-        held.push({ path: requestedPath, why: input.why?.trim() || '', at: timestamp });
+        held.push({ ...requestedClaim, why: input.why?.trim() || '', at: timestamp });
         changed = true;
       }
-      held.sort((left, right) => left.path.localeCompare(right.path));
+      held.sort((left, right) => `${left.root}\0${left.path}`.localeCompare(`${right.root}\0${right.path}`));
       if (changed) {
         state.claims[input.agent] = held;
         await this.writeStateUnsafe(state);
@@ -1506,6 +1522,10 @@ export class MailboxStore {
     return process.platform === 'win32' ? value.toLocaleLowerCase('en-US') : value;
   }
 
+  private canonicalComparablePath(value: string) {
+    return this.comparablePath(path.resolve(value).replace(/\\/g, '/').replace(/\/$/, ''));
+  }
+
   private pathContains(parent: string, child: string) {
     const left = this.comparablePath(parent);
     const right = this.comparablePath(child);
@@ -1514,6 +1534,51 @@ export class MailboxStore {
 
   private pathsOverlap(left: string, right: string) {
     return this.pathContains(left, right) || this.pathContains(right, left);
+  }
+
+  private claimIdentities(
+    claim: Pick<Claim, 'path'> & Partial<Pick<Claim, 'root' | 'identity'>>,
+    fallbackRoots: string[]
+  ) {
+    if (claim.identity) return [this.canonicalComparablePath(claim.identity)];
+
+    // Claims written before root identity was added are deliberately conservative until
+    // released: resolve every matching candidate root instead of guessing which file they held.
+    const identities: string[] = [];
+    for (const root of fallbackRoots) {
+      try {
+        identities.push(this.canonicalComparablePath(realpathSync(path.resolve(root, claim.path))));
+      } catch {
+        // A stale legacy claim can name a file that has since disappeared. It has no inode to
+        // collide with; retain its lexical identity so same-spelling exclusion is not weakened.
+        identities.push(this.canonicalComparablePath(path.resolve(root, claim.path)));
+      }
+    }
+    return identities;
+  }
+
+  private claimsOverlap(
+    left: Pick<Claim, 'path'> & Partial<Pick<Claim, 'root' | 'identity'>>,
+    right: Pick<Claim, 'path'> & Partial<Pick<Claim, 'root' | 'identity'>>,
+    fallbackRoots: string[]
+  ) {
+    return this.claimIdentities(left, fallbackRoots).some((leftIdentity) =>
+      this.claimIdentities(right, fallbackRoots).some((rightIdentity) =>
+        this.pathsOverlap(leftIdentity, rightIdentity)
+      )
+    );
+  }
+
+  private claimContains(
+    parent: Pick<Claim, 'path'> & Partial<Pick<Claim, 'root' | 'identity'>>,
+    child: Pick<Claim, 'path'> & Partial<Pick<Claim, 'root' | 'identity'>>,
+    fallbackRoots: string[]
+  ) {
+    return this.claimIdentities(parent, fallbackRoots).some((parentIdentity) =>
+      this.claimIdentities(child, fallbackRoots).some((childIdentity) =>
+        this.pathContains(parentIdentity, childIdentity)
+      )
+    );
   }
 
   private uniqueAgents(agents: string[]) {
