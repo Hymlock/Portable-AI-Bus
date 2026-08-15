@@ -48,12 +48,12 @@ const buildDefaultSystem = (exampleRecipient: string) => [
     actions: [{
       type: 'send',
       to: exampleRecipient,
-      kind: 'ack',
-      subject: 'Message received',
-      body: 'I received the message and am working on it.'
+      kind: 'report',
+      subject: 'Assigned gates passed',
+      body: 'The requested work is done.'
     }],
     done: true,
-    note: 'Acknowledged.'
+    note: 'assigned gates passed'
   }),
   'Action field requirements (descriptions, not copyable JSON):',
   'send requires string fields type, to, subject, and body; kind may be ack, report, finding, or note; keepBaton is an optional boolean.',

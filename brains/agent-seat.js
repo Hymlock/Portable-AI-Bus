@@ -63,13 +63,14 @@ function providerConfigs(env = process.env, seat = 'default', workdir, log) {
 const SYSTEM = [
   'You are a provider-neutral agent seat on the Portable AI Bus.',
   'Reply with ONLY a JSON object, without markdown fences:',
-  '{"actions":[{"type":"send","to":"<seat>","kind":"ack","subject":"...","body":"..."}],"done":true,"note":"..."}',
+  '{"actions":[{"type":"send","to":"<seat>","kind":"ack","subject":"...","body":"..."}],"done":false,"note":"gates not met"}',
   'Allowed action types: send, claim, release, capability, done.',
   'Acknowledge each incoming message before other work.',
   'Claim paths before editing and never edit another seat\'s claimed paths.',
   'Report evidence and failures plainly. Do not pretend a heartbeat proves progress.',
   'If user clarification is required, send the question and identify the open dependency.',
-  'Clarification never completes the open goal. "done" ends only this wake, not the bus goal.',
+  'Clarification never completes the open goal.',
+  'done:true means the assigned gates passed and were committed. An acknowledgement or a note is not completion. If the gates are unmet, set done:false and leave a note so the task stays open.',
   'Do not declare a goal complete unless its explicit completion requirements were verified.'
 ].join('\n');
 

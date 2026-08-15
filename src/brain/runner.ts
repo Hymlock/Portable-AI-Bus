@@ -107,6 +107,13 @@ export type RunnerSummary = {
 const DEFAULT_BUDGET = 30;
 const DEFAULT_LISTEN_SECONDS = 300;
 const DEFAULT_ACK_KINDS = ['ack', 'receipt', 'ping'];
+/**
+ * Sends that inform without completing assigned work. Item 8: a wake whose
+ * only mailbox products are these must not close the recovery checkpoint.
+ * `note` is included because done-requires-report treats it as a report and
+ * that is how "working on it" evaporated live assignments.
+ */
+const COURTESY_SEND_KINDS = new Set(['ack', 'receipt', 'ping', 'note']);
 const DEFAULT_MAX_MESSAGE_ATTEMPTS = 3;
 const DEFAULT_MAX_BLOCKED_ATTEMPTS = 3;
 const DEFAULT_PROVIDER_STALL_MS = 30_000;
@@ -256,12 +263,23 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
       }
 
       let calls = 0;
+      let sentAnything = false;
+      let sentCompleting = false;
       const counted: BrainTools = wrapWithBudget(bus.tools(seat), () => {
         calls += 1;
         if (calls > budgetPerWake) {
           throw new BudgetExceededError(seat, budgetPerWake);
         }
       });
+      const observed: BrainTools = {
+        ...counted,
+        send: (input) => {
+          sentAnything = true;
+          const kind = String(input.kind ?? 'note').trim().toLowerCase();
+          if (!COURTESY_SEND_KINDS.has(kind)) sentCompleting = true;
+          return counted.send(input);
+        }
+      };
 
       let result: WakeResult = { done: true };
       // A courtesy handoff is not new work. Binding recovery or workId to that message
@@ -364,7 +382,7 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
           recordRecoveryAction: workId && bus.recordRecoveryAction
             ? async (actionId: string) => { recovery = await bus.recordRecoveryAction!(seat, workId, actionId); }
             : undefined,
-          tools: counted,
+          tools: observed,
           budget: budgetPerWake,
           log
         };
@@ -511,12 +529,25 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
       // stranded a seat whose own note read "Audit is open". The runner's own budget breach is
       // the dangerous one, and it is already excluded because that path sets `done: true`.
       hasOpenWork = result.done === false && !result.exhausted && !blockedEscalated;
-      if (hasOpenWork) {
+      // Item 8: `done` used to close recovery. Seats emit done:true after an
+      // acknowledgement because the prompt taught "done ends this wake". The
+      // checkpoint then vanished and the next idle-skip dropped the assignment.
+      // A courtesy-only wake ends (do not spin) but the task stays open.
+      const courtesyOnly = sentAnything && !sentCompleting;
+      const keepUnfinished =
+        courtesyOnly &&
+        !result.exhausted &&
+        !result.broken &&
+        !blockedEscalated;
+      if (hasOpenWork || keepUnfinished) {
         const nextOpenWork = result.note?.trim();
         // A later partial step may omit its note. Retain the last useful summary rather than
         // erasing the only durable context the next model session has.
         openWork = nextOpenWork || openWork;
         if (workId && bus.openRecovery) recovery = await bus.openRecovery(seat, workId, openWork ?? 'unfinished');
+        if (keepUnfinished && !hasOpenWork) {
+          log('recovery-kept-open', { seat, workId, reason: 'courtesy-only-send', note: openWork });
+        }
       } else {
         // Completion and exhaustion both close the continuation. Never leak an older task's
         // summary into a genuinely idle or unrelated future wake.

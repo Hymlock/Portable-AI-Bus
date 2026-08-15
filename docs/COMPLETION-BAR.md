@@ -16,11 +16,11 @@ seat that did not write it has attacked it and said so on the record.
 | 5 | distinguish *stalled* from *spent* | **CERTIFIED** at `78ffe75`+`48d24f4` — separates SPENT from STALLED; **BROKEN not covered** |
 | 6 | claim guard — satisfiable **and** mutually exclusive | **CERTIFIED** at `2dae2a7` — four audits, six commits |
 | 7 | claim schema — `why` is optional | open — specified below |
-| 8 | an ack is not a commitment | open — **mechanism found** 2026-08-15, `runner.ts:525` + the prompt |
+| 8 | an ack is not a commitment | implemented — **not certified**; courtesy-only `done:true` keeps recovery open |
 | 9 | a detector whose only sink is a log | **CERTIFIED** at `f3798fe` — notice file + bus-tick; still no auto-restart |
 | 10 | authorisation does not survive a wake | open — measured 2026-08-14 |
 | 11 | a broken link reports as *spent* | **CERTIFIED** at `5352b0d` — SPENT / STALLED / BROKEN split |
-| 12 | a call that never starts is invisible | open — **explained** 2026-08-15, mechanism below |
+| 12 | a call that never starts is invisible | implemented `a97deaf`+`b31177f` — **not certified** |
 | 13 | a claim can be too broad to be useful | open — measured 2026-08-15 |
 | 14 | an overlap check can walk an arbitrary volume | open — measured 2026-08-15, split from 6 |
 | 15 | the guard verifies claims, not builds | open — measured 2026-08-15 |
@@ -504,6 +504,14 @@ Gates:
 - **green**: a wake that genuinely meets its gates still closes — otherwise evaporating work is
   traded for immortal work;
 - exhausted/parked/broken still close, as they do today.
+
+**Implemented, not certified.** The runner now inspects what was actually sent. A wake whose
+only mailbox products are courtesy kinds (`ack`, `receipt`, `ping`, `note`) keeps the
+checkpoint open even when the brain returns `done:true`. It does **not** set `hasOpenWork`,
+so the seat does not spin another model call; the task simply survives the next idle-skip.
+A `report`/`finding` (or any non-courtesy send) plus `done:true` still closes. The production
+prompt in `brains/agent-seat.js` no longer says *"done ends only this wake"* and the copyable
+example is now `done:false` after an ack. The author does not certify it.
 
 ## Item 20 — a checkpoint can become unclosable
 
