@@ -14,7 +14,9 @@ seat that did not write it has attacked it and said so on the record.
 | 3 | supersede a sent message | open — specified below |
 | 4 | cross-seat reassignment | **CERTIFIED** at `c755a42` (2026-08-14) |
 | 5 | distinguish *stalled* from *spent* | open — measured 2026-08-14, see below |
-| 6 | claim guard — claims unsatisfiable against repo paths | **fixed** at `08da916`, audit open |
+| 6 | claim guard — claims unsatisfiable against repo paths | **fixed** across `08da916`+`21ed962`+`1b1765d`, deployed, audit running |
+| 9 | a detector whose only sink is a log | open — measured 2026-08-14 |
+| 10 | authorisation does not survive a wake | open — measured 2026-08-14 |
 | 7 | claim schema — `why` is optional | open — specified below |
 | 8 | an ack is not a commitment | open — observed twice on 2026-08-14 |
 
@@ -288,6 +290,87 @@ Gates:
 - an ack followed by real work is **not** flagged — the green case, and the one that stops
   this becoming noise;
 - the counter survives a wake boundary.
+
+## Item 6, continued — the fix took four layers and a restart
+
+`08da916` fixed the **store**. It did not fix anything a seat could reach:
+
+| layer | defect | fix |
+|---|---|---|
+| store | `claim` resolved against the bus root only | `08da916` — `repoRoot`, two claim roots |
+| harness | `mailbox_claim` never passed `repoRoot` | `21ed962` — but bound it to `workdir` |
+| **concept** | `workdir` is the **capability CWD** (`${workspace}` in `capabilities.json`) | `1b1765d` — separate `--claim-repo` |
+| launchers | `bus-up.js` / `bus-restart.js` never forwarded the flag | `1b1765d` |
+| process | harness started 14:31 ran pre-fix code until 21:56 | restart |
+
+The middle row is the one worth remembering. `21ed962` reused `workdir` because it was the
+only repo-shaped field available — but `workdir` is the cwd for `git.status`, `bus.doctor` and
+the whole SKSE chain. The deployed bus runs `--workdir ai-bus`, so `repoRoot` *became* the bus
+root and both claim roots collapsed to one path. **The fix compiled, tested green, and changed
+nothing for any seat.** Repointing `workdir` at the repo would have silently retargeted every
+capability instead.
+
+Deployed configuration, verified after restart:
+
+```
+harness serve --root ai-bus --workdir ai-bus --claim-repo Portable-AI-Bus
+```
+
+`workdir` unchanged so capabilities still run where they did; `claimRepo` separate. That pair
+of facts is gate (e) — the concepts are **split**, not the overload **moved**.
+
+**The audit is expected to find a hole here**, and it was found before the audit ran:
+`mailbox.ts:767` compares relative path strings only, and a held claim carries **no root
+identity**. With two claim roots live, the same relative path exists in both — so two seats
+could each hold "their" copy with neither seeing a conflict. The fix that made claiming
+possible is what made that reachable.
+
+## Item 9 — a detector whose only sink is a log
+
+`scripts/bus-supervise.js:147-149` computes `staleCodeWarning`, logs it, and deliberately does
+not restart. The design note in `LOOP_ARCHITECTURE.md` is right that a stale-code line must not
+trigger an automatic restart. It is also insufficient: **the only sink is
+`bus-supervise.log`.**
+
+Measured: stale-code lines for both seats ran continuously from **23:07:33 to 01:51:06**, for
+both brains, while three agents debugged the *symptom* — claims failing for reasons that
+looked like operator error. The harness had been running seven-hour-old code since 14:31.
+
+The system knew. It said so, into a file nobody was reading.
+
+Wanted: a stale-code condition reaches a seat or the mailbox, not just a log. Gates:
+
+- a stale loaded-code marker produces a signal an operator or seat actually receives;
+- it still does **not** auto-restart — the existing design decision is correct and must survive
+  the fix;
+- **green case**: matching markers produce no noise. A warning that fires when nothing is wrong
+  gets ignored, which is how this one became invisible in the first place.
+
+## Item 10 — authorisation does not survive a wake
+
+Measured tonight, three times with the same seat. I authorised proceeding without a claim
+(`#1464`, `#1422`). Two wakes later the seat refused to edit unclaimed and asked for
+clarification — **correctly**, because the authorisation was in a message its fresh session
+could no longer see.
+
+Every wake constructs a new prompt. PLAN-04's recovery checkpoint carries *what I was doing*.
+Nothing carries *what I am allowed to do*. Those are different, and only the first survives.
+
+This is also the most plausible explanation for item 8: every ack-without-execute tonight
+followed a brief that referenced permissions or context from earlier messages. The seat acks
+what it can parse, then finds nothing actionable and idles.
+
+The workaround that works is discipline on the sender: **make every task message
+self-contained** — repo path, files, permission, and an explicit "if this conflicts with an
+earlier message, this one wins." That is a practice, not a mechanism, and practices decay.
+
+Wanted: constraints and permissions travel with the **work**, not the conversation. Gates:
+
+- a permission granted for a task is visible on the next wake without being restated;
+- a permission that was **revoked** does not resurrect — the clearing path is tested as hard as
+  the carrying, per PLAN-04 constraint 5;
+- **green case**: a seat with no special permission still refuses, exactly as codex did three
+  times tonight. That refusal is correct behaviour and must not be weakened by this fix.
 
 ## Ordering
 
