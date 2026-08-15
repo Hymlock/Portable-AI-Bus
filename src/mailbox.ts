@@ -46,6 +46,10 @@ export type BusMessage = {
   readAt?: string;
   parkedAt?: string;
   parkedReason?: string;
+  /** A newer mailbox row that replaces this message for current delivery. */
+  supersededBy?: number;
+  supersededAt?: string;
+  supersedeReason?: string;
   recoveryCheckpoints?: RecoveryCheckpoint[];
 };
 
@@ -440,7 +444,9 @@ export class MailboxStore {
 
   async inbox(agent: string): Promise<BusMessage[]> {
     this.assertAgent(agent, 'agent');
-    return (await this.allMessages()).filter((message) => message.to === agent && !message.read);
+    return (await this.allMessages()).filter(
+      (message) => message.to === agent && !message.read && message.supersededBy === undefined
+    );
   }
 
   async read(agent: string, all = false, limit?: number): Promise<BusMessage[]> {
@@ -448,7 +454,7 @@ export class MailboxStore {
     if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1 || limit > 10_000)) throw new Error('read limit must be 1..10000.');
     return this.withLock(async () => {
       const unread = (await this.allMessagesUnsafe()).filter(
-        (message) => message.to === agent && !message.read
+        (message) => message.to === agent && !message.read && message.supersededBy === undefined
       );
       const selected = all ? unread.slice(0, limit ?? unread.length) : unread.slice(0, 1);
       const readAt = nowIso();
@@ -462,6 +468,50 @@ export class MailboxStore {
         await this.atomicJson(messagePath, message);
       }
       return selected;
+    });
+  }
+
+  /**
+   * Make a newer message the current replacement for an earlier one.
+   *
+   * Both immutable message bodies remain in mailbox history. Delivery merely skips the
+   * superseded row, so an unread stale instruction cannot be acknowledged as current while an
+   * already-read instruction and its correction remain auditable as two separate rows.
+   */
+  async supersedeMessage(seq: number, by: number, reason: string): Promise<BusMessage> {
+    if (!Number.isSafeInteger(seq) || seq < 1) throw new Error('message sequence must be a positive integer');
+    if (!Number.isSafeInteger(by) || by < 1) throw new Error('superseding message sequence must be a positive integer');
+    if (seq === by) throw new Error('a message cannot supersede itself');
+    if (!reason.trim()) throw new Error('supersession reason must not be empty');
+    return this.withLock(async () => {
+      const [messagePath, replacementPath] = await Promise.all([
+        this.findMessagePathUnsafe(seq),
+        this.findMessagePathUnsafe(by)
+      ]);
+      if (!messagePath) throw new Error(`message #${seq} does not exist`);
+      if (!replacementPath) throw new Error(`superseding message #${by} does not exist`);
+      const [message, replacement] = await Promise.all([
+        this.readJson<BusMessage>(messagePath),
+        this.readJson<BusMessage>(replacementPath)
+      ]);
+      if (replacement.seq <= message.seq) {
+        throw new Error(`superseding message #${by} must be newer than message #${seq}`);
+      }
+      if (replacement.to !== message.to) {
+        throw new Error(`superseding message #${by} is addressed to ${replacement.to}, not ${message.to}`);
+      }
+      if (replacement.supersededBy !== undefined) {
+        throw new Error(`superseding message #${by} is itself superseded by message #${replacement.supersededBy}`);
+      }
+      if (message.supersededBy !== undefined) {
+        if (message.supersededBy === by && message.supersedeReason === reason.trim()) return message;
+        throw new Error(`message #${seq} is already superseded by message #${message.supersededBy}`);
+      }
+      message.supersededBy = by;
+      message.supersededAt = nowIso();
+      message.supersedeReason = reason.trim();
+      await this.atomicJson(messagePath, message);
+      return message;
     });
   }
 
