@@ -428,5 +428,9 @@
     "bus-mailbox": "dist/mailbox.js",
     "bus-worker": "dist/worker-client.js",
     "bus-harness": "dist/harness.js"
-  }
+  },
+  "bundleDependencies": [
+    "@anthropic-ai/sdk",
+    "node-pty"
+  ]
 }
