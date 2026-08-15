@@ -14,7 +14,7 @@ seat that did not write it has attacked it and said so on the record.
 | 3 | supersede a sent message | wired every layer `8349f70` after failing `4a9acc5`; audit pending |
 | 4 | cross-seat reassignment | **CERTIFIED** at `c755a42` (2026-08-14) |
 | 5 | distinguish *stalled* from *spent* | **CERTIFIED** at `78ffe75`+`48d24f4` — separates SPENT from STALLED; **BROKEN not covered** |
-| 6 | claim guard — claims unsatisfiable against repo paths | re-gated `ac18943`+`8349f70` after failing; re-audit running |
+| 6 | claim guard — satisfiable **and** mutually exclusive | **CERTIFIED** at `2dae2a7` — four audits, six commits |
 | 7 | claim schema — `why` is optional | open — specified below |
 | 8 | an ack is not a commitment | open — observed three times on 2026-08-14 |
 | 9 | a detector whose only sink is a log | **CERTIFIED** at `f3798fe` — notice file + bus-tick; still no auto-restart |
@@ -22,6 +22,7 @@ seat that did not write it has attacked it and said so on the record.
 | 11 | a broken link reports as *spent* | **CERTIFIED** at `5352b0d` — SPENT / STALLED / BROKEN split |
 | 12 | a call that never starts is invisible | open — **explained** 2026-08-15, mechanism below |
 | 13 | a claim can be too broad to be useful | open — measured 2026-08-15 |
+| 14 | an overlap check can walk an arbitrary volume | open — measured 2026-08-15, split from 6 |
 
 Items 1–7 were the original bar. **Items 8–11 were all added on 2026-08-14/15 from measured
 failures, not planning** — three of the four were found by the system failing in front of us
@@ -331,6 +332,70 @@ of facts is gate (e) — the concepts are **split**, not the overload **moved**.
 identity**. With two claim roots live, the same relative path exists in both — so two seats
 could each hold "their" copy with neither seeing a conflict. The fix that made claiming
 possible is what made that reachable.
+
+## Item 6 — certified at `2dae2a7`, after four audits and six commits
+
+Six commits: `08da916` → `21ed962` → `1b1765d` → `ac18943` → `0c1421b` → `2dae2a7`. Four
+independent audits, each failing on something narrower than the last:
+
+| audit | what failed |
+|---|---|
+| 1 | claims unsatisfiable against repo paths — the store fix reached no caller |
+| 2 | **symlink**: two seats, one inode, no conflict. Planner's predicted attack (two seats, same relative path) **did not land** — the string mutex worked. |
+| 3 | **hardlink**: `realpath` resolves symlinks and junctions, not hardlinks |
+| 4 | **the seam**: directory coverage was path-only, so a hardlink out of tree slipped between the two identity schemes; and three persisted shapes existed of which only one spoke inode |
+
+The repair that finally held was **one comparison** — lexical containment, observed inode
+equality, and recursive inode reachability beneath directory claims — rather than a third
+scheme beside the first two. Every failure on this item came from two halves disagreeing, so a
+third half would have repeated it.
+
+Migration follows the item 1 rule: rows upgrade **only after `stat` observes the inode**;
+unreachable rows are left alone and `doctor` **names them as weaker** rather than inventing an
+identity.
+
+Final pass: **30 green, 0 red**, every previously-RED case refused or reported live at store,
+CLI, harness, brain and hook. The auditor's defence of the design is worth keeping: *"The walk
+is what joins a parent path to a child inode under a third name. Remove it and the old RED
+cases return."*
+
+**Three ambers, recorded verbatim, ruled non-blocking by the auditor:**
+
+1. **The hook is still lexical** (`claim-guard.ts` compares path strings). Fail-closed *both*
+   ways — the store refuses another seat's alias claim, and the hook refuses the holder
+   committing the alias spelling. A lockout, not a sneak. Usability defect.
+2. **`UNREACHABLE-PATH-BUT-IDENTITY-LIVE`** — the lexical path is gone but the stored identity
+   still stats, so the hardlink is still refused while `doctor` warns "weaker/unverifiable".
+   The warning overstates weakness. Diagnostic accuracy, not correctness.
+3. **The outbound-junction walk has no depth cap** — split out as item 14.
+
+The auditor resolved its own contradiction rather than leaving the inference to the planner:
+*"'declined to certify because of 4 AMBER' was conservatism about the historical umbrella.
+'AMBER, not grant holes' was the measurement."*
+
+## Item 14 — an overlap check can walk an arbitrary volume
+
+Split from item 6 on 2026-08-15 because it is a **different property**: item 6 guarantees
+claims are satisfiable and mutually exclusive, and this is a resource bound.
+
+`directoryContainsClaim` uses `statSync` (which **follows** links), `readdirSync`, and tracks
+`visitedDirectories` by directory inode. Measured: **no depth cap, no `lstat`, no
+stay-under-claim-root check.** So a junction pointing from a claimed tree onto another volume
+makes every later overlap check walk that volume.
+
+Measured cost, not estimated: 2500 files across 50 dirs → **246.8 ms** for an unrelated claim
+while `src/` is held; 213.8 ms for the hardlink hit. About **0.1 ms per file** on this NTFS
+volume, so a 100k-file tree is roughly **10 s per overlap check** — and `doctor` is O(pairs) of
+those walks.
+
+The walk itself is load-bearing and must not simply be deleted. Wanted: a bound.
+
+Gates:
+
+- RED first: a junction onto a large tree makes an overlap check walk it — show the cost;
+- a depth or time cap, or a stay-under-claim-root rule, keeps the check bounded;
+- **green**: legitimate deep trees still resolve correctly, and every item 6 case stays green —
+  especially directory-vs-outside-hardlink, which is what the walk exists to catch.
 
 ## Item 9 — a detector whose only sink is a log
 
