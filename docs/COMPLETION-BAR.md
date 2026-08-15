@@ -11,9 +11,9 @@ seat that did not write it has attacked it and said so on the record.
 |---|---|---|
 | 1 | verified evidence memory | **CERTIFIED** at `ab9807a`; temporal binding **CERTIFIED** at `606d49d` |
 | 2 | consolidation of an assignment's episodes | open — deliberately last |
-| 3 | supersede a sent message | open — specified below |
+| 3 | supersede a sent message | store done `4a9acc5`, **FAILED audit** — no caller can invoke it |
 | 4 | cross-seat reassignment | **CERTIFIED** at `c755a42` (2026-08-14) |
-| 5 | distinguish *stalled* from *spent* | open — measured 2026-08-14, see below |
+| 5 | distinguish *stalled* from *spent* | **CERTIFIED** at `78ffe75`+`48d24f4` (2026-08-14) |
 | 6 | claim guard — claims unsatisfiable against repo paths | **fixed** across `08da916`+`21ed962`+`1b1765d`, deployed, audit running |
 | 9 | a detector whose only sink is a log | open — measured 2026-08-14 |
 | 10 | authorisation does not survive a wake | open — measured 2026-08-14 |
@@ -381,6 +381,67 @@ The temporal-binding slice was blocked on item 1 certification and is now **impl
 not certified**. It rewrites `observeLifecycle` / `observeCommitDiff` / `observeRunnerResult`
 so each binds a recorded event after the claim (1363 A–D). Named refusals are gone; every
 kind has refusal gates and a green case. The author does not certify it.
+
+## Standing doctrine: a capability no caller can invoke is not implemented
+
+Established 2026-08-14 after the **same defect twice in one night**, found both times by the
+seat that did not write the code.
+
+**Item 6.** `08da916` gave `MailboxStore.claim` a `repoRoot`. `harness.ts:702` never passed
+one, and `mailbox_claim` is the only path a seat has. The fix compiled, passed the suite, and
+changed nothing for any seat. It took three more commits and a restart to actually reach a
+caller.
+
+**Item 3.** `4a9acc5` implemented `supersedeMessage` at the store with four gates passing and
+377/377 green. There is **no CLI verb, no `mailbox_supersede` harness tool, no worker-client
+verb, and no `BrainAction`** — and zero tests referencing it. A planner holding only `send`
+still cannot retract an unread authorisation, which is the entire measured failure the item
+exists to fix.
+
+Both passed their own tests. Both were unreachable. **The store is not the feature.**
+
+Consequences adopted:
+
+- an item is not implemented until a caller at every layer can invoke it — CLI, harness tool,
+  worker-client, brain action — with tests **at each layer**, not only at the store;
+- the audit question is *"can the person who needs this actually do it?"*, not *"does the
+  method behave?"*;
+- a green suite over a store method says nothing about reachability. `377/377` was true and
+  irrelevant in both cases.
+
+The auditor's control on item 3 is the model: an already-read message plus a plain `send`
+*also* delivers the correction, so `supersedeMessage` was **not** the delivery mechanism for
+that case. Without that control the audit reports a pass on evidence that proves nothing —
+the same shape as certifying item 1 by running the author's test.
+
+## Item 5 — certified at `78ffe75` + `48d24f4`
+
+Implemented as a stall ledger giving every stall a **duration and an outcome** rather than an
+extra enum value. `RECENT_LIMIT=32` bounds resolved rows; unresolved stalls are retained
+without limit by design, because an unresolved stall is the entire point.
+
+Two findings the implementer made against its **own** work before certification:
+
+- **The bound had no gate.** `RECENT_LIMIT` worked, but deleting it left all 12 tests passing.
+  Fixed in `48d24f4`, seen red first by removing the splice.
+- **A planner guess was wrong.** The planner speculated unbounded retention of resolved rows.
+  Measurement: 505 KB at N=2000, `heapUsedDelta` 0.68 MB — resolved rows *are* bounded. The
+  real cost is **rewrite**, not retention: `start()` re-reads and pretty-prints the whole open
+  set. So the fix is to stop rewriting the file, not to cap or consolidate the open set. The
+  earlier 40 MB figure was the implementer's own and it corrected that too.
+
+Certification (auditor's own instrument, every result read from persisted ledger JSON):
+
+| gate | result |
+|---|---|
+| bound is real, and retains the **newest** 32 | RED with the splice removed (persisted `recent=80`); production kept `n-48`..`n-79` |
+| **genuine exhaustion still reports as exhaustion** | `chain-exhausted` emitted, **no** stall-start, persisted `started=0` |
+| an unresolved stall survives a wake boundary | persisted `open=1`; a fresh instance after restart read `open=1`, same ID |
+| a resolved stall emits **both** edges | both emitted, then `open=0`, `resolved=1` |
+| **green**: normal operation is silent | zero edges, `started=0`, `resolved=0`, `open=[]`, `recent=[]` |
+
+The exhaustion row is the one that mattered. If everything had become a stall, the ambiguity
+would have moved rather than gone — and that ambiguity cost hours in both directions.
 
 ## The rule that produced every finding here
 
