@@ -477,6 +477,49 @@ export class MailboxStore {
     });
   }
 
+  /** Acknowledge exactly a previously presented unread set, never the current FIFO head. */
+  async acknowledge(agent: string, seqs: number[]): Promise<BusMessage[]> {
+    this.assertAgent(agent, 'agent');
+    if (!Array.isArray(seqs) || seqs.length < 1 || seqs.length > 10_000) {
+      throw new Error('acknowledgement sequences must contain 1..10000 entries');
+    }
+    if (seqs.some((seq) => !Number.isSafeInteger(seq) || seq < 1)) {
+      throw new Error('acknowledgement sequences must be positive integers');
+    }
+    if (new Set(seqs).size !== seqs.length) {
+      throw new Error('acknowledgement sequences must be unique');
+    }
+
+    return this.withLock(async () => {
+      const bySeq = new Map((await this.allMessagesUnsafe()).map((message) => [message.seq, message]));
+      // Validate the complete set before writing. A stale or foreign sequence refuses the
+      // transaction instead of consuming whatever mail happens to be current now.
+      const selected = seqs.map((seq) => {
+        const message = bySeq.get(seq);
+        if (!message) throw new Error(`message #${seq} does not exist`);
+        if (message.to !== agent) {
+          throw new Error(`message #${seq} is addressed to ${message.to}, not ${agent}`);
+        }
+        if (message.read || message.supersededBy !== undefined) {
+          throw new Error(`message #${seq} is no longer current unread mail for ${agent}`);
+        }
+        return message;
+      });
+
+      const readAt = nowIso();
+      for (const message of selected) {
+        message.read = true;
+        message.readAt = readAt;
+        const messagePath = await this.findMessagePathUnsafe(message.seq);
+        if (!messagePath) {
+          throw new Error(`Message file disappeared while acknowledging sequence ${message.seq}.`);
+        }
+        await this.atomicJson(messagePath, message);
+      }
+      return selected;
+    });
+  }
+
   /**
    * Make a newer message the current replacement for an earlier one.
    *

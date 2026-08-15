@@ -211,11 +211,13 @@ function transactionalBus(message, injectOnAcknowledge, toolOverrides = {}) {
     client: {
       async listen() { return unread.length ? 'mail' : 'timeout'; },
       async peek() { return unread.slice(); },
-      async acknowledge(_seat, count) {
+      async acknowledge(_seat, seqs) {
         acknowledgements += 1;
         if (injectOnAcknowledge) unread.push(injectOnAcknowledge);
-        const batch = unread.slice(0, count);
-        unread = unread.slice(count);
+        const wanted = new Set(seqs);
+        const batch = seqs.map((seq) => unread.find((message) => message.seq === seq));
+        assert.equal(batch.every(Boolean), true, 'every acknowledged sequence must still be current');
+        unread = unread.filter((message) => !wanted.has(message.seq));
         return batch;
       },
       async park(_seat, seq, reason) {

@@ -24,7 +24,7 @@ function recoveryClient(store, tools = {}) {
   return {
     async listen() { return 'timeout'; },
     peek: (seat) => store.inbox(seat),
-    acknowledge: (seat, count) => store.read(seat, false, count),
+    acknowledge: (seat, seqs) => store.acknowledge(seat, seqs),
     loadRecovery: (seat) => store.openRecoveryFor(seat),
     openRecovery: (seat, workId, note) => store.openRecovery(seat, workId, note),
     recordRecoveryAction: (seat, workId, id) => store.recordRecoveryAction(seat, workId, id),
@@ -56,7 +56,7 @@ test('crash boundary: a restart does not repeat an action whose durable receipt 
   const client = {
     async listen() { return 'timeout'; },
     peek: (seat) => store.inbox(seat),
-    acknowledge: (seat, count) => store.read(seat, false, count),
+    acknowledge: (seat, seqs) => store.acknowledge(seat, seqs),
     loadRecovery: (seat) => store.openRecoveryFor(seat),
     openRecovery: (seat, workId, note) => store.openRecovery(seat, workId, note),
     async recordRecoveryAction(seat, workId, id) {

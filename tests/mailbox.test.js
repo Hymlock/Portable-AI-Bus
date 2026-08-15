@@ -53,6 +53,19 @@ test('Unicode messages round-trip and batch read marks every selected message', 
   assert.equal((await store.inbox('codex')).length, 0);
 });
 
+test('targeted acknowledgement refuses a stale sequence without consuming current mail', async () => {
+  const stale = await store.send({ from: 'claude', to: 'codex', subject: 'old', body: 'presented earlier' });
+  const current = await store.send({ from: 'claude', to: 'codex', subject: 'correction', body: 'must survive refusal' });
+  await store.acknowledge('codex', [stale.seq]);
+
+  await assert.rejects(
+    store.acknowledge('codex', [stale.seq, current.seq]),
+    /no longer current unread mail/,
+    'the complete requested set is validated before any row is mutated'
+  );
+  assert.deepEqual((await store.inbox('codex')).map((message) => message.seq), [current.seq]);
+});
+
 test('replacing a goal clears assignments from the previous coordination contract', async () => {
   await store.setGoal({ statement: 'old work', doneWhen: 'old evidence exists', setBy: 'operator' });
   await store.assignGoal('codex', 'implement the old work');

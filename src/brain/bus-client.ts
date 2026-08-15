@@ -200,17 +200,18 @@ export function cliBusClient(options: CliBusOptions): BusClient {
       return messages;
     },
 
-    async acknowledge(seat, count) {
-      const acknowledged: BrainMessage[] = [];
-      // Commit exactly the batch that was presented. `all:true` could also acknowledge mail
-      // that arrived while the model was thinking. Single-message reads work with every staged
-      // harness version and preserve FIFO order, so later mail remains unread for the next wake.
-      for (let index = 0; index < count; index += 1) {
-        const result = await tool(seat, 'mailbox_read', { agent: seat, all: false });
-        if (!Array.isArray(result) || result.length === 0) break;
-        acknowledged.push(result[0] as BrainMessage);
-      }
-      return acknowledged;
+    async acknowledge(seat, seqs) {
+      // The queue may change after peek(). The harness/store boundary validates this complete
+      // sequence set before mutating mail; it never substitutes the current FIFO head.
+      const result = await tool(seat, 'mailbox_read', { agent: seat, seqs });
+      if (Array.isArray(result)) return result as BrainMessage[];
+      const refusal = result as { error?: unknown; status?: unknown; code?: unknown };
+      const error = new Error(typeof refusal?.error === 'string'
+        ? refusal.error
+        : 'mailbox acknowledgement returned no message set') as Error & { status?: unknown; code?: unknown };
+      error.status = refusal?.status;
+      error.code = refusal?.code;
+      throw error;
     },
 
     async park(seat, seq, reason) {

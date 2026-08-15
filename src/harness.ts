@@ -383,7 +383,7 @@ export class HarnessServer {
     return [
       { name: 'mailbox_status', description: 'Read rounds, registered agents, unread counts, claims, and workspace commit.', inputSchema: object({}) },
       { name: 'mailbox_inbox', description: 'Peek at a bounded page of unread messages without acknowledging them; use afterSeq to advance.', inputSchema: object({ agent, all: { type: 'boolean' }, afterSeq: { type: 'integer', minimum: 0 } }, ['agent']) },
-      { name: 'mailbox_read', description: 'Read and acknowledge one or all unread messages.', inputSchema: object({ agent, all: { type: 'boolean' } }, ['agent']) },
+      { name: 'mailbox_read', description: 'Read FIFO mail, or acknowledge exactly the supplied unread sequences.', inputSchema: object({ agent, all: { type: 'boolean' }, seqs: { type: 'array', items: { type: 'integer', minimum: 1 }, minItems: 1, maxItems: MAX_TOOL_MESSAGES } }, ['agent']) },
       { name: 'mailbox_supersede', description: 'Replace one message you sent with a newer message you also sent.', inputSchema: object({ agent, seq: { type: 'integer', minimum: 1 }, by: { type: 'integer', minimum: 1 }, reason: { type: 'string' } }, ['agent', 'seq', 'by', 'reason']) },
       {
         name: 'mailbox_send',
@@ -683,8 +683,12 @@ export class HarnessServer {
         const messages = (await this.mailbox.inbox(this.authorizedAgent(principal, input.agent))).filter((message) => message.seq > afterSeq);
         return input.all === true ? this.pageWakeMessages(messages.slice(0, MAX_TOOL_MESSAGES)) : messages.slice(0, 1);
       }
-      case 'mailbox_read':
-        return this.mailbox.read(this.authorizedAgent(principal, input.agent), input.all === true, MAX_TOOL_MESSAGES);
+      case 'mailbox_read': {
+        const agent = this.authorizedAgent(principal, input.agent);
+        return input.seqs === undefined
+          ? this.mailbox.read(agent, input.all === true, MAX_TOOL_MESSAGES)
+          : this.mailbox.acknowledge(agent, input.seqs as number[]);
+      }
       case 'mailbox_supersede': {
         const agent = this.authorizedAgent(principal, input.agent);
         try {

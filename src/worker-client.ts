@@ -573,8 +573,17 @@ export function seatToolInvocation(command: string, argv: string[], seat: string
       return { name: 'mailbox_status', input: {} };
     case 'inbox':
       return { name: 'mailbox_inbox', input: { agent: seat, all: flag(argv, '--all'), afterSeq: integerOption(argv, '--after-seq', 0) } };
-    case 'read':
-      return { name: 'mailbox_read', input: { agent: seat, all: flag(argv, '--all') } };
+    case 'read': {
+      const seqs = option(argv, '--seqs');
+      return {
+        name: 'mailbox_read',
+        input: {
+          agent: seat,
+          all: flag(argv, '--all'),
+          ...(seqs === undefined ? {} : { seqs: csv(seqs, '--seqs').map((value) => positiveSequence(value, '--seqs')) })
+        }
+      };
+    }
     case 'send':
       return {
         name: 'mailbox_send',
@@ -680,7 +689,7 @@ function cliUsage() {
     '  listen [--deadline-s N]   blocks until mail, then EXITS (for wake-on-exit runtimes)',
     '  status',
     '  inbox [--all] [--after-seq N]',
-    '  read [--all]',
+    '  read [--all] [--seqs N[,N...]]',
     '  send --to AGENT --subject TEXT (--body-file PATH | --body TEXT) [--kind KIND]',
     '  supersede --seq N --by N --reason TEXT',
     '  claim --paths PATH[,PATH...] [--why TEXT]',
@@ -822,7 +831,7 @@ function validateCliArguments(command: string, args: string[]) {
   const commandValues: Record<string, string[]> = {
     status: [],
     inbox: ['--after-seq'],
-    read: [],
+    read: ['--seqs'],
     send: ['--to', '--kind', '--subject', '--body', '--body-file'],
     supersede: ['--seq', '--by', '--reason'],
     claim: ['--paths', '--why'],

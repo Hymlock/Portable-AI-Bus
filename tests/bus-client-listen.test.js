@@ -202,10 +202,21 @@ test('real harness peek is non-destructive and acknowledgement commits only its 
   const late = await server.mailbox.send({
     from: 'sender', to: 'worker', subject: 'late arrival', body: 'after the model batch was presented'
   });
-  const acknowledged = await client.acknowledge('worker', presented.length);
+  const acknowledged = await client.acknowledge('worker', presented.map((message) => message.seq));
   assert.deepEqual(acknowledged.map((message) => message.seq), presented.map((message) => message.seq));
   assert.deepEqual((await server.mailbox.inbox('worker')).map((message) => message.seq), [late.seq],
     'mail arriving mid-turn must remain unread');
+
+  const correction = await server.mailbox.send({
+    from: 'sender', to: 'worker', subject: 'correction', body: 'must not be consumed by a stale commit'
+  });
+  await assert.rejects(
+    client.acknowledge('worker', [presented[0].seq]),
+    /no longer current unread mail/,
+    'a stale presented sequence must be refused, never replaced with the current queue head'
+  );
+  assert.deepEqual((await server.mailbox.inbox('worker')).map((message) => message.seq), [late.seq, correction.seq]);
+  assert.deepEqual((await client.acknowledge('worker', [correction.seq])).map((message) => message.seq), [correction.seq]);
 
   await client.park('worker', late.seq, 'bounded poison retry exhausted');
   assert.deepEqual((await server.mailbox.inbox('worker')).map((message) => message.seq), []);
