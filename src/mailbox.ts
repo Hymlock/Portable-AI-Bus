@@ -211,6 +211,8 @@ type ClaimInput = {
   agent: string;
   paths: string[];
   why?: string;
+  /** Git repository whose relative paths should also be claimable when the bus root is elsewhere. */
+  repoRoot?: string;
 };
 
 function nowIso() {
@@ -743,8 +745,14 @@ export class MailboxStore {
       const state = await this.loadStateUnsafe();
       this.assertSeated(state, input.agent, 'agent');
       const missing: string[] = [];
+      const claimRoots = input.repoRoot
+        ? [path.resolve(input.repoRoot), this.paths.root]
+        : [this.paths.root];
       for (const requestedPath of requested) {
-        if (!(await this.exists(path.resolve(this.paths.root, requestedPath)))) {
+        const existsInClaimRoot = await Promise.all(
+          claimRoots.map((root) => this.exists(path.resolve(root, requestedPath)))
+        );
+        if (!existsInClaimRoot.some(Boolean)) {
           missing.push(requestedPath);
         }
       }
@@ -1792,7 +1800,8 @@ async function runCli(argv = process.argv.slice(2)) {
       const claims = await store.claim({
         agent: stringArg(args, 'agent', true),
         paths: listArg(args, 'paths'),
-        why: stringArg(args, 'why')
+        why: stringArg(args, 'why'),
+        repoRoot: stringArg(args, 'repo') || undefined
       });
       console.log(json
         ? JSON.stringify({
