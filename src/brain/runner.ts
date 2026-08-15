@@ -24,7 +24,7 @@ export type BusClient = {
   /** Peek without acknowledging. Used with acknowledge() for transactional wakes. */
   peek?(seat: string): Promise<BrainMessage[]>;
   /** Commit the unread messages after a usable turn. */
-  acknowledge?(seat: string, count: number): Promise<BrainMessage[]>;
+  acknowledge?(seat: string, seqs: number[]): Promise<BrainMessage[]>;
   /** Move one poison message out of delivery while retaining its durable record. */
   park?(seat: string, seq: number, reason: string): Promise<unknown>;
   loadRecovery?(seat: string): Promise<RecoveryCheckpoint | undefined>;
@@ -146,8 +146,8 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
     ackKinds.includes(String((message as { kind?: unknown }).kind ?? '').trim().toLowerCase());
   const transactional = typeof bus.peek === 'function' && typeof bus.acknowledge === 'function';
   const receive = (target: string) => transactional ? bus.peek!(target) : bus.read(target);
-  const commit = (target: string, count: number) =>
-    transactional ? bus.acknowledge!(target, count) : Promise.resolve([]);
+  const commit = (target: string, seqs: number[]) =>
+    transactional ? bus.acknowledge!(target, seqs) : Promise.resolve([]);
 
   let stopped = false;
   void stopSignal?.then(() => {
@@ -224,7 +224,7 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
       // counted, so nothing is lost and the log records that they arrived - they simply do not
       // earn a reply, which is the only property that ends the exchange.
       if (messages.length > 0 && messages.every(isAck)) {
-        await commit(seat, messages.length);
+        await commit(seat, messages.map((message) => message.seq));
         log('wake-acks-only', {
           seat,
           messages: messages.length,
@@ -302,7 +302,7 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
             continue;
           }
           // Peek is non-destructive. It only advances the listener cursor; the original
-          // presented count remains the sole input to acknowledge() below.
+          // presented sequence numbers remain the sole input to acknowledge() below.
           const queued = await receive(seat);
           const next = queued.reduce((highest, message) => Math.max(highest, message.seq), listeningThrough);
           log('mail-queued-during-provider', {
@@ -438,7 +438,7 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
       // peek/acknowledge pair retain their historical destructive-read behaviour.
       let blockedEscalated = false;
       if (messages.length > 0 && result.retainMessages !== true) {
-        await commit(seat, messages.length);
+        await commit(seat, messages.map((message) => message.seq));
         await brain.settleMessages?.(messages.map((message) => message.seq), 'committed');
         for (const message of messages) {
           blockedAttempts.delete(message.seq);
@@ -457,7 +457,7 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
             const detail = result.note?.trim() || 'external condition remained blocked';
             const parkReason = `blocked after ${attempts} cycles: ${detail}`;
             if (bus.park) await bus.park(seat, message.seq, parkReason);
-            else await commit(seat, 1);
+            else await commit(seat, [message.seq]);
             blockedAttempts.delete(message.seq);
             failedAttempts.delete(message.seq);
             await brain.settleMessages?.([message.seq], 'parked');
@@ -482,7 +482,7 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
             // New clients mark the mailbox record explicitly. The acknowledge fallback keeps
             // older transactional clients bounded; either way the original record is retained.
             if (bus.park) await bus.park(seat, message.seq, parkReason);
-            else await commit(seat, 1);
+            else await commit(seat, [message.seq]);
             failedAttempts.delete(message.seq);
             await brain.settleMessages?.([message.seq], 'parked');
             summary.parkedMessages += 1;
