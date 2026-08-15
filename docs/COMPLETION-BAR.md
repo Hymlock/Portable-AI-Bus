@@ -13,7 +13,8 @@ seat that did not write it has attacked it and said so on the record.
 | 2 | consolidation of an assignment's episodes | open — deliberately last |
 | 3 | supersede a sent message | store done `4a9acc5`, **FAILED audit** — no caller can invoke it |
 | 4 | cross-seat reassignment | **CERTIFIED** at `c755a42` (2026-08-14) |
-| 5 | distinguish *stalled* from *spent* | **CERTIFIED** at `78ffe75`+`48d24f4` (2026-08-14) |
+| 5 | distinguish *stalled* from *spent* | **CERTIFIED** at `78ffe75`+`48d24f4` — separates SPENT from STALLED; **BROKEN not covered** |
+| 11 | a broken link reports as *spent* | open — measured 2026-08-15 |
 | 6 | claim guard — claims unsatisfiable against repo paths | **fixed** across `08da916`+`21ed962`+`1b1765d`, deployed, audit running |
 | 9 | a detector whose only sink is a log | open — measured 2026-08-14 |
 | 10 | authorisation does not survive a wake | open — measured 2026-08-14 |
@@ -442,6 +443,67 @@ Certification (auditor's own instrument, every result read from persisted ledger
 
 The exhaustion row is the one that mattered. If everything had become a stall, the ambiguity
 would have moved rather than gone — and that ambiguity cost hours in both directions.
+
+## Item 11 — a broken link reports as *spent*
+
+Measured 2026-08-15 02:43, during an outage that stopped both seats.
+
+After a restart, both seats reported `chain-exhausted`, handed the baton away as **"out of
+providers"**, and dropped into `wake-acks-only` — emitting a dozen mechanical echo acks while
+nothing worked. Neither was out of providers. The real cause was in the note field:
+
+```
+ConPTY unavailable: Cannot find module 'node-pty'  ->  link-failed  ->  chain-exhausted
+```
+
+`node_modules/node-pty` was a **shell**: `deps/`, `prebuilds/`, `third_party/`, no entry point
+— a partial install, almost certainly a remnant of a bundled dependency. `require()` failed, so
+every provider link failed, so the chain concluded exhaustion. Meanwhile the same provider's
+CLI answered `PONG` in 3.7 s, exit 0, fully funded.
+
+**There are three conditions, not two, and all three currently surface as `chain-exhausted`:**
+
+| condition | truth | remedy |
+|---|---|---|
+| **SPENT** | no credits, 402 | reassign the seat, wait for reset |
+| **STALLED** | provider slow but alive | wait — 33 of 37 resolved on 2026-08-14 |
+| **BROKEN** | transport or dependency failure | fix the machine, restart |
+
+Item 5 separated SPENT from STALLED and that certification **stands** — its gates tested what
+was specified. The auditor agreed the record should narrow rather than reopen: *"Adding BROKEN
+does not invalidate the item 5 gates I ran… I agree the record should say separates SPENT from
+STALLED; BROKEN is not covered."*
+
+**BROKEN produces the most confidently wrong answer of the three.** "Out of providers" is
+complete, plausible, and sends an operator to check billing while a missing npm module sits
+unread in the note. This is not hypothetical: on 2026-08-14 the planner attributed a seat's
+behaviour to credits when it was mechanical, then to mechanics when it was a genuine 402.
+
+Wanted: the chain distinguishes a link that **failed** from a chain that is **spent**, and
+surfaces the underlying error rather than burying it in a note.
+
+Gates:
+
+- RED first: reproduce a link failure (rename the module) and show it currently reports as
+  exhaustion;
+- a dependency or transport failure reports as BROKEN, with the underlying error visible;
+- **genuine 402 exhaustion still reports as SPENT** — the same regression gate that kept item 5
+  honest, one layer down;
+- a slow-but-alive provider still reports as STALLED;
+- **green**: normal operation reports none of the three.
+
+### Two conditions measured the same night and NOT explained
+
+Recorded because they are real and unattributed. The auditor explicitly refused to blame
+`node-pty` for either without evidence, which is the right call:
+
+- **The wedge, 22:26–22:41.** Fourteen minutes of `provider-thinking` with **no child process
+  on the machine** and ledger `open=0`. Every tracked stall that night was a *slow call that
+  returned* (258–575 s, `outcome=returned`). If `stall-start` only fires from a timer inside a
+  live call, a call that never really starts is invisible.
+- **`409 lease_held` surviving a restart.** Both seats: *"Seat &lt;x&gt; already has a live worker
+  lease"* — after the processes holding those leases were killed. Retriable, and it did retry,
+  but a lease that outlives its holder deserves a look.
 
 ## The rule that produced every finding here
 
