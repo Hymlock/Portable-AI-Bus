@@ -11,7 +11,23 @@
  * user already pays for. The others exist so a seat is never blocked on one vendor's tooling.
  */
 
-import { processAvailable, runProcess } from './process-host';
+import { processAvailable, runProcess, type ProcessResult } from './process-host';
+
+/**
+ * Keep the process-host failure TEXT so `classifyFailure` can tell BROKEN from SPENT.
+ *
+ * cli/exec used to return `{ text: '', isError: true }` when stdout was empty, which
+ * collapsed a missing node-pty into "provider reported an error" and then into
+ * chain-exhausted / out of providers. Codex and grok already forwarded stderr; this
+ * helper is the same rule for every adapter.
+ */
+export function providerFailureText(result: ProcessResult, fallback: string): string {
+  const detail = (result.stderr || result.stdout || fallback).replace(/\s+/g, ' ').trim();
+  if (result.failureKind === 'broken' && detail && !/^broken\b/i.test(detail)) {
+    return `BROKEN ${detail}`;
+  }
+  return detail || fallback;
+}
 
 const PROVIDER_STALL_MS = 30_000;
 
@@ -209,9 +225,10 @@ export function cliProvider(options: CliProviderOptions = {}): ModelProvider {
       if (sessionId) args.push('--resume', sessionId);
       args.push(prompt);
 
-      const { code, stdout, stderr } = await run(args, timeoutMs);
+      const result = await run(args, timeoutMs);
+      const { code, stdout } = result;
       if (code !== 0 && !stdout.trim()) {
-        return { text: '', isError: true, ...(stderr ? { } : {}) };
+        return { text: providerFailureText(result, `cli exited ${code}`), isError: true };
       }
       try {
         const parsed = JSON.parse(stdout.slice(stdout.indexOf('{')));
@@ -382,10 +399,11 @@ export function execProvider(options: ExecProviderOptions): ModelProvider {
     },
 
     async ask(prompt, { systemPrompt = '', timeoutMs = options.timeoutMs ?? 300_000 } = {}) {
-      const { code, stdout, stderr } = await run(fill(options.args, prompt, systemPrompt), timeoutMs);
+      const result = await run(fill(options.args, prompt, systemPrompt), timeoutMs);
+      const { code, stdout, stderr } = result;
       if (code !== 0) {
         log('exec-failed', { command: options.command, code, stderr: stderr.slice(0, 200) });
-        return { text: '', isError: true };
+        return { text: providerFailureText(result, `${options.command} exited ${code}`), isError: true };
       }
       if (!options.resultPath) return { text: stdout.trim(), isError: false };
       try {
@@ -530,7 +548,8 @@ export function codexProvider(options: CodexProviderOptions = {}): ModelProvider
       // identical to the other providers is the point: the brain must not know who answered.
       args.push(systemPrompt ? `${systemPrompt}\n\n---\n\n${prompt}` : prompt);
 
-      const { code, stdout, stderr } = await run(args, timeoutMs);
+      const result = await run(args, timeoutMs);
+      const { code, stdout, stderr } = result;
       let answer = '';
       try {
         answer = nodeFs.readFileSync(answerFile, 'utf8').trim();
@@ -540,7 +559,7 @@ export function codexProvider(options: CodexProviderOptions = {}): ModelProvider
       if (code !== 0 || !answer) {
         // The failure TEXT is returned, not swallowed, because `classifyFailure` reads it to
         // decide between backing off and abandoning this link.
-        const detail = (stderr || stdout || `codex exited ${code}`).slice(0, 400);
+        const detail = providerFailureText(result, stderr || stdout || `codex exited ${code}`).slice(0, 400);
         log('codex-failed', { code, detail });
         return { text: detail, isError: true };
       }
@@ -785,7 +804,8 @@ export function grokProvider(options: GrokProviderOptions = {}): ModelProvider {
       const combinedPrompt = systemPrompt ? `${systemPrompt}\n\n---\n\n${prompt}` : prompt;
       const args = buildGrokArgs(combinedPrompt, responseSchema, options.model);
 
-      const { code, stdout, stderr } = await run(args, timeoutMs);
+      const result = await run(args, timeoutMs);
+      const { code, stdout, stderr } = result;
       const { text, error } = extractGrokAnswer(stdout);
 
       // Diagnostic, not a fix. Three parser rewrites today were aimed at shapes I reconstructed
@@ -805,7 +825,7 @@ export function grokProvider(options: GrokProviderOptions = {}): ModelProvider {
       if (error || code !== 0 || !text.trim()) {
         // The failure TEXT is returned rather than swallowed: `classifyFailure` reads it to tell
         // "not signed in" (auth - fall through now) from a rate limit (retry this same link).
-        const detail = (error || stderr || stdout || `grok exited ${code}`).slice(0, 400);
+        const detail = (error || providerFailureText(result, stderr || stdout || `grok exited ${code}`)).slice(0, 400);
         log('grok-failed', { code, detail });
         return { text: detail, isError: true };
       }

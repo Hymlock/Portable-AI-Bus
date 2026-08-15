@@ -536,11 +536,10 @@ test('ATTACK: slow-but-successful first link is not abandoned', async () => {
   assert.equal(result.done, true);
 });
 
-test('ATTACK: every provider exhausted â€” receipt + chain-exhausted note for baton move', async () => {
+test('ATTACK: every provider exhausted — receipt + chain-exhausted note for baton move', async () => {
   const chain = chainProviders([
     failProvider('cli', 'insufficient_quota'),
-    failProvider('api', '401 unauthorized'),
-    throwProvider('exec', 'ENOENT vendor-cli')
+    failProvider('api', '401 unauthorized')
   ]);
   const { api, sent } = tools();
   const brain = createAgentBrain({ seat: 'grok', provider: chain });
@@ -549,11 +548,37 @@ test('ATTACK: every provider exhausted â€” receipt + chain-exhausted note f
   });
   assert.equal(result.done, true);
   assert.equal(result.exhausted, true, 'runner onExhausted / reassignBaton signal');
+  assert.equal(result.broken, undefined);
   assert.match(result.note || '', /chain-exhausted/);
   assert.match(result.note || '', /insufficient_quota/,
     'the durable exhaustion note must preserve enough detail to diagnose the failure');
   assert.equal(sent.length, 2, 'one receipt per message even when the chain is dead');
   assert.equal(sent.every((s) => s.kind === 'ack'), true);
+});
+
+test('ITEM 11: missing node-pty is BROKEN and must not reassign as spent', async () => {
+  const chain = chainProviders([
+    failProvider('grok', "ConPTY unavailable: Cannot find module 'node-pty'")
+  ]);
+  const { api, sent } = tools();
+  const events = [];
+  const brain = createAgentBrain({
+    seat: 'grok',
+    provider: chain,
+    log: (event, data) => events.push({ event, data })
+  });
+  const result = await brain.takeTurn({
+    seat: 'grok', reason: 'mail', messages: [msg(31)], tools: api, budget: 10, log: () => {}
+  });
+  assert.equal(result.done, true);
+  assert.equal(result.broken, true);
+  assert.equal(result.exhausted, false, 'BROKEN must not trip the spent-handoff');
+  assert.match(result.note || '', /^BROKEN:/);
+  assert.match(result.note || '', /Cannot find module 'node-pty'/);
+  assert.equal(events.some((entry) => entry.event === 'chain-broken'), true);
+  assert.equal(events.some((entry) => entry.event === 'provider-exhausted'), false);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].kind, 'ack');
 });
 
 test('receiptPlan never invents vendor-specific content', () => {

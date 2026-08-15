@@ -3,7 +3,7 @@ const test = require('node:test');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { resolveGrokCommand, resolveProvider, extractGrokAnswer, buildGrokArgs } = require('../dist/brain/providers.js');
+const { resolveGrokCommand, resolveProvider, extractGrokAnswer, buildGrokArgs, providerFailureText } = require('../dist/brain/providers.js');
 const { parsePlan } = require('../dist/brain/brains/agent.js');
 const { chainProviders, classifyFailure } = require('../dist/brain/chain.js');
 
@@ -28,6 +28,17 @@ test('the REAL binary is resolved, not the unspawnable npm trampoline', () => {
     if (saved.explicit) process.env.GROK_CLI_PATH = saved.explicit;
     fs.rmSync(home, { recursive: true, force: true });
   }
+});
+
+test('ITEM 11: providerFailureText keeps ConPTY errors visible and marks BROKEN', () => {
+  const text = providerFailureText({
+    code: -1,
+    stdout: '',
+    stderr: "ConPTY unavailable: Cannot find module 'node-pty'",
+    failureKind: 'broken'
+  }, 'grok exited -1');
+  assert.match(text, /^BROKEN /);
+  assert.match(text, /Cannot find module 'node-pty'/);
 });
 
 test('"Not signed in" classifies as auth, not as a generic error', () => {

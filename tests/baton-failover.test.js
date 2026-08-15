@@ -119,6 +119,30 @@ test('exhausted non-holder cannot steal baton and a holder hands off only once',
   assert.equal(secondInbox.filter((m) => m.kind === 'handoff').length, 1, 'no repeated handoff storm');
 });
 
+test('ITEM 11: BROKEN detail does not announce out of providers or move the baton', async (t) => {
+  const { root, mailbox } = await store();
+  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 10 }));
+  await mailbox.send({ from: 'grok', to: 'claude', kind: 'note', subject: 'drive', body: 'x' });
+
+  const logs = [];
+  const holder = createExhaustionHandler({
+    seat: 'claude',
+    root,
+    log: (event, data) => logs.push({ event, data })
+  });
+  await holder({
+    seat: 'claude',
+    detail: "BROKEN:ConPTY unavailable: Cannot find module 'node-pty'"
+  });
+
+  assert.equal((await mailbox.status()).baton.holder, 'claude', 'holder stays; remedy is fix the machine');
+  assert.equal(logs.some((entry) => entry.event === 'chain-broken'), true);
+  assert.match(logs.find((entry) => entry.event === 'chain-broken').data.error, /Cannot find module/);
+  const inbox = await mailbox.inbox('codex');
+  assert.equal(inbox.filter((m) => m.kind === 'handoff').length, 0);
+  assert.equal(inbox.some((m) => /out of providers/.test(m.subject || '')), false);
+});
+
 test('mailbox CLI exposes guarded reassign recovery', async (t) => {
   const { root, mailbox } = await store();
   t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 10 }));

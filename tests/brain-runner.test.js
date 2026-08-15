@@ -158,6 +158,37 @@ test('a spent chain hands the baton off instead of going quiet', async () => {
   assert.equal(summary.stoppedBy, 'maxWakes', 'exhaustion must not kill the runner - credit may return');
 });
 
+test('ITEM 11: a broken chain does not hand the baton as spent', async () => {
+  const { bus } = makeBus({ script: [[msg(1, 'do work')]] });
+  const handoffs = [];
+  const events = [];
+  const brain = {
+    name: 'broken-transport',
+    async takeTurn() {
+      return {
+        done: true,
+        exhausted: false,
+        broken: true,
+        note: "BROKEN:ConPTY unavailable: Cannot find module 'node-pty'"
+      };
+    }
+  };
+  await runBrain({
+    seat: 'claude',
+    brain,
+    bus,
+    maxWakes: 1,
+    log: (event, data) => events.push({ event, data }),
+    onExhausted: async (info) => { handoffs.push(info); }
+  });
+
+  assert.equal(handoffs.length, 0, 'BROKEN must not invoke the spent-handoff');
+  const broken = events.find((entry) => entry.event === 'chain-broken');
+  assert.ok(broken);
+  assert.match(broken.data.error, /Cannot find module 'node-pty'/);
+  assert.equal(events.some((entry) => entry.event === 'chain-exhausted'), false);
+});
+
 test('a failing handoff handler does not take the runner with it', async () => {
   const { bus } = makeBus({ script: [[msg(1, 'go')]] });
   const brain = { name: 'broke', async takeTurn() { return { done: true, exhausted: true }; } };

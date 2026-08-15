@@ -7,7 +7,7 @@
  */
 
 import { Brain, BrainFactory, BrainMessage, BrainTools, WakeContext, WakeEvidence, WakeResult } from '../contract';
-import { ChainReply } from '../chain';
+import { ChainReply, classifyGiveUp, visibleGiveUpError } from '../chain';
 import { ModelProvider, ModelReply } from '../providers';
 import { EvidenceRecord, formatEvidenceForPrompt, isVerifierKind } from '../../evidence';
 
@@ -764,13 +764,23 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
       // executing this wake.
       const effectiveSystemPrompt = systemPrompt ?? buildDefaultSystem(knownSeats[0] ?? seat);
 
-      const exhaustionNote = (reply: ChainReply) =>
-        `chain-exhausted:attempts=${(reply.attempts ?? [])
+      const attemptSummary = (reply: ChainReply) =>
+        (reply.attempts ?? [])
           .map((a: { kind: string; reason?: string; detail?: string }) => {
             const detail = a.detail?.replace(/\s+/g, ' ').trim().slice(0, 160);
             return `${a.kind}:${a.reason ?? 'error'}${detail ? `(${detail})` : ''}`;
           })
-          .join(',') || 'unreported'}`;
+          .join(',') || 'unreported';
+      const exhaustionNote = (reply: ChainReply) =>
+        `chain-exhausted:attempts=${attemptSummary(reply)}`;
+      const brokenNote = (reply: ChainReply) => {
+        const error = visibleGiveUpError(reply.attempts ?? []).replace(/^BROKEN[:\s]+/i, '');
+        return `BROKEN:${error} attempts=${attemptSummary(reply)}`;
+      };
+      const mixedNote = (reply: ChainReply) =>
+        `MIXED:${visibleGiveUpError(reply.attempts ?? [])} attempts=${attemptSummary(reply)}`;
+      const giveUpFrom = (reply: ChainReply) =>
+        reply.giveUp ?? classifyGiveUp(reply.attempts ?? []) ?? 'mixed';
       const durableNote = (note?: string) => {
         const base = note?.trim() || 'ok';
         return servedBy && !base.includes(`servedBy=${servedBy}`)
@@ -892,10 +902,30 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
         if (typeof chain.servedBy === 'string') servedBy = chain.servedBy;
         else if (!reply.isError && reply.text.trim()) servedBy = provider.kind;
         if (chain.exhausted === true) {
-          log('provider-exhausted', { seat, attempts: chain.attempts });
+          const giveUp = giveUpFrom(chain);
           const plan = receiptPlan(seat, messages);
           await executeTrackedPlan(plan);
-          // exhausted:true is the runner signal for onExhausted â†’ reassignBaton (5af3b1c).
+          if (giveUp === 'broken') {
+            log('chain-broken', { seat, error: visibleGiveUpError(chain.attempts ?? []), attempts: chain.attempts });
+            return {
+              done: true,
+              exhausted: false,
+              broken: true,
+              note: brokenNote(chain),
+              retainMessages: true
+            };
+          }
+          if (giveUp === 'mixed') {
+            log('chain-mixed', { seat, error: visibleGiveUpError(chain.attempts ?? []), attempts: chain.attempts });
+            return {
+              done: true,
+              exhausted: false,
+              note: mixedNote(chain),
+              retainMessages: true
+            };
+          }
+          log('provider-exhausted', { seat, attempts: chain.attempts });
+          // exhausted:true is the runner signal for onExhausted → reassignBaton (5af3b1c).
           return {
             done: true,
             exhausted: true,
@@ -942,9 +972,29 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
             if (typeof repairChain.servedBy === 'string') servedBy = repairChain.servedBy;
             else if (!repair.isError && repair.text.trim()) servedBy = provider.kind;
             if (repairChain.exhausted === true) {
-              log('provider-exhausted', { seat, phase: 'repair', attempts: repairChain.attempts });
+              const giveUp = giveUpFrom(repairChain);
               const fallback = receiptPlan(seat, messages);
               await executeTrackedPlan(fallback);
+              if (giveUp === 'broken') {
+                log('chain-broken', { seat, phase: 'repair', error: visibleGiveUpError(repairChain.attempts ?? []), attempts: repairChain.attempts });
+                return {
+                  done: true,
+                  exhausted: false,
+                  broken: true,
+                  note: brokenNote(repairChain),
+                  retainMessages: true
+                };
+              }
+              if (giveUp === 'mixed') {
+                log('chain-mixed', { seat, phase: 'repair', error: visibleGiveUpError(repairChain.attempts ?? []), attempts: repairChain.attempts });
+                return {
+                  done: true,
+                  exhausted: false,
+                  note: mixedNote(repairChain),
+                  retainMessages: true
+                };
+              }
+              log('provider-exhausted', { seat, phase: 'repair', attempts: repairChain.attempts });
               return {
                 done: true,
                 exhausted: true,

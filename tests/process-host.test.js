@@ -167,7 +167,18 @@ test('Windows fails closed when ConPTY cannot load', async () => {
 
   assert.equal(result.code, -1);
   assert.match(result.stderr, /ConPTY unavailable: native addon mismatch/);
+  assert.equal(result.failureKind, 'broken', 'callers must see BROKEN, not a generic exit');
   assert.equal(spawnCalled, false, 'must not silently fall back to a flashing Windows spawn');
+});
+
+test('ITEM 11: missing node-pty is a broken ConPTY load, not a spent provider', async () => {
+  const result = await runProcess('provider.exe', [], { timeoutMs: 1_000 }, {
+    platform: 'win32',
+    loadPty: () => { throw new Error("Cannot find module 'node-pty'"); }
+  });
+  assert.equal(result.code, -1);
+  assert.equal(result.failureKind, 'broken');
+  assert.match(result.stderr, /ConPTY unavailable: Cannot find module 'node-pty'/);
 });
 
 test('non-Windows process host preserves stdout and stderr pipes', async () => {

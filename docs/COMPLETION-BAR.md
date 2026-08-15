@@ -19,7 +19,7 @@ seat that did not write it has attacked it and said so on the record.
 | 8 | an ack is not a commitment | open — observed three times on 2026-08-14 |
 | 9 | a detector whose only sink is a log | implemented `f3798fe`, **not certified** — notice file + bus-tick; still no auto-restart |
 | 10 | authorisation does not survive a wake | open — measured 2026-08-14 |
-| 11 | a broken link reports as *spent* | open — measured 2026-08-15 |
+| 11 | a broken link reports as *spent* | implemented, **not certified** — SPENT / STALLED / BROKEN split; auditor still required |
 
 Items 1–7 were the original bar. **Items 8–11 were all added on 2026-08-14/15 from measured
 failures, not planning** — three of the four were found by the system failing in front of us
@@ -497,6 +497,40 @@ behaviour to credits when it was mechanical, then to mechanics when it was a gen
 
 Wanted: the chain distinguishes a link that **failed** from a chain that is **spent**, and
 surfaces the underlying error rather than burying it in a note.
+
+Implemented 2026-08-15 (implementer = grok, **not certified**):
+
+- `classifyFailure` treats `Cannot find module` / `ConPTY unavailable` as `unavailable`.
+  Bare `402 Payment Required` is quota, so it cannot become BROKEN or mixed.
+- `classifyGiveUp` inspects the attempt vector: all quota/auth → SPENT; all unavailable or
+  transport `error` → BROKEN; mixed → MIXED. Mixed does not become "out of providers".
+- give-up logs `chain-broken` / `chain-mixed` / `chain-exhausted`. The broken event carries
+  `error` at the top level, not only in a note.
+- process-host marks ConPTY/load/spawn failures `failureKind: 'broken'`; providers no longer
+  swallow that stderr.
+- the agent returns `broken: true, exhausted: false` for BROKEN, so the runner does not call
+  `onExhausted` and the handler cannot announce "out of providers".
+- a handler that is still given a `BROKEN:` detail refuses the spent-handoff.
+
+RED-first was measured, not inferred. Against committed `ac18943` (item 11 reverted),
+`node_modules/node-pty` was renamed and a real `runProcess` + chain + `takeTurn` wake ran:
+
+```
+require: Cannot find module 'node-pty'
+stderr:  ConPTY unavailable: Cannot find module 'node-pty'
+failureKind: null
+classified: error
+chain event: chain-exhausted
+wake: exhausted=true, broken=null
+note: chain-exhausted:attempts=grok:error(ConPTY unavailable: Cannot find module 'node-pty' ...)
+```
+
+Same rename after the fix: `failureKind=broken`, `classified=unavailable`, `giveUp=broken`,
+event `chain-broken`, wake `exhausted=false broken=true`, note `BROKEN:ConPTY unavailable:
+Cannot find module 'node-pty' ...`. Module restored after both runs.
+
+The two unexplained conditions (the 22:26 wedge, `409 lease_held` after restart) remain
+unattributed. They are not this fix. They are also not the same fault as each other.
 
 Gates:
 

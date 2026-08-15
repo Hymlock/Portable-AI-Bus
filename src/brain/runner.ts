@@ -415,7 +415,13 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
       // purpose: an error is a bad wake, exhaustion is a seat that cannot have a good one.
       // A resolved stall is not this signal. Slow and spent are different measurements;
       // logging one must not suppress or replace the other.
-      if (result.exhausted) {
+      // BROKEN is a third state: transport/dependency failure. Do not announce SPENT or
+      // reassign as "out of providers" — the error must be visible on the event itself.
+      if (result.broken) {
+        log('chain-broken', { seat, error: result.note ?? 'provider transport failed' });
+        if (workId) await bus.closeRecovery?.(seat, workId, 'broken');
+        recovery = undefined;
+      } else if (result.exhausted) {
         log('chain-exhausted', { seat, note: result.note });
         try {
           await options.onExhausted?.({ seat, detail: result.note ?? 'all providers spent' });

@@ -124,6 +124,11 @@ export type WakeResult = {
    */
   exhausted?: boolean;
   /**
+   * Transport or dependency failure, not an empty wallet. Distinct from `exhausted`:
+   * the remedy is fix-the-machine, not reassign-because-spent.
+   */
+  broken?: boolean;
+  /**
    * The wake did not produce a usable plan, so mail presented to it must remain unread.
    * The runner normally commits a transactional inbox read after the turn succeeds.
    */

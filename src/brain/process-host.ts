@@ -5,10 +5,17 @@ import os from 'node:os';
 import path from 'node:path';
 import { StallLedger } from './stall-ledger';
 
+export type ProcessFailureKind = 'broken';
+
 export type ProcessResult = {
   code: number;
   stdout: string;
   stderr: string;
+  /**
+   * Transport or dependency failure. Distinct from a provider that answered "no credits".
+   * Callers must surface this as BROKEN, not as chain-exhausted / out of providers.
+   */
+  failureKind?: ProcessFailureKind;
 };
 
 export type ProcessOutcome = 'returned' | 'timed-out' | 'exited';
@@ -166,12 +173,22 @@ async function runConPty(
   try {
     pty = loadPty();
   } catch (error) {
-    return { code: -1, stdout: '', stderr: `ConPTY unavailable: ${errorMessage(error)}` };
+    return {
+      code: -1,
+      stdout: '',
+      stderr: `ConPTY unavailable: ${errorMessage(error)}`,
+      failureKind: 'broken'
+    };
   }
 
   const executable = resolveWindowsExecutable(command, options.env ?? process.env, options.cwd);
   if (!executable) {
-    return { code: -1, stdout: '', stderr: `Command not found: ${command}` };
+    return {
+      code: -1,
+      stdout: '',
+      stderr: `Command not found: ${command}`,
+      failureKind: 'broken'
+    };
   }
 
   let captureDir: string;
@@ -184,7 +201,12 @@ async function runConPty(
     );
     fs.writeFileSync(path.join(captureDir, 'launch-script.ps1'), powerShellScriptLauncher, 'utf8');
   } catch (error) {
-    return { code: -1, stdout: '', stderr: `ConPTY capture setup failed: ${errorMessage(error)}` };
+    return {
+      code: -1,
+      stdout: '',
+      stderr: `ConPTY capture setup failed: ${errorMessage(error)}`,
+      failureKind: 'broken'
+    };
   }
 
   const requestPath = path.join(captureDir, 'request.json');
@@ -212,7 +234,12 @@ async function runConPty(
       );
     } catch (error) {
       removeCaptureDir(captureDir);
-      resolve({ code: -1, stdout: '', stderr: `ConPTY spawn failed: ${errorMessage(error)}` });
+      resolve({
+        code: -1,
+        stdout: '',
+        stderr: `ConPTY spawn failed: ${errorMessage(error)}`,
+        failureKind: 'broken'
+      });
       return;
     }
 
@@ -418,7 +445,12 @@ async function runSpawn(
         stdio: ['ignore', 'pipe', 'pipe']
       });
     } catch (error) {
-      resolve({ code: -1, stdout: '', stderr: errorMessage(error) });
+      resolve({
+        code: -1,
+        stdout: '',
+        stderr: errorMessage(error),
+        failureKind: 'broken'
+      });
       return;
     }
 
@@ -436,7 +468,12 @@ async function runSpawn(
     };
     child.stdout.on('data', (chunk) => { stdout += String(chunk); });
     child.stderr.on('data', (chunk) => { stderr += String(chunk); });
-    child.once('error', (error) => finish({ code: -1, stdout, stderr: errorMessage(error) }));
+    child.once('error', (error) => finish({
+      code: -1,
+      stdout,
+      stderr: errorMessage(error),
+      failureKind: 'broken'
+    }));
     child.once('close', (code) => finish({ code: code ?? -1, stdout, stderr }));
     timer = setTimeout(() => {
       finish({ code: 124, stdout, stderr: stderr || 'Process timed out.' });

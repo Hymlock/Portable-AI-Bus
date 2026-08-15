@@ -21,15 +21,22 @@ export type Attempt = {
   detail?: string;
 };
 
+export type GiveUpKind = 'spent' | 'broken' | 'mixed';
+
 export type ChainReply = ModelReply & {
   /** Which link answered. Required by the goal: a chain must record who served. */
   servedBy?: ProviderKind;
   attempts: Attempt[];
   /**
    * Every link failed. Distinct from `isError`, which means a provider answered badly.
-   * This is the signal a seat is out of options and the baton should move.
+   * This is the signal a seat is out of options. `giveUp` says whether that is SPENT,
+   * BROKEN, or mixed — `exhausted` alone used to collapse all three into "out of providers".
    */
   exhausted: boolean;
+  /** Why the chain gave up. Absent when a link served the reply. */
+  giveUp?: GiveUpKind;
+  /** True when every failed link is a transport/dependency failure, not a credit/auth miss. */
+  broken?: boolean;
 };
 
 export type FailureReason =
@@ -64,13 +71,46 @@ export function classifyFailure(detail: string): FailureReason {
   // Treating a transient throttle as exhaustion is worse than the reverse: it burns a working
   // provider and moves the baton for nothing.
   if (/rate.?limit|429|too many requests|overloaded|slow down|session limit|too many .{0,20}(session|concurrent|parallel)|limit .{0,12}reset/.test(text)) return 'rate-limit';
-  if (/quota|credit|billing|insufficient_quota|out of tokens|spending limit|usage limit|reached your (usage )?limit/.test(text)) return 'quota';
+  if (/\b402\b|payment required|quota|credit|billing|insufficient_quota|out of tokens|spending limit|usage limit|reached your (usage )?limit/.test(text)) return 'quota';
   // "Not signed in" is the xAI CLI's wording, and it matched none of the patterns below - it
   // would have classified as a generic `error`, which falls through identically but reports a
   // useless reason to whoever reads the log.
   if (/unauthor|forbidden|401|403|api key|apikey|not logged in|not signed in|sign in|authentication|credential/.test(text)) return 'auth';
-  if (/enoent|not found|not installed|command not found|econnrefused|unreachable/.test(text)) return 'unavailable';
+  if (
+    /enoent|not found|not installed|command not found|econnrefused|unreachable|cannot find module|module not found|conpty unavailable|conpty spawn failed|conpty capture setup failed/.test(text)
+  ) return 'unavailable';
   return 'error';
+}
+
+const SPENT_REASONS: FailureReason[] = ['quota', 'auth'];
+
+function isTransportDetail(detail: string): boolean {
+  const text = detail.toLowerCase();
+  return /conpty|cannot find module|module not found|econnreset|econnrefused|econnaborted|socket hang up|enoent|not installed|command not found/.test(text);
+}
+
+function isBrokenAttempt(attempt: Attempt): boolean {
+  if (attempt.reason === 'unavailable') return true;
+  if (attempt.reason === 'error' && isTransportDetail(attempt.detail ?? '')) return true;
+  return false;
+}
+
+function isSpentAttempt(attempt: Attempt): boolean {
+  return SPENT_REASONS.includes(attempt.reason as FailureReason);
+}
+
+/** Inspect the failed attempt vector. Do not collapse mixed reasons to "out of providers". */
+export function classifyGiveUp(attempts: Attempt[]): GiveUpKind | undefined {
+  const failed = attempts.filter((attempt) => !attempt.ok);
+  if (failed.length === 0) return undefined;
+  if (failed.every(isSpentAttempt)) return 'spent';
+  if (failed.every(isBrokenAttempt)) return 'broken';
+  return 'mixed';
+}
+
+export function visibleGiveUpError(attempts: Attempt[]): string {
+  const failed = attempts.filter((attempt) => !attempt.ok && attempt.detail);
+  return failed.map((attempt) => attempt.detail).find(Boolean) ?? 'provider transport failed';
 }
 
 export type ChainOptions = {
@@ -180,8 +220,23 @@ export function chainProviders(links: ModelProvider[], options: ChainOptions = {
       if (last && !last.ok && last.reason && !fallThroughOn.has(last.reason)) break;
     }
 
-    log('chain-exhausted', { attempts: attempts.map((a) => `${a.kind}:${a.reason}`) });
-    return { text: '', isError: true, attempts, exhausted: true };
+    const giveUp = classifyGiveUp(attempts) ?? 'mixed';
+    const error = visibleGiveUpError(attempts);
+    if (giveUp === 'broken') {
+      log('chain-broken', { error, attempts: attempts.map((a) => `${a.kind}:${a.reason}`) });
+    } else if (giveUp === 'mixed') {
+      log('chain-mixed', { error, attempts: attempts.map((a) => `${a.kind}:${a.reason}`) });
+    } else {
+      log('chain-exhausted', { attempts: attempts.map((a) => `${a.kind}:${a.reason}`) });
+    }
+    return {
+      text: '',
+      isError: true,
+      attempts,
+      exhausted: true,
+      giveUp,
+      broken: giveUp === 'broken'
+    };
   }
 
   const chained: ModelProvider & { ask: typeof ask } = {

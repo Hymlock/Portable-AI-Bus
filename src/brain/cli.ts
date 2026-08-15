@@ -33,6 +33,13 @@ export function createExhaustionHandler(options: ExhaustionHandlerOptions) {
   let lastHandoffAt = 0;
   const handoffCooldownMs = 5 * 60_000;
   return async ({ detail }: { seat: string; detail: string }) => {
+    // Defense: a caller that still routes BROKEN through this handler must not
+    // announce "out of providers". The runner should not invoke us for broken
+    // wakes; if it does, refuse the spent-handoff and surface the error.
+    if (/^(BROKEN\b|chain-broken\b)/i.test(detail.trim())) {
+      log('chain-broken', { seat, error: detail });
+      return;
+    }
     if (Date.now() - lastHandoffAt < handoffCooldownMs) {
       log('exhausted-handoff-suppressed', { seat, detail });
       return;

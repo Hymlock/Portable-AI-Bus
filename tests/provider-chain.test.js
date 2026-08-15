@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { chainProviders, classifyFailure } = require('../dist/brain/chain.js');
+const { chainProviders, classifyFailure, classifyGiveUp } = require('../dist/brain/chain.js');
 
 const ok = (kind, text) => ({
   kind,
@@ -115,11 +115,65 @@ test('failure classification covers the shapes providers actually emit', () => {
   assert.equal(classifyFailure("You've hit your session limit · resets 2:50pm"), 'rate-limit');
   assert.equal(classifyFailure('too many concurrent sessions'), 'rate-limit');
   assert.equal(classifyFailure('You have run out of credits'), 'quota');
+  assert.equal(classifyFailure('402 Payment Required'), 'quota',
+    'bare HTTP 402 must stay SPENT, not collapse into BROKEN or mixed');
   assert.equal(classifyFailure('429 Too Many Requests'), 'rate-limit');
   assert.equal(classifyFailure('401 Unauthorized'), 'auth');
   assert.equal(classifyFailure('ENOENT'), 'unavailable');
+  assert.equal(classifyFailure("ConPTY unavailable: Cannot find module 'node-pty'"), 'unavailable',
+    'the measured 2026-08-15 outage string must not collapse to generic error');
+  assert.equal(classifyFailure("Cannot find module 'node-pty'"), 'unavailable');
   assert.equal(classifyFailure('something nobody predicted'), 'error',
     'an unknown failure must still classify, and still fall through');
+});
+
+test('ITEM 11 RED-then-green: a missing node-pty reports BROKEN, not SPENT', async () => {
+  const measured = "ConPTY unavailable: Cannot find module 'node-pty'";
+  const events = [];
+  const reply = await chainProviders([
+    fails('grok', measured)
+  ], { log: (event, data) => events.push({ event, data }) }).ask('ping');
+
+  assert.equal(classifyGiveUp(reply.attempts), 'broken');
+  assert.equal(reply.giveUp, 'broken');
+  assert.equal(reply.broken, true);
+  assert.equal(reply.exhausted, true, 'nobody served; exhausted still means the chain gave up');
+  const broken = events.find((entry) => entry.event === 'chain-broken');
+  assert.ok(broken, 'operator-visible event must be chain-broken');
+  assert.match(broken.data.error, /Cannot find module 'node-pty'/);
+  assert.equal(events.some((entry) => entry.event === 'chain-exhausted'), false,
+    'must not announce SPENT / out of providers for a transport failure');
+});
+
+test('ITEM 11 regression: a genuine 402 still reports SPENT', async () => {
+  for (const detail of [
+    '402 insufficient_quota - you have run out of credits',
+    '402 Payment Required'
+  ]) {
+    const events = [];
+    const reply = await chainProviders([
+      fails('cli', detail)
+    ], { log: (event, data) => events.push({ event, data }) }).ask('ping');
+
+    assert.equal(reply.giveUp, 'spent', detail);
+    assert.equal(reply.broken, false, detail);
+    assert.equal(reply.exhausted, true, detail);
+    assert.equal(events.some((entry) => entry.event === 'chain-exhausted'), true, detail);
+    assert.equal(events.some((entry) => entry.event === 'chain-broken'), false, detail);
+  }
+});
+
+test('ITEM 11 mixed reasons do not collapse to out of providers', async () => {
+  const events = [];
+  const reply = await chainProviders([
+    fails('cli', 'insufficient_quota'),
+    fails('grok', "ConPTY unavailable: Cannot find module 'node-pty'")
+  ], { log: (event, data) => events.push({ event, data }) }).ask('ping');
+
+  assert.equal(reply.giveUp, 'mixed');
+  assert.equal(reply.broken, false);
+  assert.equal(events.some((entry) => entry.event === 'chain-mixed'), true);
+  assert.equal(events.some((entry) => entry.event === 'chain-exhausted'), false);
 });
 
 test('an empty chain is refused at construction', () => {
