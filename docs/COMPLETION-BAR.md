@@ -11,11 +11,12 @@ seat that did not write it has attacked it and said so on the record.
 |---|---|---|
 | 1 | verified evidence memory | **CERTIFIED** at `ab9807a` (2026-08-14); temporal binding implemented, not certified |
 | 2 | consolidation of an assignment's episodes | open — deliberately last |
-| 3 | supersede a sent message | open |
+| 3 | supersede a sent message | open — specified below |
 | 4 | cross-seat reassignment | **CERTIFIED** at `c755a42` (2026-08-14) |
 | 5 | distinguish *stalled* from *spent* | open — measured 2026-08-14, see below |
 | 6 | claim guard — claims unsatisfiable against repo paths | **fixed** at `08da916`, audit open |
-| 7 | claim schema | open |
+| 7 | claim schema — `why` is optional | open — specified below |
+| 8 | an ack is not a commitment | open — observed twice on 2026-08-14 |
 
 ## Item 1 — certified at `ab9807a`, after failing twice
 
@@ -185,6 +186,86 @@ outcome**, not just an edge:
 Do not conclude a cause from this. Prompt size was the obvious suspect and is **not**
 established — the argv-ceiling story was asserted and withdrawn once already (`81809dc`), and
 five diagnoses today were plausible and wrong. Instrument first.
+
+## Item 3 — supersede a sent message
+
+Supersession exists today for **checkpoints only** — `closeCheckpoints(..., 'superseded by
+work #N')` at `src/mailbox.ts:528, 669, 679`. There is no retract, recall or supersede for
+**sent mail**. Grep finds no such path.
+
+The measured failure: the planner authorised a commit, learned within two minutes that the
+authorisation was wrong, and **could not pull it back**. The implementer acted on the stale
+instruction. Nothing malfunctioned; the message was simply irrevocable once sent.
+
+This is sharper than it looks because of how the seats behave. They are obedient and they act
+on the most recent instruction they can see. An instruction that is wrong and unretractable is
+therefore *more* dangerous here than in a human team, where someone would push back or wait.
+
+Wanted: supersede a sent, unread — or read but unacted — message, so the successor sees the
+correction rather than the original.
+
+Gates:
+
+- superseding an **unread** message means the recipient never sees the original;
+- superseding a message the recipient has already **acted on** does not silently rewrite
+  history — the original and the supersession both remain on the record, as checkpoint
+  supersession already does;
+- a superseded message cannot be acknowledged as if current;
+- **the green case**: an ordinary message with no supersession is delivered unchanged. Without
+  it, a "supersede everything" implementation passes the first three.
+
+## Item 7 — claim schema: `why` is optional, so claims explain nothing
+
+`ClaimInput.why` is `why?: string` (`src/mailbox.ts:213`) and lands as `input.why?.trim() || ''`
+(`:786`). A claim can therefore be held with **no reason at all**.
+
+Meanwhile `src/mailbox.ts:941` states the question a human needs answered is *why the holder
+stopped*, and the baton path already carries a mandatory `why` on every refusal (`:978, 987,
+999, 1018`). The two halves of the same system disagree about whether a reason is required —
+the same shape as item 6, where two halves disagreed about a path root.
+
+That asymmetry matters at exactly the moment it is least convenient: a seat dies holding a
+claim, and the operator finds a held path with an empty string where the explanation should be.
+
+Wanted: make `why` required at the type level and at the CLI, with a migration for existing
+empty claims rather than a silent backfill.
+
+Gates:
+
+- a claim without `why` is refused, at the store and at the CLI;
+- existing empty-`why` claims remain readable and are visibly marked as legacy, not
+  retroactively invented;
+- `why` survives a baton reassignment onto the inheriting seat;
+- **the green case**: a claim with a reason still succeeds through the full path — claim,
+  stage, hook-active commit.
+
+## Item 8 — an acknowledgement is not a commitment
+
+Added 2026-08-14 after **two** occurrences in one session, both with the same seat, both after
+a long context-rich brief:
+
+- acked the item 1 certification (`#1368`), then `wake-idle-skipped` — no probe ran;
+- acked item 6 (`#1423`), then `wake-idle-skipped` twice — nothing reached disk.
+
+Both times a short single-imperative message moved it immediately. That matches the rule
+already recorded in `OPERATOR.md` from separate incidents, so this is the third independent
+confirmation of the shape.
+
+**This is the quietest failure mode on the bus.** `chain-exhausted` announces itself.
+`provider-stalled` announces itself. An ack that produces nothing looks *identical to
+progress* — received, understood, correctly acknowledged — and is only detectable by reading
+the brain log or the working tree. Every instance tonight was caught by a human-driven check.
+
+Likely the same mechanism as item 5, not a second one: **pair the ack with an outcome**, so an
+acknowledgement that never produced work is countable rather than merely invisible. Decide
+that after item 5's ledger lands — if it generalises, this is one more edge on it.
+
+Gates:
+
+- an ack followed by no action is countable without reading the brain log;
+- an ack followed by real work is **not** flagged — the green case, and the one that stops
+  this becoming noise;
+- the counter survives a wake boundary.
 
 ## Ordering
 
