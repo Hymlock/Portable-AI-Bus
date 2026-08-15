@@ -145,50 +145,77 @@ test('restart after done:false recovers the exact note without resending the bri
   assert.deepEqual(await store.inbox('codex'), [], 'the original brief remains consumed');
 });
 
-test('completion and exhaustion remain closed through two later runner restarts', async (t) => {
-  for (const terminal of ['done', 'exhausted']) {
-    await t.test(terminal, async () => {
-      const root = await fs.mkdtemp(path.join(os.tmpdir(), `pab-recovery-${terminal}-`));
-      t.after(() => fs.rm(root, { recursive: true, force: true }));
-      const store = new MailboxStore(root);
-      await store.ensureInitialized(['claude', 'codex']);
-      const client = recoveryClient(store);
-      await store.send({ from: 'claude', to: 'codex', kind: 'task', subject: terminal, body: 'reach a terminal state' });
+test('completion remains closed through two later runner restarts', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'pab-recovery-done-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const store = new MailboxStore(root);
+  await store.ensureInitialized(['claude', 'codex']);
+  const client = recoveryClient(store);
+  await store.send({ from: 'claude', to: 'codex', kind: 'task', subject: 'done', body: 'reach a terminal state' });
 
-      await runBrain({
-        seat: 'codex', bus: client,
-        brain: scriptedBrain(async () => ({ done: false, note: `unfinished before ${terminal}` })),
-        maxWakes: 1
-      });
-      await runBrain({
-        seat: 'codex', bus: client,
-        brain: scriptedBrain(async () => terminal === 'done'
-          ? { done: true }
-          : { done: false, exhausted: true, note: 'provider chain spent' }),
-        maxWakes: 1
-      });
-      assert.equal(await store.openRecoveryFor('codex'), undefined);
+  await runBrain({
+    seat: 'codex', bus: client,
+    brain: scriptedBrain(async () => ({ done: false, note: 'unfinished before done' })),
+    maxWakes: 1
+  });
+  await runBrain({
+    seat: 'codex', bus: client,
+    brain: scriptedBrain(async () => ({ done: true })),
+    maxWakes: 1
+  });
+  assert.equal(await store.openRecoveryFor('codex'), undefined);
 
-      const restartContexts = [];
-      for (let restart = 0; restart < 2; restart += 1) {
-        await runBrain({
-          seat: 'codex', bus: client,
-          brain: scriptedBrain(async (context) => {
-            restartContexts.push(context);
-            return { done: true };
-          }),
-          maxWakes: 1
-        });
-        assert.equal(await store.openRecoveryFor('codex'), undefined);
-      }
-      assert.equal(restartContexts.length, 2, 'startup policy may still ask the brain to inspect an idle seat');
-      for (const context of restartContexts) {
-        assert.equal(context.openWork, undefined, `${terminal} work must not resurrect openWork`);
-        assert.equal(context.recoveryData, undefined, `${terminal} work must not resurrect recoveryData`);
-        assert.deepEqual(context.messages, []);
-      }
+  const restartContexts = [];
+  for (let restart = 0; restart < 2; restart += 1) {
+    await runBrain({
+      seat: 'codex', bus: client,
+      brain: scriptedBrain(async (context) => {
+        restartContexts.push(context);
+        return { done: true };
+      }),
+      maxWakes: 1
     });
+    assert.equal(await store.openRecoveryFor('codex'), undefined);
   }
+  assert.equal(restartContexts.length, 2, 'startup policy may still ask the brain to inspect an idle seat');
+  for (const context of restartContexts) {
+    assert.equal(context.openWork, undefined, 'done work must not resurrect openWork');
+    assert.equal(context.recoveryData, undefined, 'done work must not resurrect recoveryData');
+    assert.deepEqual(context.messages, []);
+  }
+});
+
+test('exhaustion retains the checkpoint so credits returning can resume', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'pab-recovery-exhausted-retain-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const store = new MailboxStore(root);
+  await store.ensureInitialized(['claude', 'codex']);
+  const client = recoveryClient(store);
+  const source = await store.send({
+    from: 'claude', to: 'codex', kind: 'task',
+    subject: 'exhausted', body: 'reach a terminal state'
+  });
+
+  await runBrain({
+    seat: 'codex', bus: client,
+    brain: scriptedBrain(async () => ({ done: false, note: 'unfinished before exhausted' })),
+    maxWakes: 1
+  });
+  await runBrain({
+    seat: 'codex', bus: client,
+    brain: scriptedBrain(async () => ({
+      done: false,
+      exhausted: true,
+      retainMessages: true,
+      note: 'provider chain spent'
+    })),
+    maxWakes: 1
+  });
+
+  const checkpoint = await store.openRecoveryFor('codex');
+  assert.ok(checkpoint, 'exhausted must not discard the assignment');
+  assert.equal(checkpoint.workId, source.seq);
+  assert.equal(checkpoint.status, 'open');
 });
 
 test('hostile checkpoint text cannot bypass the parsed action boundary', async (t) => {

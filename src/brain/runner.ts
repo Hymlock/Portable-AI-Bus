@@ -437,8 +437,11 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
       // reassign as "out of providers" — the error must be visible on the event itself.
       if (result.broken) {
         log('chain-broken', { seat, error: result.note ?? 'provider transport failed' });
-        if (workId) await bus.closeRecovery?.(seat, workId, 'broken');
-        recovery = undefined;
+        // BROKEN is a machine failure, not a task outcome. Closing discarded live
+        // assignments (1740, 1722) when node-pty vanished. Retain and resume.
+        if (workId) {
+          log('recovery-kept-open', { seat, workId, reason: 'broken', note: result.note });
+        }
       } else if (result.exhausted) {
         log('chain-exhausted', { seat, note: result.note });
         try {
@@ -446,8 +449,14 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
         } catch (error) {
           log('exhausted-handler-failed', { seat, error: (error as Error)?.message });
         }
-        if (workId) await bus.closeRecovery?.(seat, workId, 'exhausted');
-        recovery = undefined;
+        // Inherit (item 4) already closes the source as "reassigned to X" when a
+        // successor exists. A second close is only live when inherit does not run
+        // — no successor, handler missing, handler throws — which is exactly the
+        // resume-when-credits-return case. Close is not the loop brake:
+        // hasOpenWork already excludes exhausted.
+        if (workId) {
+          log('recovery-kept-open', { seat, workId, reason: 'exhausted', note: result.note });
+        }
       }
 
       // Inbox delivery is transactional. A malformed provider response is not work: the task
@@ -549,10 +558,16 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
           log('recovery-kept-open', { seat, workId, reason: 'courtesy-only-send', note: openWork });
         }
       } else {
-        // Completion and exhaustion both close the continuation. Never leak an older task's
-        // summary into a genuinely idle or unrelated future wake.
+        // Completion closes the continuation. Exhaustion and broken retain the durable
+        // row; they only clear the in-process summary so this seat does not spin.
         openWork = undefined;
-        if (workId && result.retainMessages !== true && !result.exhausted && !blockedEscalated) {
+        if (
+          workId &&
+          result.retainMessages !== true &&
+          !result.exhausted &&
+          !result.broken &&
+          !blockedEscalated
+        ) {
           await bus.closeRecovery?.(seat, workId, result.done ? 'done' : 'settled');
           recovery = undefined;
         }

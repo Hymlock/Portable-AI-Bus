@@ -503,7 +503,14 @@ Gates:
 - the system prompt no longer teaches `done` as wake-scoped;
 - **green**: a wake that genuinely meets its gates still closes — otherwise evaporating work is
   traded for immortal work;
-- exhausted/parked/broken still close, as they do today.
+- **broken and exhausted must NOT close.** BROKEN is a machine failure; the work is
+  untouched. Closing it discarded both live assignments on 2026-08-15 when node-pty
+  vanished (`1740` reason=broken, `1722` reason=broken). Exhausted is the same class:
+  credits returning does not change the task. Inherit (item 4) already closes the
+  source as `reassigned to X` when a successor exists; a second close is only live
+  when inherit does not run — the case that most needs retain. Parked is unchanged
+  (a deliberate decision about the message). The gate that would have caught this:
+  kill the provider mid-assignment and assert the checkpoint SURVIVES.
 
 **Implemented, not certified.** The runner now inspects what was actually sent. A wake whose
 only mailbox products are courtesy kinds (`ack`, `receipt`, `ping`, `note`) keeps the
@@ -511,15 +518,20 @@ checkpoint open even when the brain returns `done:true`. It does **not** set `ha
 so the seat does not spin another model call; the task simply survives the next idle-skip.
 A `report`/`finding` (or any non-courtesy send) plus `done:true` still closes. The production
 prompt in `brains/agent-seat.js` no longer says *"done ends only this wake"* and the copyable
-example is now `done:false` after an ack. The author does not certify it.
+example is now `done:false` after an ack.
+
+The original green case *"exhausted/parked/broken still close"* was wrong and was measured
+wrong: `closeRecovery(..., 'broken')` discarded `1740` and `1722` when node-pty vanished.
+Broken and exhausted now retain; inherit still transfers when a successor exists. The author
+does not certify it.
 
 ## Item 20 — a checkpoint can become unclosable
 
 Measured 2026-08-15 while trying to clear a stale checkpoint by hand.
 
-`closeRecovery` is defined at `mailbox.ts:746` and reachable **only** from `runner.ts` — three
-call sites (`broken`, `exhausted`, `done`/`settled`) via `bus-client.ts:225`. There is **no CLI
-verb, no harness tool, no operator path**.
+`closeRecovery` is defined at `mailbox.ts:746` and reachable **only** from `runner.ts` — the
+remaining runner call site is `done`/`settled` (broken and exhausted now retain) via
+`bus-client.ts:225`. There is **no CLI verb, no harness tool, no operator path**.
 
 Consequence: a checkpoint owned by a seat with no running brain can never be closed by anyone.
 The live example is `1518`, whose open row is held by the chat-interface seat after being

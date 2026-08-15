@@ -143,9 +143,39 @@ test('ITEM 8 GREEN: a wake that reports completed gates still closes', async (t)
   });
 });
 
-test('ITEM 8: exhausted still closes', async (t) => {
+test('ITEM 8 RED: a broken mid-assignment wake leaves the checkpoint open', async (t) => {
+  await withStore(t, 'pab-item8-broken-', async (store, client) => {
+    const source = await store.send({
+      from: 'claude', to: 'grok', kind: 'task',
+      subject: 'work', body: 'transport failed'
+    });
+
+    await runBrain({
+      seat: 'grok',
+      bus: client,
+      brain: scriptedBrain(async (context) => {
+        await context.recordRecoveryAction?.('0:{"kind":"note","subject":"partial","type":"send"}');
+        return {
+          done: true,
+          broken: true,
+          retainMessages: true,
+          note: 'BROKEN:ConPTY unavailable: Cannot find module \'node-pty\''
+        };
+      }),
+      maxWakes: 1
+    });
+
+    const checkpoint = await store.openRecoveryFor('grok');
+    assert.ok(checkpoint, 'BROKEN is a machine failure; closing it discarded 1740 and 1722');
+    assert.equal(checkpoint.workId, source.seq);
+    assert.equal(checkpoint.status, 'open');
+    assert.equal(checkpoint.actionReceipts.length, 1, 'receipts must survive the transport fault');
+  });
+});
+
+test('ITEM 8 RED: an exhausted wake with no successor leaves the checkpoint open', async (t) => {
   await withStore(t, 'pab-item8-exhausted-', async (store, client) => {
-    await store.send({
+    const source = await store.send({
       from: 'claude', to: 'grok', kind: 'task',
       subject: 'work', body: 'cannot think'
     });
@@ -153,23 +183,74 @@ test('ITEM 8: exhausted still closes', async (t) => {
     await runBrain({
       seat: 'grok',
       bus: client,
-      brain: scriptedBrain(async () => ({
-        done: true,
-        exhausted: true,
-        note: 'provider chain spent'
-      })),
+      brain: scriptedBrain(async (context) => {
+        await context.recordRecoveryAction?.('0:{"kind":"note","subject":"partial","type":"send"}');
+        return {
+          done: true,
+          exhausted: true,
+          retainMessages: true,
+          note: 'provider chain spent'
+        };
+      }),
       maxWakes: 1
     });
 
-    assert.equal(await store.openRecoveryFor('grok'), undefined);
+    const checkpoint = await store.openRecoveryFor('grok');
+    assert.ok(checkpoint, 'credits returning does not change the task; close is only live when inherit does not run');
+    assert.equal(checkpoint.workId, source.seq);
+    assert.equal(checkpoint.status, 'open');
+    assert.equal(checkpoint.actionReceipts.length, 1);
   });
 });
 
-test('ITEM 8: broken still closes', async (t) => {
-  await withStore(t, 'pab-item8-broken-', async (store, client) => {
+test('ITEM 8 GREEN: exhausted with a successor still inherits', async (t) => {
+  await withStore(t, 'pab-item8-inherit-', async (store, client) => {
+    const source = await store.send({
+      from: 'claude', to: 'grok', kind: 'task',
+      subject: 'work', body: 'cannot think'
+    });
+
+    await runBrain({
+      seat: 'grok',
+      bus: client,
+      brain: scriptedBrain(async (context) => {
+        await context.recordRecoveryAction?.('0:{"kind":"note","subject":"partial","type":"send"}');
+        return {
+          done: true,
+          exhausted: true,
+          retainMessages: true,
+          note: 'provider chain spent'
+        };
+      }),
+      onExhausted: async () => {
+        const moved = await store.reassignBaton({
+          to: 'codex',
+          reason: 'grok exhausted every provider',
+          expectedFrom: 'grok',
+          force: true
+        });
+        assert.equal(moved.moved, true, moved.why);
+        assert.equal(moved.inheritedWorkId, source.seq);
+      },
+      maxWakes: 1
+    });
+
+    assert.equal(await store.openRecoveryFor('grok'), undefined, 'source must close as reassigned, not as exhausted');
+    const inherited = await store.openRecoveryFor('codex');
+    assert.ok(inherited, 'item 4 inherit must stay green');
+    assert.equal(inherited.workId, source.seq);
+    assert.equal(inherited.inheritedFrom, 'grok');
+    assert.equal(inherited.actionReceipts.length, 1);
+    const previous = (await store.inbox('grok'))[0].recoveryCheckpoints.find((item) => item.seat === 'grok');
+    assert.match(previous.closeReason, /reassigned to codex/);
+  });
+});
+
+test('ITEM 8 GREEN: a later completing report still closes after a broken wake', async (t) => {
+  await withStore(t, 'pab-item8-broken-then-done-', async (store, client) => {
     await store.send({
       from: 'claude', to: 'grok', kind: 'task',
-      subject: 'work', body: 'transport failed'
+      subject: 'work', body: 'transport failed then recovered'
     });
 
     await runBrain({
@@ -178,12 +259,29 @@ test('ITEM 8: broken still closes', async (t) => {
       brain: scriptedBrain(async () => ({
         done: true,
         broken: true,
-        note: 'ConPTY unavailable'
+        retainMessages: true,
+        note: 'BROKEN:ConPTY unavailable'
       })),
       maxWakes: 1
     });
+    assert.ok(await store.openRecoveryFor('grok'), 'broken wake must leave the row for the next attempt');
 
-    assert.equal(await store.openRecoveryFor('grok'), undefined);
+    await runBrain({
+      seat: 'grok',
+      bus: client,
+      brain: scriptedBrain(async (context) => {
+        await context.tools.send({
+          to: 'claude',
+          kind: 'report',
+          subject: 'item landed',
+          body: 'gates passed and committed'
+        });
+        return { done: true, note: 'gates passed' };
+      }),
+      maxWakes: 1
+    });
+
+    assert.equal(await store.openRecoveryFor('grok'), undefined, 'a real report plus done must still close');
   });
 });
 
