@@ -20,6 +20,8 @@ seat that did not write it has attacked it and said so on the record.
 | 9 | a detector whose only sink is a log | **CERTIFIED** at `f3798fe` — notice file + bus-tick; still no auto-restart |
 | 10 | authorisation does not survive a wake | open — measured 2026-08-14 |
 | 11 | a broken link reports as *spent* | **CERTIFIED** at `5352b0d` — SPENT / STALLED / BROKEN split |
+| 12 | a call that never starts is invisible | open — **explained** 2026-08-15, mechanism below |
+| 13 | a claim can be too broad to be useful | open — measured 2026-08-15 |
 
 Items 1–7 were the original bar. **Items 8–11 were all added on 2026-08-14/15 from measured
 failures, not planning** — three of the four were found by the system failing in front of us
@@ -599,6 +601,85 @@ the same code path as the measured link-failed. Separate ledger gap: **stall-sta
 observe a blocked event loop**, because the timer lives on that loop.
 
 `409 lease_held` after restart is a third thing. Not answering it here.
+
+## Item 12 — a call that never starts is invisible
+
+Observed twice as an unexplained "wedge": both seats logging `provider-thinking` for eleven to
+fourteen minutes with **no provider child process** and the stall ledger reading `open=0`.
+Explained on 2026-08-15 by reading node-pty rather than theorising.
+
+**The mechanism.** `runConPty` calls `pty.spawn(node, ['-e', wrapper])`. node-pty's Windows
+constructor is **synchronous**:
+
+1. `PtyStartProcess` → `CreateNamedPipe` + `CreatePseudoConsole` → spawns `conhost.exe --headless`
+2. `fs.openSync(conin)` — blocking
+3. `PtyConnect` → `ConnectNamedPipe(hIn)` then `ConnectNamedPipe(hOut)` — **both blocking, no
+   OVERLAPPED, return values ignored** — and only *then* `CreateProcess` of the wrapper
+4. only after spawn returns: `watchProcessStall()`, `setTimeout(timeoutMs)`, `onExit`
+
+So a block at step 3 leaves a conhost with **no child, no throw, and no timer ever armed**.
+Reproduced: three `runProcess(node -e process.exit(0), timeoutMs=10000)` calls hung past 120 s,
+each leaving a headless conhost, with no wrapper created. `timeoutMs` did not save it because
+**spawn had not returned**.
+
+**Two stall-starts, and neither fires.**
+
+- The **runner's** durable ledger arms `setTimeout(reportStall, 30000)` *before* `takeTurn`, so
+  it does not need a child — but it does need the **event loop**. A synchronous native block
+  holds the loop, so the timer is armed and never runs. That is the measured `open=0`.
+- **process-host's** `watchProcessStall` is armed only *after* spawn returns. Paths that arm
+  nothing at all: `loadPty` throw (item 11), command-not-found, capture-dir failure, spawn
+  throw, and spawn never returning (this item).
+
+**A dead wire found by the ledger's own author:** `providers` never passes
+`stallLedger`/`stallSeat` into `runProcess`, so process-host cannot write the ledger file *even
+when spawn succeeds*. Item 5's certification stands — it tested the runner path, which works —
+but this second path has never been connected. Half-updated system, again.
+
+**A leak in the same layer, which may cause the hang.** `ClosePseudoConsole` runs only in
+`PtyKill`. `finish()` kills the child only on timeout, the success-path test forbids kill, and
+`_$onProcessExit` destroys sockets without closing the HPCON. So **every successful wake leaks
+a conhost** — 50+ observed between 22:46 and 23:42, one per wake, none reaped. More leftovers
+make `ConnectNamedPipe` more likely to wait forever.
+
+**Item 11 stays certified.** Its RED is `loadPty` throwing → code -1 → `failureKind: broken` →
+the chain gives up fast. That path cannot occupy eleven minutes and cannot create a conhost.
+The auditor and the implementer agree these are different faults.
+
+This is the same defect class as the xVASynth wedge in the Ensouled project: **a blocking call
+with no upper bound**, under a comment promising a timeout. Different language, different
+process, identical shape.
+
+Gates:
+
+- RED first: reproduce a spawn that blocks before `CreateProcess` and show nothing fires today;
+- a call that never starts becomes visible — the ledger records it, or a watchdog outside the
+  blocked loop reports it;
+- `ClosePseudoConsole` runs on the success path; conhosts do not accumulate across wakes;
+- `providers` passes the ledger into `runProcess` so the process-host path can actually write;
+- **green**: normal operation still records start and resolution exactly once, and leaks nothing.
+
+## Item 13 — a claim can be too broad to be useful
+
+Measured 2026-08-15 04:10. A seat claimed **`.`** — the repository root — while intending to
+claim the files it was about to edit. Ancestor/descendant coverage worked exactly as designed
+and locked **all three seats out of the entire repository**, with no warning, no expiry, and
+nothing in `doctor` to flag it. It surfaced only because the planner tried to claim a doc and
+was refused.
+
+The cause is mundane: an absolute-path claim had been refused, so the seat switched to
+"workspace-relative", and an empty relative path resolves to the root.
+
+A claim on `.` is **indistinguishable from a legitimate ancestor claim** like `src/`. Both are
+correct by the current rules; one of them is a whole-repo lock. The guard has no notion of a
+claim being too broad, and claims never expire.
+
+Gates:
+
+- a whole-repository claim is refused, or requires an explicit flag, or is flagged loudly by
+  `doctor` — the implementer's call, argued rather than assumed;
+- **ancestor claims below the root keep working** — `src/` must still cover `src/mailbox.ts`;
+- **green**: an ordinary file claim is unaffected.
 
 ## The rule that produced every finding here
 
