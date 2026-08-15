@@ -97,6 +97,20 @@ export const LIFECYCLE_REFUSAL =
 
 const MINT = Symbol('BusObservation.mint');
 
+function deepFreezeClone<T>(value: T): T {
+  if (value === null || typeof value !== 'object') {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return Object.freeze(value.map((item) => deepFreezeClone(item))) as T;
+  }
+  const clone: Record<string, unknown> = {};
+  for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+    clone[key] = deepFreezeClone(nested);
+  }
+  return Object.freeze(clone) as T;
+}
+
 /**
  * World observation minted only by observeCommitDiff / observeRunnerResult /
  * observeLifecycle after they hit git, receipts, or mailbox state.
@@ -113,7 +127,11 @@ export class BusObservation {
       throw new TypeError(PLAIN_OBJECT_REFUSAL);
     }
     this.kind = kind;
-    this.observed = Object.freeze({ ...observed });
+    // Deep-freeze a clone. Object.freeze is shallow: a frozen payload still
+    // leaves nested arrays (changedPaths) writable, which is the same
+    // promotion bypass one level down. Readonly<> is compile-time only.
+    this.observed = deepFreezeClone(observed);
+    Object.freeze(this);
   }
 
   get minted(): boolean {

@@ -528,6 +528,77 @@ test('mailbox lifecycle promotion after a bare setGoal is a refusal, not a promo
   assert.equal((await mailbox.evidence.get(claim.id)).trust, 'untrusted');
 });
 
+test('a minted observation cannot be rewritten into a promotion (a/b/c refuse; d still promotes)', async (t) => {
+  // Gates against compiled dist/evidence.js. TypeScript readonly/private are erased.
+  // a) wholesale replace of observation.observed (Codex 1376, verbatim)
+  // b) in-place push on observed.changedPaths
+  // c) in-place mutation of .sha and .commitExists
+  // d) honest observation whose real diff touches the subject still promotes
+  const { mailbox, assigned, mailboxRoot } = await mailboxHarness(t, 'README.md', 'hello\n');
+  await git(mailboxRoot, 'init');
+  await git(mailboxRoot, 'add', 'README.md');
+  await git(mailboxRoot, 'commit', '-m', 'readme only');
+
+  const claim = await mailbox.recordEvidence({
+    agent: 'grok',
+    subject: 'src/evidence.ts',
+    statement: 'evidence store landed',
+    workId: assigned.seq
+  });
+
+  const observation = await observeCommitDiff(mailboxRoot, claim.subject);
+  assert.equal(observation instanceof BusObservation, true);
+  assert.ok(!observation.observed.changedPaths.includes('src/evidence.ts'));
+  const originalSha = observation.observed.sha;
+  const originalPaths = observation.observed.changedPaths.slice();
+
+  // a) Codex verbatim: replace .observed on a still-branded instance
+  observation.observed = {
+    commitExists: true,
+    sha: 'deadbeef',
+    changedPaths: ['src/evidence.ts']
+  };
+  assert.notEqual(observation.observed.sha, 'deadbeef');
+  assert.ok(!observation.observed.changedPaths.includes('src/evidence.ts'));
+  await assert.rejects(
+    () => mailbox.evidence.promote(claim.id, observation),
+    (error) => error instanceof EvidencePromotionError && /irrelevant diff: missing src\/evidence\.ts/.test(error.message)
+  );
+  assert.equal((await mailbox.evidence.get(claim.id)).trust, 'untrusted');
+  assert.equal((await mailbox.evidence.get(claim.id)).verifier, undefined);
+
+  // b) in-place push on the nested array
+  assert.throws(() => observation.observed.changedPaths.push('src/evidence.ts'), TypeError);
+  assert.deepEqual(observation.observed.changedPaths, originalPaths);
+  await assert.rejects(
+    () => mailbox.evidence.promote(claim.id, observation),
+    (error) => error instanceof EvidencePromotionError && /irrelevant diff: missing src\/evidence\.ts/.test(error.message)
+  );
+  assert.equal((await mailbox.evidence.get(claim.id)).trust, 'untrusted');
+
+  // c) mutate scalar fields in place
+  observation.observed.sha = 'deadbeef';
+  observation.observed.commitExists = false;
+  assert.equal(observation.observed.sha, originalSha);
+  assert.equal(observation.observed.commitExists, true);
+  await assert.rejects(
+    () => mailbox.evidence.promote(claim.id, observation),
+    (error) => error instanceof EvidencePromotionError && /irrelevant diff: missing src\/evidence\.ts/.test(error.message)
+  );
+  assert.equal((await mailbox.evidence.get(claim.id)).trust, 'untrusted');
+
+  // d) honest observation — real HEAD now touches the subject
+  await writeRepoFile(mailboxRoot, 'src/evidence.ts', 'export const slice = 2;\n');
+  await git(mailboxRoot, 'add', 'src/evidence.ts');
+  await git(mailboxRoot, 'commit', '-m', 'evidence store');
+  const honest = await observeCommitDiff(mailboxRoot, claim.subject);
+  assert.ok(honest.observed.changedPaths.includes('src/evidence.ts'));
+  const verified = await mailbox.evidence.promote(claim.id, honest);
+  assert.equal(verified.trust, 'verified');
+  assert.ok(verified.verifier.observed.changedPaths.includes('src/evidence.ts'));
+  assert.doesNotMatch(verified.verifier.inputIdentity, /deadbeef/i);
+});
+
 test('mailbox runner-result is a named refusal even when a passing receipt exists', async (t) => {
   const { mailbox, assigned, mailboxRoot } = await mailboxHarness(t);
   await git(mailboxRoot, 'init');
