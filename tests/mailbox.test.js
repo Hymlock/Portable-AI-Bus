@@ -1,4 +1,4 @@
-﻿const assert = require('node:assert/strict');
+const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
@@ -971,5 +971,75 @@ test('ITEM 18 GREEN CONTROL: an ordinary send with no supersedes is untouched', 
   assert.equal(plain.supersedeOutcome, undefined);
   const inbox = await store.inbox('grok');
   assert.ok(inbox.some((m) => m.seq === plain.seq), 'and it is delivered normally');
+});
+
+
+// ---------------------------------------------------------------------------
+// Item 18, the concurrency case. The claim under test: acknowledge([target]) and
+// send({supersedes: target}) take the SAME store lock, so they cannot interleave between the
+// correction being appended and the target being marked. Only two outcomes are legal:
+//
+//   A. supersession wins  -> correction current, target hidden, ack of target REFUSED
+//   B. ack wins           -> target consumed, correction delivered with target-consumed
+//
+// FORBIDDEN: correction delivered AND the target later acknowledged as a successful
+// supersession. That is T1 returning by another route.
+// ---------------------------------------------------------------------------
+
+test('ITEM 18 RACE: acknowledge and superseding-send have only two legal outcomes', async (t) => {
+  // Own store with round headroom: 40 iterations x 2 sends would trip the shared fixture's cap.
+  const raceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'pab-i18-race-'));
+  t.after(() => removeTree(raceRoot));
+  const store = new MailboxStore(raceRoot);
+  await store.ensureInitialized(['claude', 'grok'], 500);
+  const root = raceRoot;
+  const outcomes = { supersessionWon: 0, ackWon: 0, illegal: 0 };
+
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const original = await store.send({
+      from: 'claude', to: 'grok', kind: 'task', subject: `race-${attempt}`, body: 'original'
+    });
+
+    // Fire both at once. Whichever takes the lock first defines the outcome; the other must
+    // observe a consistent world, never a half-applied one.
+    const [ackResult, sendResult] = await Promise.allSettled([
+      store.acknowledge('grok', [original.seq]),
+      store.send({
+        from: 'claude', to: 'grok', kind: 'task', subject: `correction-${attempt}`,
+        body: 'correction', supersedes: original.seq
+      })
+    ]);
+
+    assert.equal(sendResult.status, 'fulfilled', 'the correction must always be decided, never crash');
+    const correction = sendResult.value;
+    const row = await readMessageFromDisk(root, original.seq);
+
+    if (correction.superseded === true) {
+      // A: supersession won. The target must be marked and must be un-ackable.
+      outcomes.supersessionWon += 1;
+      assert.equal(row.supersededBy, correction.seq);
+      assert.equal(ackResult.status === 'fulfilled' && ackResult.value.length > 0, false,
+        'a target that was superseded must not also have been consumed');
+    } else if (correction.supersedeOutcome === 'target-consumed') {
+      // B: ack won. The target must be consumed and must NOT be marked superseded.
+      outcomes.ackWon += 1;
+      assert.equal(row.supersededBy, undefined,
+        'a consumed target must never gain supersededBy - that is the forbidden state');
+      assert.equal(row.read, true);
+    } else {
+      outcomes.illegal += 1;
+    }
+
+    // Whichever branch ran, the correction itself is always current and readable.
+    const current = await store.inbox('grok');
+    assert.ok(current.some((m) => m.seq === correction.seq), 'the correction is always delivered');
+    await store.acknowledge('grok', current.map((m) => m.seq));
+  }
+
+  assert.equal(outcomes.illegal, 0, `no third outcome is permitted; saw ${outcomes.illegal}`);
+  assert.ok(outcomes.supersessionWon + outcomes.ackWon === 40);
+  // Not asserting BOTH orders occur - lock order is not ours to schedule, and a flaky
+  // assertion about interleaving would be worse than none. What is asserted is that every
+  // observed outcome is one of the two legal ones, with consistent persisted state.
 });
 
