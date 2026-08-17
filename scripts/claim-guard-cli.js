@@ -15,6 +15,7 @@
 const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
+const os = require('node:os');
 
 const { guardStagedPaths, formatGuardResult } = require(path.join(__dirname, '..', 'dist', 'claim-guard.js'));
 
@@ -103,7 +104,13 @@ if (process.env.BUS_ALLOW_BROKEN_BUILD === '1') {
 }
 
 const tsconfig = path.join(repo, 'tsconfig.json');
-if (!fs.existsSync(tsconfig)) process.exit(0);
+if (!fs.existsSync(tsconfig)) {
+  // Audit finding: this used to exit(0) silently, so a repo with no tsconfig looked identical
+  // to a repo that compiled. A skipped check must SAY it was skipped - a guard whose silence
+  // means two different things is not a guard.
+  console.log('claim-guard: no tsconfig.json; compile check SKIPPED');
+  process.exit(0);
+}
 
 const tscCandidates = [
   path.join(repo, 'node_modules', '.bin', process.platform === 'win32' ? 'tsc.cmd' : 'tsc'),
@@ -117,14 +124,53 @@ if (!tsc) {
   process.exit(0);
 }
 
+/**
+ * Audit finding, and it was the hole this item exists to close: `tsc -p repo` compiles the
+ * WORKING TREE, not the INDEX. Stage a type error, restore a compiling working tree, and the
+ * guard printed `compile OK` while a non-compiling commit landed.
+ *
+ * A pre-commit check must verify WHAT IS BEING COMMITTED. So materialise the index into a
+ * temporary worktree and compile that. `git worktree add` from the index is not a thing, so
+ * this uses `git checkout-index`, which writes exactly the staged content and nothing else.
+ */
+let compileTarget = repo;
+let scratch;
+try {
+  scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'claim-guard-index-'));
+  execFileSync('git', ['checkout-index', '--all', '--prefix', `${scratch.replace(/\\/g, '/')}/`], {
+    cwd: repo, encoding: 'utf8', stdio: 'pipe'
+  });
+  // tsconfig and node_modules are not in the index; the compiler needs both.
+  fs.copyFileSync(tsconfig, path.join(scratch, 'tsconfig.json'));
+  const modules = path.join(repo, 'node_modules');
+  if (fs.existsSync(modules)) {
+    try {
+      fs.symlinkSync(modules, path.join(scratch, 'node_modules'), 'junction');
+    } catch {
+      // Without types the compile would fail for the wrong reason. Fall back to the working
+      // tree and SAY SO rather than reporting a red that is not about the staged code.
+      compileTarget = repo;
+      scratch = undefined;
+      console.log('claim-guard: could not stage an index tree; compiling the WORKING TREE instead');
+    }
+  }
+  if (scratch) compileTarget = scratch;
+} catch (error) {
+  compileTarget = repo;
+  scratch = undefined;
+  console.log(`claim-guard: could not read the index (${error.message.split('\n')[0]}); compiling the WORKING TREE instead`);
+}
+
 try {
   const isCmd = tsc.endsWith('.cmd');
   execFileSync(isCmd ? process.env.ComSpec || 'cmd.exe' : process.execPath,
-    isCmd ? ['/c', tsc, '-p', repo, '--noEmit'] : [tsc, '-p', repo, '--noEmit'],
-    { cwd: repo, encoding: 'utf8', stdio: 'pipe' });
-  console.log('claim-guard: compile OK');
+    isCmd ? ['/c', tsc, '-p', compileTarget, '--noEmit'] : [tsc, '-p', compileTarget, '--noEmit'],
+    { cwd: compileTarget, encoding: 'utf8', stdio: 'pipe' });
+  console.log(compileTarget === repo ? 'claim-guard: compile OK (working tree)' : 'claim-guard: compile OK (staged index)');
+  if (scratch) fs.rmSync(scratch, { recursive: true, force: true });
   process.exit(0);
 } catch (error) {
+  if (scratch) fs.rmSync(scratch, { recursive: true, force: true });
   const detail = `${error.stdout || ''}${error.stderr || ''}`.trim().split('\n').slice(0, 6).join('\n');
   console.error('claim-guard: REFUSING - this commit does not compile.\n');
   console.error(detail || error.message);
