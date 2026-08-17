@@ -302,6 +302,53 @@ test('a directory claim is refused when a hardlink to one of its files is alread
   );
 });
 
+test('ITEM 14: an outbound junction from a claimed directory does not cover the foreign target', async () => {
+  const other = path.join(root, 'other');
+  await fs.mkdir(other);
+  await fs.writeFile(path.join(other, 'only-in-other.ts'), 'foreign\n');
+  await fs.symlink(other, path.join(root, 'src', 'out'), 'junction');
+
+  await store.claim({ agent: 'codex', paths: ['src'], why: 'source tree' });
+  const held = await store.claim({
+    agent: 'grok',
+    paths: ['other/only-in-other.ts'],
+    why: 'outside the claimed tree'
+  });
+  assert.equal(held[0].path, 'other/only-in-other.ts');
+});
+
+test('ITEM 14: a directory claim does not walk an outbound junction onto a foreign tree', async () => {
+  const other = path.join(root, 'other');
+  await fs.mkdir(other);
+  await fs.writeFile(path.join(other, 'unrelated.ts'), 'no overlap\n');
+  const foreign = await fs.mkdtemp(path.join(os.tmpdir(), 'pab-i14-foreign-'));
+  try {
+    for (let d = 0; d < 50; d += 1) {
+      const dir = path.join(foreign, `bucket-${String(d).padStart(2, '0')}`);
+      await fs.mkdir(dir);
+      await Promise.all(
+        Array.from({ length: 50 }, (_, i) => fs.writeFile(path.join(dir, `f-${i}.txt`), `n=${d}-${i}\n`))
+      );
+    }
+    await fs.symlink(foreign, path.join(root, 'src', 'escape'), 'junction');
+    await store.claim({ agent: 'codex', paths: ['src'], why: 'tiny tree with outbound junction' });
+    const started = process.hrtime.bigint();
+    const held = await store.claim({
+      agent: 'grok',
+      paths: ['other/unrelated.ts'],
+      why: 'must not walk the foreign volume'
+    });
+    const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+    assert.equal(held[0].path, 'other/unrelated.ts');
+    assert.ok(
+      elapsedMs < 80,
+      `outbound junction made overlap check take ${elapsedMs.toFixed(1)}ms; unbounded walk was 326ms`
+    );
+  } finally {
+    await fs.rm(foreign, { recursive: true, force: true, maxRetries: 8, retryDelay: 50 });
+  }
+});
+
 test('repo-root claims refuse paths missing from both roots and traversal outside them', async () => {
   const otherRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'portable-ai-bus-empty-root-'));
   try {

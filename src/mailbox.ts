@@ -1,5 +1,5 @@
 ﻿import * as fs from 'node:fs/promises';
-import { realpathSync, readdirSync, statSync } from 'node:fs';
+import { realpathSync, statSync } from 'node:fs';
 import * as path from 'node:path';
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -15,6 +15,7 @@ import {
   observeLifecycle,
   observeRunnerResult
 } from './evidence';
+import { directoryContainsIdentities } from './claim-walk';
 import { filesystemIdentityMaterial } from './workspace-key';
 
 const execFileAsync = promisify(execFile);
@@ -1748,35 +1749,12 @@ export class MailboxStore {
     );
     if (targets.size === 0) return false;
 
+    // Item 14: keep the walk (it joins a parent path to a child inode under a
+    // third name) but stay under the claimed directory. Outbound junctions are
+    // not descended; hardlinks of in-tree files still match by inode.
     for (const candidate of this.claimPathCandidates(parent, fallbackRoots)) {
-      try {
-        if (!statSync(candidate).isDirectory()) continue;
-      } catch {
-        continue;
-      }
-      const pending = [candidate];
-      const visitedDirectories = new Set<string>();
-      while (pending.length > 0) {
-        const directory = pending.pop()!;
-        const directoryIdentity = this.observedFilesystemIdentity(directory);
-        if (!directoryIdentity || visitedDirectories.has(directoryIdentity)) continue;
-        visitedDirectories.add(directoryIdentity);
-        let entries;
-        try {
-          entries = readdirSync(directory, { withFileTypes: true });
-        } catch {
-          continue;
-        }
-        for (const entry of entries) {
-          const entryPath = path.join(directory, entry.name);
-          const identity = this.observedFilesystemIdentity(entryPath);
-          if (identity && targets.has(identity)) return true;
-          try {
-            if (statSync(entryPath).isDirectory()) pending.push(entryPath);
-          } catch {
-            // A disappearing or unreadable descendant cannot supply an observed identity.
-          }
-        }
+      if (directoryContainsIdentities(candidate, targets, { stayUnderRoot: candidate })) {
+        return true;
       }
     }
     return false;
