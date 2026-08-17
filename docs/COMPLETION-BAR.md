@@ -15,20 +15,20 @@ seat that did not write it has attacked it and said so on the record.
 | 4 | cross-seat reassignment | **CERTIFIED** at `c755a42` (2026-08-14) |
 | 5 | distinguish *stalled* from *spent* | **CERTIFIED** at `78ffe75`+`48d24f4` — separates SPENT from STALLED; **BROKEN not covered** |
 | 6 | claim guard — satisfiable **and** mutually exclusive | **CERTIFIED** at `2dae2a7` — four audits, six commits |
-| 7 | claim schema — `why` is optional | open — specified below |
+| 7 | claim schema — `why` is optional | DONE `2e4a08d` - required at the store; audit pending |
 | 8 | an ack is not a commitment | **CERTIFIED** at `247184e`+`6f975ec` (claude instrument, 10/10) |
 | 9 | a detector whose only sink is a log | **CERTIFIED** at `f3798fe` — notice file + bus-tick; still no auto-restart |
 | 10 | authorisation does not survive a wake | open — measured 2026-08-14 |
 | 11 | a broken link reports as *spent* | **CERTIFIED** at `5352b0d` — SPENT / STALLED / BROKEN split |
 | 12 | a call that never starts is invisible | **CERTIFIED** at `a97deaf`+`b31177f`+`ec41d92` (claude instrument, 5/5) |
-| 13 | a claim can be too broad to be useful | open — measured 2026-08-15 |
+| 13 | a claim can be too broad to be useful | DONE `2e4a08d` - root claims refused; audit pending |
 | 14 | an overlap check can walk an arbitrary volume | open — measured 2026-08-15, split from 6 |
-| 15 | the guard verifies claims, not builds | open — measured 2026-08-15 |
+| 15 | the guard verifies claims, not builds | DONE `63eba06` - compile gate + logged escape hatch; audit pending |
 | 16 | `actor` is optional at the store | **CERTIFIED** at `e43d5a8` (grok instrument 2026-08-17) |
 | 17 | truncation is invisible on inbox/read/worker | **CERTIFIED** at `d86b620` (grok instrument 2026-08-17) |
-| 18 | send and supersede are two steps | design accepted, in progress |
+| 18 | send and supersede are two steps | DONE `c28f4b5` - atomic supersedes; audit pending |
 | 19 | supersede polish: transcript metadata, CLI usage | **CERTIFIED** at `eb8e10f` (grok instrument 2026-08-17) |
-| 20 | a checkpoint can become unclosable | open — measured 2026-08-15 |
+| 20 | a checkpoint can become unclosable | DONE `2e4a08d` - operator close, reason required; audit pending |
 
 Items 1–7 were the original bar. **Items 8–11 were all added on 2026-08-14/15 from measured
 failures, not planning** — three of the four were found by the system failing in front of us
