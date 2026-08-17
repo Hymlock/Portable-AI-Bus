@@ -608,6 +608,39 @@ test('ITEM 12 RED: success-path kill must not fork the AttachConsole helper', {
   }
 });
 
+// Measured 2026-08-17: the AttachConsole RED above passed in 3952ms, then the
+// isolated node --test worker never exited. Zero child processes. node-pty's
+// useConptyDll kill path only disposes the conout Worker if _outSocket emits
+// more data after PtyKill; a returning process.exit(0) often does not.
+// ProcessResult stayed 0. A green assertion plus a hung runner is not closed.
+test('ITEM 12 RED: success-path kill must let the process exit', {
+  skip: process.platform !== 'win32'
+}, () => {
+  const probe = `
+    const { runProcess } = require('./dist/brain/process-host');
+    runProcess(process.execPath, ['-e', 'process.exit(0)'], { timeoutMs: 10_000 })
+      .then((result) => {
+        if (result.code !== 0) {
+          process.stderr.write(String(result.stderr || ''));
+          process.exit(2);
+        }
+        process.exit(0);
+      });
+  `;
+  const started = Date.now();
+  const completed = spawnSync(process.execPath, ['-e', probe], {
+    cwd: process.cwd(),
+    encoding: 'utf8',
+    timeout: 15_000,
+    windowsHide: true
+  });
+  assert.equal(completed.status, 0, completed.stderr || completed.error?.message);
+  assert.ok(
+    Date.now() - started < 12_000,
+    `success-path kill left a handle that pinned the process (${Date.now() - started}ms)`
+  );
+});
+
 function runWindowsProcessHostProbe(providerScript) {
   return runWindowsProcessHostTimedProbe(providerScript, 10_000).result;
 }

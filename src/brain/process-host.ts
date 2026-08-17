@@ -62,6 +62,31 @@ type PtyProcess = {
   kill(signal?: string): void;
 };
 
+/**
+ * node-pty 1.1.0's useConptyDll kill path only disposes the conout
+ * Worker if `_outSocket` emits more data after PtyKill. A returning
+ * `process.exit(0)` often emits nothing more, so the Worker stays
+ * alive and pins the Node event loop.
+ *
+ * Measured 2026-08-17: ITEM 12 AttachConsole RED passed in 3952ms
+ * (zero `conpty_console_list_agent` forks), then the isolated
+ * `node --test` worker never exited. It had zero child processes.
+ * The leftover was a Worker thread. Production brains leak one
+ * Worker per wake.
+ */
+type NodePtyConoutWorker = { dispose(): void };
+type NodePtyTerminal = PtyProcess & {
+  _agent?: { _conoutSocketWorker?: NodePtyConoutWorker };
+};
+
+function disposeConoutWorker(child: PtyProcess): void {
+  try {
+    (child as NodePtyTerminal)._agent?._conoutSocketWorker?.dispose();
+  } catch {
+    /* private node-pty surface; throwing here would hide the ProcessResult */
+  }
+}
+
 type PtyModule = {
   spawn(command: string, args: string[], options: {
     name: string;
@@ -292,6 +317,9 @@ async function runConPty(
       // PtyKill is the only node-pty path that calls ClosePseudoConsole. The success
       // path used to skip it and leak a headless conhost per wake.
       try { child.kill(); } catch { /* already gone; still the only close we can invoke */ }
+      // useConptyDll kill leaves the conout Worker unless more data arrives.
+      // Dispose it ourselves so a successful ProcessResult cannot pin the loop.
+      disposeConoutWorker(child);
       removeCaptureDir(captureDir);
       resolve(result);
     };
