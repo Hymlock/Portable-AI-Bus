@@ -22,7 +22,7 @@ seat that did not write it has attacked it and said so on the record.
 | 11 | a broken link reports as *spent* | **CERTIFIED** at `5352b0d` — SPENT / STALLED / BROKEN split |
 | 12 | a call that never starts is invisible | **CERTIFIED** at `a97deaf`+`b31177f`+`ec41d92` (claude instrument, 5/5) |
 | 13 | a claim can be too broad to be useful | DONE `2e4a08d` - root claims refused; audit pending |
-| 14 | an overlap check can walk an arbitrary volume | DONE `06c927f` - stay-under-root; audit pending |
+| 14 | an overlap check can walk an arbitrary volume | CERTIFIED at `06c927f` (claude instrument, 4/4; 4ms vs 99ms) |
 | 15 | the guard verifies claims, not builds | DONE `63eba06` - compile gate + logged escape hatch; audit pending |
 | 16 | `actor` is optional at the store | **CERTIFIED** at `e43d5a8` (grok instrument 2026-08-17) |
 | 17 | truncation is invisible on inbox/read/worker | **CERTIFIED** at `d86b620` (grok instrument 2026-08-17) |
