@@ -1,11 +1,11 @@
-import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+﻿import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as http from 'node:http';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { CapabilityRunner } from './capabilities';
 import { EvidencePromotionError } from './evidence';
-import { BusHaltedError, ClaimConflictError, ClaimPathMissingError, MailboxStore } from './mailbox';
+import { BusHaltedError, ClaimConflictError, ClaimPathMissingError, ClaimReasonRequiredError, WholeRepositoryClaimError, MailboxStore } from './mailbox';
 import { credentialWorkspaceKey } from './workspace-key';
 
 type ToolDefinition = {
@@ -1095,6 +1095,10 @@ function httpFailure(error: unknown) {
   if (error instanceof BusHaltedError) return new HarnessHttpError(423, 'bus_halted', error.message);
   if (error instanceof ClaimConflictError) return new HarnessHttpError(409, 'claim_conflict', error.message, true);
   if (error instanceof ClaimPathMissingError) return new HarnessHttpError(400, 'claim_path_missing', error.message);
+  // Items 7 and 13. Both are bad requests the caller can fix, not server faults — a 500 would
+  // tell a seat "the bus is broken" when the answer is "say why" or "claim fewer paths".
+  if (error instanceof ClaimReasonRequiredError) return new HarnessHttpError(400, 'claim_reason_required', error.message);
+  if (error instanceof WholeRepositoryClaimError) return new HarnessHttpError(400, 'claim_too_broad', error.message);
   if (error instanceof EvidencePromotionError) return new HarnessHttpError(409, 'evidence_not_promoted', error.message);
   if (error instanceof SyntaxError) return new HarnessHttpError(400, 'invalid_json', error.message);
   return new HarnessHttpError(500, 'internal_error', asMessage(error), true);

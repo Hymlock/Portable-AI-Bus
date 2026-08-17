@@ -1,4 +1,4 @@
-const assert = require('node:assert/strict');
+﻿const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
@@ -190,18 +190,18 @@ test('claims accumulate and an exact scoped release preserves remaining ownershi
 });
 
 test('a broader claim replaces redundant narrower claims owned by the same agent', async () => {
-  await store.claim({ agent: 'codex', paths: ['src/mailbox.ts', 'src/bus.ts'] });
-  const held = await store.claim({ agent: 'codex', paths: ['src'] });
+  await store.claim({ agent: 'codex', paths: ['src/mailbox.ts', 'src/bus.ts'], why: 'test fixture' });
+  const held = await store.claim({ agent: 'codex', paths: ['src'], why: 'test fixture' });
   assert.deepEqual(held.map((claim) => claim.path), ['src']);
 });
 
 test('claim paths cannot escape the workspace', async () => {
   await assert.rejects(
-    store.claim({ agent: 'codex', paths: ['../other-repo'] }),
+    store.claim({ agent: 'codex', paths: ['../other-repo'], why: 'test fixture' }),
     /escapes the workspace/
   );
   await assert.rejects(
-    store.claim({ agent: 'codex', paths: ['C:\\outside'] }),
+    store.claim({ agent: 'codex', paths: ['C:\\outside'], why: 'test fixture' }),
     /workspace-relative/
   );
 });
@@ -226,7 +226,7 @@ test('round guard halts sends until an explicit resume adds capacity', async () 
 
 test('claiming a nonexistent path is refused atomically and records no hold', async () => {
   await assert.rejects(
-    store.claim({ agent: 'codex', paths: ['src/mailbox.ts', 'bus.py'] }),
+    store.claim({ agent: 'codex', paths: ['src/mailbox.ts', 'bus.py'], why: 'test fixture' }),
     /Claim refused.*bus\.py.*No claim was recorded/i
   );
   assert.deepEqual(await store.claims(), {});
@@ -306,11 +306,11 @@ test('repo-root claims refuse paths missing from both roots and traversal outsid
   const otherRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'portable-ai-bus-empty-root-'));
   try {
     await assert.rejects(
-      store.claim({ agent: 'codex', paths: ['missing.txt'], repoRoot: otherRoot }),
+      store.claim({ agent: 'codex', paths: ['missing.txt'], repoRoot: otherRoot, why: 'test fixture' }),
       /Claim refused.*missing\.txt.*No claim was recorded/i
     );
     await assert.rejects(
-      store.claim({ agent: 'codex', paths: ['../outside.txt'], repoRoot: otherRoot }),
+      store.claim({ agent: 'codex', paths: ['../outside.txt'], repoRoot: otherRoot, why: 'test fixture' }),
       /escapes the workspace/
     );
     assert.deepEqual(await store.claims(), {});
@@ -368,9 +368,9 @@ test('repo-scoped release respects the requested root when only one lexical matc
 });
 
 test('same file in the same root remains mutually exclusive', async () => {
-  await store.claim({ agent: 'codex', paths: ['src/mailbox.ts'] });
+  await store.claim({ agent: 'codex', paths: ['src/mailbox.ts'], why: 'test fixture' });
   await assert.rejects(
-    store.claim({ agent: 'grok', paths: ['src/mailbox.ts'] }),
+    store.claim({ agent: 'grok', paths: ['src/mailbox.ts'], why: 'test fixture' }),
     ClaimConflictError
   );
 });
@@ -532,9 +532,9 @@ test('the mailbox store requires an actor to supersede mail', async () => {
 test('Windows claim comparison preserves case and separator exclusion', {
   skip: process.platform !== 'win32'
 }, async () => {
-  await store.claim({ agent: 'codex', paths: ['src/mailbox.ts'] });
+  await store.claim({ agent: 'codex', paths: ['src/mailbox.ts'], why: 'test fixture' });
   await assert.rejects(
-    store.claim({ agent: 'grok', paths: ['SRC\\MAILBOX.TS'] }),
+    store.claim({ agent: 'grok', paths: ['SRC\\MAILBOX.TS'], why: 'test fixture' }),
     ClaimConflictError
   );
 });
@@ -733,3 +733,93 @@ test('missing state with durable messages fails closed instead of synthesizing a
   await assert.rejects(store.status(), /Mailbox state is missing while durable artifacts remain/);
   await assert.rejects(store.send({ from: 'codex', to: 'grok', subject: 'unsafe', body: 'no' }), /Mailbox state is missing/);
 });
+
+// ---------------------------------------------------------------------------
+// Item 7: a claim must say why it exists.
+// Measured: ClaimInput.why was optional and landed as '', while the baton path has demanded a
+// reason on every refusal since it was written. Two halves of one system disagreeing.
+// ---------------------------------------------------------------------------
+
+test('ITEM 7 RED: a claim with no reason is refused at the store', async () => {
+  await assert.rejects(
+    () => store.claim({ agent: 'grok', paths: ['src/bus.ts'] }),
+    /--why is required/
+  );
+  const claims = await store.claims();
+  assert.equal((claims.grok ?? []).length, 0, 'nothing may be recorded when the reason is missing');
+});
+
+test('ITEM 7 RED: a blank reason is refused too', async () => {
+  await assert.rejects(
+    () => store.claim({ agent: 'grok', paths: ['src/bus.ts'], why: '   ' }),
+    /--why is required/
+  );
+  const claims = await store.claims();
+  assert.equal((claims.grok ?? []).length, 0);
+});
+
+test('ITEM 7 GREEN: a claim with a reason succeeds and keeps it', async () => {
+  const held = await store.claim({ agent: 'grok', paths: ['src/bus.ts'], why: 'item 14 walk bound' });
+  assert.equal(held.length, 1);
+  const persisted = (await store.claims()).grok[0];
+  assert.equal(persisted.why, 'item 14 walk bound', 'the reason is what an operator reads later');
+});
+
+// ---------------------------------------------------------------------------
+// Item 13: a claim can be too broad to be useful.
+// Measured 2026-08-15: a seat claimed "." meaning the files it was editing, and locked all
+// three seats out of the entire repository with no warning and no expiry.
+// ---------------------------------------------------------------------------
+
+test('ITEM 13 RED: claiming the repository root is refused', async () => {
+  await assert.rejects(
+    () => store.claim({ agent: 'codex', paths: ['.'], why: 'implement everything' }),
+    /whole repository/
+  );
+  const claims = await store.claims();
+  assert.equal((claims.codex ?? []).length, 0, 'a refused root claim must record nothing');
+});
+
+test('ITEM 13 GREEN: an ancestor claim below the root still works and still covers children', async () => {
+  const held = await store.claim({ agent: 'codex', paths: ['src'], why: 'editing the src tree' });
+  assert.equal(held.length, 1);
+  await assert.rejects(
+    () => store.claim({ agent: 'grok', paths: ['src/bus.ts'], why: 'conflicting' }),
+    ClaimConflictError
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Item 20: a checkpoint can become unclosable.
+// closeRecovery is reachable only from the runner, so a checkpoint held by a seat with no
+// running brain can never be closed. The live case asserted "implement item 9" for hours after
+// item 9 was certified.
+// ---------------------------------------------------------------------------
+
+test('ITEM 20 RED: another seat cannot close it, and the row survives', async () => {
+  const source = await store.send({ from: 'claude', to: 'grok', kind: 'task', subject: 'work', body: 'do it' });
+  await store.openRecovery('grok', source.seq, 'half done');
+  const nothing = await store.closeRecovery('codex', source.seq, 'not mine to close');
+  assert.equal(nothing, undefined);
+  const stillOpen = await store.openRecoveryFor('grok');
+  assert.ok(stillOpen, 'another seat must not be able to clear it');
+  assert.equal(stillOpen.status, 'open');
+});
+
+test('ITEM 20 GREEN: an operator can close a stranded checkpoint, marked as an operator action', async () => {
+  const source = await store.send({ from: 'claude', to: 'grok', kind: 'task', subject: 'work', body: 'do it' });
+  await store.openRecovery('grok', source.seq, 'implement item 9');
+  const closed = await store.operatorCloseRecovery('grok', source.seq, 'item 9 certified hours ago');
+  assert.ok(closed);
+  assert.equal(closed.status, 'closed');
+  assert.match(closed.closeReason, /^operator-closed: /, 'never reads as completed work');
+  assert.equal(await store.openRecoveryFor('grok'), undefined);
+});
+
+test('ITEM 20: an operator close without a reason is refused and leaves the row alone', async () => {
+  const source = await store.send({ from: 'claude', to: 'grok', kind: 'task', subject: 'work', body: 'do it' });
+  await store.openRecovery('grok', source.seq, 'half done');
+  await assert.rejects(() => store.operatorCloseRecovery('grok', source.seq, '  '), /reason is required/);
+  assert.ok(await store.openRecoveryFor('grok'), 'a refused operator close must leave the row alone');
+});
+

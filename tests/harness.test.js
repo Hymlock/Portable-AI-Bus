@@ -1,4 +1,4 @@
-const assert = require('node:assert/strict');
+﻿const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
@@ -357,12 +357,12 @@ test('a stranded harness recovery lock fails closed with an actionable diagnosti
 test('halt blocks claim and release mutations', async (t) => {
   const { root, server, request } = await setup(['codex']);
   t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
-  await server.mailbox.claim({ agent: 'codex', paths: ['src/held.ts'] });
+  await server.mailbox.claim({ agent: 'codex', paths: ['src/held.ts'], why: 'test fixture' });
   await server.mailbox.halt('test guard');
 
   const claim = await request('/v1/tool', {
     method: 'POST',
-    body: JSON.stringify({ requestId: 'halted-claim', name: 'mailbox_claim', input: { agent: 'codex', paths: ['src/new.ts'] } })
+    body: JSON.stringify({ requestId: 'halted-claim', name: 'mailbox_claim', input: { agent: 'codex', paths: ['src/new.ts'], why: 'harness fixture' } })
   });
   const release = await request('/v1/tool', {
     method: 'POST',
@@ -380,7 +380,7 @@ test('round cap halts immediately after durably writing the cap message', async 
   assert.equal((await server.mailbox.status()).halted, true);
   const claim = await request('/v1/tool', {
     method: 'POST',
-    body: JSON.stringify({ requestId: 'capped-claim', name: 'mailbox_claim', input: { agent: 'codex', paths: ['src/new.ts'] } })
+    body: JSON.stringify({ requestId: 'capped-claim', name: 'mailbox_claim', input: { agent: 'codex', paths: ['src/new.ts'], why: 'harness fixture' } })
   });
   assert.equal(claim.status, 423);
   assert.deepEqual(await server.mailbox.claims(), {});
@@ -394,7 +394,7 @@ test('approaching the round cap writes a loud harness audit warning', async (t) 
   }
   const claim = await request('/v1/tool', {
     method: 'POST',
-    body: JSON.stringify({ requestId: 'near-cap-claim', name: 'mailbox_claim', input: { agent: 'codex', paths: ['src/warn.ts'] } })
+    body: JSON.stringify({ requestId: 'near-cap-claim', name: 'mailbox_claim', input: { agent: 'codex', paths: ['src/warn.ts'], why: 'harness fixture' } })
   });
   assert.equal(claim.status, 200);
   const audit = await fs.readFile(server.auditPath, 'utf8');
@@ -408,7 +408,7 @@ test('successful claim response says paths are held now with no acceptance step'
 
   const claim = await request('/v1/tool', {
     method: 'POST',
-    body: JSON.stringify({ requestId: 'clear-claim', name: 'mailbox_claim', input: { agent: 'codex', paths: ['src/held.ts'] } })
+    body: JSON.stringify({ requestId: 'clear-claim', name: 'mailbox_claim', input: { agent: 'codex', paths: ['src/held.ts'], why: 'harness fixture' } })
   });
 
   assert.equal(claim.status, 200);
@@ -423,7 +423,7 @@ test('harness refuses a nonexistent claim and leaves state clean', async (t) => 
 
   const claim = await request('/v1/tool', {
     method: 'POST',
-    body: JSON.stringify({ requestId: 'missing-claim', name: 'mailbox_claim', input: { agent: 'codex', paths: ['bus.py'] } })
+    body: JSON.stringify({ requestId: 'missing-claim', name: 'mailbox_claim', input: { agent: 'codex', paths: ['bus.py'], why: 'probing a missing path' } })
   });
 
   assert.equal(claim.status, 400);

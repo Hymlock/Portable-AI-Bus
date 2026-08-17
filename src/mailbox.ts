@@ -1,4 +1,4 @@
-import * as fs from 'node:fs/promises';
+﻿import * as fs from 'node:fs/promises';
 import { realpathSync, readdirSync, statSync } from 'node:fs';
 import * as path from 'node:path';
 import { execFile } from 'node:child_process';
@@ -220,7 +220,16 @@ type SendInput = {
 type ClaimInput = {
   agent: string;
   paths: string[];
-  why?: string;
+  /**
+   * Item 7. REQUIRED. The question a human needs answered when a seat dies holding a path is
+   * WHY it stopped â€” see the baton path, which has demanded a reason on every refusal since it
+   * was written. A claim that cannot say why it exists is exactly the row an operator finds at
+   * 3am with an empty string where the explanation should be.
+   *
+   * Legacy rows persisted before this was required keep their empty `why` and are readable;
+   * they are not backfilled with an invented reason. Same rule as the identity migration.
+   */
+  why: string;
   /** Git repository whose relative paths should also be claimable when the bus root is elsewhere. */
   repoRoot?: string;
 };
@@ -759,6 +768,45 @@ export class MailboxStore {
   }
 
   /**
+   * Item 20. An operator route to close a checkpoint whose owning seat can no longer close it.
+   *
+   * `closeRecovery` is reachable only from the runner, so a checkpoint held by a seat with no
+   * running brain can never be closed by anyone. The live case that produced this: a brain seat
+   * died when node-pty vanished, its work was inherited by the chat-interface seat, and the row
+   * kept asserting "implement item 9" for hours after item 9 was certified.
+   *
+   * This is deliberately NOT a seat-callable primitive. A seat still cannot close another
+   * seat's checkpoint â€” that refusal is correct and stays. This requires an explicit operator
+   * reason and records it, so a stale close is legible afterwards rather than silent.
+   */
+  async operatorCloseRecovery(
+    seat: string,
+    workId: number,
+    operatorReason: string
+  ): Promise<RecoveryCheckpoint | undefined> {
+    if (typeof operatorReason !== 'string' || operatorReason.trim().length === 0) {
+      throw new Error('Operator close refused: a reason is required. Nothing was closed.');
+    }
+    return this.withLock(async () => {
+      const file = await this.findMessagePathUnsafe(workId);
+      if (!file) return undefined;
+      const message = await this.readJson<BusMessage>(file);
+      const checkpoint = message.recoveryCheckpoints?.find(
+        (item) => item.seat === seat && item.status === 'open'
+      );
+      if (!checkpoint) return undefined;
+      const at = nowIso();
+      checkpoint.status = 'closed';
+      checkpoint.closedAt = at;
+      checkpoint.updatedAt = at;
+      // Marked as an operator action, not a seat outcome, so it never reads as completed work.
+      checkpoint.closeReason = `operator-closed: ${operatorReason.trim()}`;
+      await this.atomicJson(file, message);
+      return checkpoint;
+    });
+  }
+
+  /**
    * Move one seat's open recovery onto another seat, keeping the same workId.
    *
    * Checkpoints are assignments, not identities. A credit-loss baton move that left the
@@ -850,9 +898,25 @@ export class MailboxStore {
 
   async claim(input: ClaimInput): Promise<Claim[]> {
     this.assertAgent(input.agent, 'agent');
+    // Item 7: a claim must say why it exists. Enforced HERE, at the store, not only at the CLI
+    // â€” the invocable surfaces were already safe and the store was not, which is exactly how
+    // supersedeMessage's optional actor let a direct call forge a foreign retract.
+    if (typeof input.why !== 'string' || input.why.trim().length === 0) {
+      throw new ClaimReasonRequiredError();
+    }
     const requested = input.paths.map((item) => this.normalizeClaimPath(item));
     if (requested.length === 0) {
       throw new Error('At least one claim path is required.');
+    }
+    // Item 13: a claim on the repository root is indistinguishable from a legitimate ancestor
+    // claim like `src/` under the current rules, and it locks every seat out of everything with
+    // no warning and no expiry. Measured 2026-08-15: a seat claimed "." while meaning the files
+    // it was editing, and all three seats were blocked until an operator noticed.
+    // Ancestor claims BELOW the root stay legal â€” that is what the walk exists to support.
+    for (const requestedPath of requested) {
+      if (requestedPath === '.' || requestedPath === '' || requestedPath === '/') {
+        throw new WholeRepositoryClaimError(requestedPath);
+      }
     }
 
     return this.withLock(async () => {
@@ -1932,6 +1996,33 @@ export class ClaimConflictError extends Error {
   }
 }
 
+/** Item 7. A claim with no reason is the row an operator cannot act on. */
+export class ClaimReasonRequiredError extends Error {
+  readonly exitCode = 1;
+
+  constructor() {
+    super(
+      'Claim refused: --why is required. Say what the claim is for; a seat that dies holding a '
+      + 'path leaves this reason as the only explanation. No claim was recorded.'
+    );
+    this.name = 'ClaimReasonRequiredError';
+  }
+}
+
+/** Item 13. A claim that covers everything protects nothing and blocks everyone. */
+export class WholeRepositoryClaimError extends Error {
+  readonly exitCode = 1;
+
+  constructor(readonly requested: string) {
+    super(
+      `Claim refused: "${requested}" is the whole repository. Ancestor claims below the root `
+      + '(for example src/) are allowed; claiming the root locks every seat out of every file '
+      + 'with no expiry. Claim the paths you are actually editing. No claim was recorded.'
+    );
+    this.name = 'WholeRepositoryClaimError';
+  }
+}
+
 export class ClaimPathMissingError extends Error {
   readonly exitCode = 1;
 
@@ -2137,6 +2228,21 @@ async function runCli(argv = process.argv.slice(2)) {
       console.log(JSON.stringify(claims, null, 2));
       return 0;
     }
+    // Item 20. The operator route to a checkpoint whose seat can no longer close it.
+    // Seats still cannot close each other's rows; this is deliberately outside that path.
+    case 'close-recovery': {
+      const closed = await store.operatorCloseRecovery(
+        stringArg(args, 'seat', true),
+        Number(stringArg(args, 'work-id', true)),
+        stringArg(args, 'reason', true)
+      );
+      if (!closed) {
+        console.log('no open checkpoint for that seat and work-id; nothing was closed');
+        return 1;
+      }
+      console.log(json ? JSON.stringify(closed, null, 2) : `closed ${closed.workId}: ${closed.closeReason}`);
+      return 0;
+    }
     case 'status': {
       const status = await store.status();
       console.log(JSON.stringify(status, null, 2));
@@ -2251,7 +2357,7 @@ async function runCli(argv = process.argv.slice(2)) {
     }
     default:
       throw new Error(
-        'usage: mailbox <init|send|inbox|read|parked|requeue|supersede|wait|claim|release|claims|status|doctor|goal|assign|stall-check|reassign|record-evidence|promote-evidence|list-evidence|configure-halting|complete-step|complete-goal|halt|resume> [options]'
+        'usage: mailbox <init|send|inbox|read|parked|requeue|supersede|wait|claim|release|claims|close-recovery|status|doctor|goal|assign|stall-check|reassign|record-evidence|promote-evidence|list-evidence|configure-halting|complete-step|complete-goal|halt|resume> [options]'
       );
   }
 }
