@@ -57,6 +57,13 @@ export type BusMessage = {
   supersededBy?: number;
   supersededAt?: string;
   supersedeReason?: string;
+  /**
+   * Item 18. Set on a message SENT with `supersedes`. True when the atomic supersession took
+   * effect; false with `supersedeOutcome: 'target-consumed'` when the recipient had already
+   * consumed the target, so the correction was delivered but no supersession is claimed.
+   */
+  superseded?: boolean;
+  supersedeOutcome?: string;
   recoveryCheckpoints?: RecoveryCheckpoint[];
 };
 
@@ -216,6 +223,19 @@ type SendInput = {
    * pointed at the idle seat.
    */
   keepBaton?: boolean;
+  /**
+   * Item 18. Supersede this message atomically with the one being sent.
+   *
+   * send(correction) followed by supersedeMessage(target) is two steps, and between them BOTH
+   * are current - a seat can read the stale original in that window. One operation, one lock,
+   * one pair of writes closes it. An invalid target sends nothing at all; a target the
+   * recipient has ALREADY consumed still delivers the correction and reports
+   * `supersedeOutcome: 'target-consumed'` rather than claiming a supersession that did not
+   * happen.
+   */
+  supersedes?: number;
+  /** Recorded on the superseded row so history says why, as closeCheckpoints already does. */
+  supersedeReason?: string;
 };
 
 type ClaimInput = {
@@ -415,7 +435,55 @@ export class MailboxStore {
         read: false
       };
 
+      // Item 18: atomic superseding send. send(correction) then supersedeMessage(target) are two
+      // steps, and between them BOTH are current - a seat can read the stale original in that
+      // window. One operation closes it. Validation happens BEFORE the correction is written, so
+      // an invalid target produces no message at all.
+      let supersedeOutcome: { superseded: boolean; reason?: string } = { superseded: false };
+      let supersededTarget: { message: BusMessage; file: string } | undefined;
+      if (input.supersedes !== undefined) {
+        const targetFile = await this.findMessagePathUnsafe(input.supersedes);
+        if (!targetFile) {
+          throw new Error(`Cannot supersede #${input.supersedes}: no such message. Nothing was sent.`);
+        }
+        const target = await this.readJson<BusMessage>(targetFile);
+        if (target.from !== input.from) {
+          throw new Error(
+            `Cannot supersede #${input.supersedes}: it was sent by ${target.from}, not ${input.from}. `
+            + 'Nothing was sent.'
+          );
+        }
+        if (target.supersededBy !== undefined) {
+          // An already-superseded but unconsumed target is an invalid relationship, unlike the
+          // recoverable consumed case below. Refuse without delivering.
+          throw new Error(
+            `Cannot supersede #${input.supersedes}: already superseded by #${target.supersededBy}. Nothing was sent.`
+          );
+        }
+        if (target.read) {
+          // TOO LATE, and say so honestly rather than pretending. The correction is still worth
+          // delivering; claiming a supersession that did not happen would be worse than a plain
+          // send. This is an atomic decision that supersession was too late, not a supersession.
+          supersedeOutcome = { superseded: false, reason: 'target-consumed' };
+        } else {
+          supersededTarget = { message: target, file: targetFile };
+          supersedeOutcome = { superseded: true };
+        }
+      }
+
       const messagePath = path.join(this.paths.inboxDir, messageFileName(seq, message.from, message.to));
+      if (supersededTarget) {
+        // Both effects, one lock, before either is visible to a reader.
+        supersededTarget.message.supersededBy = seq;
+        supersededTarget.message.supersedeReason = input.supersedeReason?.trim() || `superseded by #${seq}`;
+        await this.atomicJson(supersededTarget.file, supersededTarget.message);
+      }
+      // Only present when supersession was actually requested. An ordinary send must carry no
+      // supersession fields at all - a field that is always there is a field nobody reads.
+      if (input.supersedes !== undefined) {
+        message.superseded = supersedeOutcome.superseded;
+        if (supersedeOutcome.reason) message.supersedeOutcome = supersedeOutcome.reason;
+      }
       await this.atomicJson(messagePath, message);
       state.seq = seq;
       state.round = round;

@@ -13,6 +13,15 @@ const mailboxCli = path.resolve(__dirname, '..', 'dist', 'mailbox.js');
 let root;
 let store;
 
+async function readMessageFromDisk(rootDir, seq) {
+  const dir = path.join(rootDir, '.ai-bus', 'runtime', 'mailbox', 'inbox');
+  const files = await fs.readdir(dir);
+  for (const file of files) {
+    const parsed = JSON.parse(await fs.readFile(path.join(dir, file), 'utf8'));
+    if (parsed.seq === seq) return parsed;
+  }
+  return undefined;
+}
 async function removeTree(target) {
   await fs.rm(target, { recursive: true, force: true, maxRetries: 8, retryDelay: 50 });
 }
@@ -868,5 +877,99 @@ test('ITEM 20: an operator close without a reason is refused and leaves the row 
   await store.openRecovery('grok', source.seq, 'half done');
   await assert.rejects(() => store.operatorCloseRecovery('grok', source.seq, '  '), /reason is required/);
   assert.ok(await store.openRecoveryFor('grok'), 'a refused operator close must leave the row alone');
+});
+
+
+// ---------------------------------------------------------------------------
+// Item 18: send and supersede were two steps, and between them BOTH were current.
+// One operation, one lock, one pair of writes. Design argued by codex and accepted.
+// ---------------------------------------------------------------------------
+
+test('ITEM 18 GREEN: an atomic superseding send hides the original and marks the pair', async () => {
+  const original = await store.send({
+    from: 'claude', to: 'grok', kind: 'task', subject: 'COMMIT NOW', body: 'ship it'
+  });
+  const correction = await store.send({
+    from: 'claude', to: 'grok', kind: 'task', subject: 'DO NOT COMMIT', body: 'hold',
+    supersedes: original.seq, supersedeReason: 'wrong call, two minutes later'
+  });
+
+  assert.equal(correction.superseded, true, 'the send reports that supersession took effect');
+  const inbox = await store.inbox('grok');
+  assert.deepEqual(inbox.map((m) => m.seq), [correction.seq], 'only the correction is current');
+
+  // read back from disk through a fresh store - not the object we just held
+  const stale = await readMessageFromDisk(root, original.seq);
+  assert.equal(stale.supersededBy, correction.seq);
+  assert.match(stale.supersedeReason, /wrong call/);
+  assert.equal(stale.body, 'ship it', 'the original body is preserved, not rewritten');
+});
+
+test('ITEM 18: a consumed target still delivers the correction and says target-consumed', async () => {
+  const original = await store.send({
+    from: 'claude', to: 'grok', kind: 'task', subject: 'COMMIT NOW', body: 'ship it'
+  });
+  await store.acknowledge('grok', [original.seq]);   // recipient already consumed it
+
+  const correction = await store.send({
+    from: 'claude', to: 'grok', kind: 'task', subject: 'DO NOT COMMIT', body: 'hold',
+    supersedes: original.seq
+  });
+
+  assert.equal(correction.superseded, false, 'no supersession may be claimed');
+  assert.equal(correction.supersedeOutcome, 'target-consumed', 'and the sender is told why');
+  const consumed = await readMessageFromDisk(root, original.seq);
+  assert.equal(consumed.supersededBy, undefined, 'a consumed row must not gain supersededBy');
+  const current = await store.inbox('grok');
+  assert.deepEqual(current.map((m) => m.seq), [correction.seq], 'the correction is still delivered');
+});
+
+test('ITEM 18 RED: an invalid target sends NOTHING - no half-applied state', async () => {
+  const before = (await store.inbox('grok')).length;
+  await assert.rejects(
+    () => store.send({ from: 'claude', to: 'grok', kind: 'task', subject: 'x', body: 'y', supersedes: 99999 }),
+    /no such message.*Nothing was sent/i
+  );
+  const after = (await store.inbox('grok')).length;
+  assert.equal(after, before, 'a refused superseding send must not create a message');
+});
+
+test('ITEM 18 RED: superseding another sender message is refused and sends nothing', async () => {
+  const theirs = await store.send({ from: 'codex', to: 'grok', kind: 'task', subject: 'theirs', body: 'mine' });
+  const before = (await store.inbox('grok')).length;
+  await assert.rejects(
+    () => store.send({ from: 'claude', to: 'grok', kind: 'task', subject: 'x', body: 'y', supersedes: theirs.seq }),
+    /sent by codex.*Nothing was sent/i
+  );
+  assert.equal((await store.inbox('grok')).length, before);
+});
+
+test('ITEM 18 RED: an already-superseded unconsumed target is refused', async () => {
+  const original = await store.send({ from: 'claude', to: 'grok', kind: 'task', subject: 'a', body: 'a' });
+  await store.send({
+    from: 'claude', to: 'grok', kind: 'task', subject: 'b', body: 'b', supersedes: original.seq
+  });
+  const before = (await store.inbox('grok')).length;
+  await assert.rejects(
+    () => store.send({ from: 'claude', to: 'grok', kind: 'task', subject: 'c', body: 'c', supersedes: original.seq }),
+    /already superseded/i
+  );
+  assert.equal((await store.inbox('grok')).length, before);
+});
+
+test('ITEM 18: the superseded original cannot then be acknowledged as current (item 3 holds)', async () => {
+  const original = await store.send({ from: 'claude', to: 'grok', kind: 'task', subject: 'a', body: 'a' });
+  await store.send({
+    from: 'claude', to: 'grok', kind: 'task', subject: 'b', body: 'b', supersedes: original.seq
+  });
+  await assert.rejects(() => store.acknowledge('grok', [original.seq]), /no longer current/i);
+});
+
+test('ITEM 18 GREEN CONTROL: an ordinary send with no supersedes is untouched', async () => {
+  const plain = await store.send({ from: 'claude', to: 'grok', kind: 'note', subject: 'ordinary', body: 'hello' });
+  assert.equal(plain.superseded, undefined, 'a plain send carries no supersession fields');
+  assert.equal(plain.supersedeOutcome, undefined);
+  const inbox = await store.inbox('grok');
+  assert.ok(inbox.some((m) => m.seq === plain.seq), 'and it is delivered normally');
 });
 
