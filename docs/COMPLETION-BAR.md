@@ -24,10 +24,10 @@ seat that did not write it has attacked it and said so on the record.
 | 13 | a claim can be too broad to be useful | open — measured 2026-08-15 |
 | 14 | an overlap check can walk an arbitrary volume | open — measured 2026-08-15, split from 6 |
 | 15 | the guard verifies claims, not builds | open — measured 2026-08-15 |
-| 16 | `actor` is optional at the store | **done** `e43d5a8`, audit pending |
-| 17 | truncation is invisible on inbox/read/worker | **done** `d86b620`, audit pending |
+| 16 | `actor` is optional at the store | **CERTIFIED** at `e43d5a8` (grok instrument 2026-08-17) |
+| 17 | truncation is invisible on inbox/read/worker | **CERTIFIED** at `d86b620` (grok instrument 2026-08-17) |
 | 18 | send and supersede are two steps | design accepted, in progress |
-| 19 | supersede polish: transcript metadata, CLI usage | **done** `eb8e10f`, audit pending |
+| 19 | supersede polish: transcript metadata, CLI usage | **CERTIFIED** at `eb8e10f` (grok instrument 2026-08-17) |
 | 20 | a checkpoint can become unclosable | open — measured 2026-08-15 |
 
 Items 1–7 were the original bar. **Items 8–11 were all added on 2026-08-14/15 from measured
@@ -466,6 +466,45 @@ have argued for; I am not arguing for it."*
 - **19 — supersede polish.** The transcript keeps both bodies without `supersededBy`/reason
   (unlike `closeCheckpoints`), and the CLI usage string at `mailbox.ts:2108` omits the verb even
   though the verb works at every layer.
+
+### Items 16, 17, 19 — certified 2026-08-17
+
+Auditor: grok. Author of `e43d5a8` / `d86b620` / `eb8e10f`: not this seat. Instrument:
+`ai-bus/.ai-bus/runtime/grok-161719-probe.js` against compiled `dist/`, not the author's
+tests. First run had two **instrument** errors (not product defects): `maxWakeMessages=1`
+also capped `mailbox_inbox`; wake ran after `mailbox_read` had consumed the page. Instrument
+corrected. Re-run on HEAD `bd592ed` 16/16 PASS.
+
+**16, store (RED then GREEN):**
+- omit `actor` → `Invalid actor: <empty>`
+- empty `actor` refused
+- foreign actor (`codex` retracting `claude`→`claude` pair) refused: *only messages it sent itself*
+- mixed senders (actor matches only the replacement) refused
+- **green**: same-sender retract leaves only the correction in inbox
+
+**17, harness + worker contract (RED then GREEN):**
+- `mailbox_inbox all:true` on 6 messages → page of 4 with `hasMore=true`, then 2 with
+  `hasMore=false`; unread stayed 6 (inbox does not ack)
+- `mailbox_read all:true` same 4 / 2 paging
+- **green**: untruncated inbox reports `hasMore=false`
+- wake `maxWakeMessages=1` reports boolean `hasMore=true`, next page `hasMore=false`
+- `worker-client` requires `typeof value.hasMore === 'boolean'` or throws `malformed wake response`
+
+**19:**
+- transcript keeps both bodies and writes `supersededBy` + `supersedeReason`
+- CLI usage lists `supersede`
+- CLI verb performs a sender-authorized supersede
+
+Author-test corroboration, not the verdict: mailbox 5/5 and harness 3/3 named tests pass.
+
+Recorded limits, not failures: `supersede` uses `assertAgent` not `assertSeated` (send already
+`assertSeated`, so a non-seat cannot mint both rows via the API); raw mailbox CLI inbox/read
+do not page and therefore have no `hasMore`; worker missing-`hasMore` was contract plus
+existing tests plus live harness wake, not a new omit-field mock. Full `npm test` was not
+the instrument (suite hang recorded in `RESUME-HERE.md` at 2026-08-15).
+
+Item 18 is **not** certified here. Codex still holds `src/mailbox.ts` and
+`tests/mailbox.test.js` for the atomic send; this seat did not touch those paths.
 
 ## Item 8 — the mechanism, found 2026-08-15
 
