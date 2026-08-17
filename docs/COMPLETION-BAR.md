@@ -10,7 +10,7 @@ seat that did not write it has attacked it and said so on the record.
 | # | item | status |
 |---|---|---|
 | 1 | verified evidence memory | **CERTIFIED** at `ab9807a`; temporal binding **CERTIFIED** at `606d49d` |
-| 2 | consolidation of an assignment's episodes | open — deliberately last |
+| 2 | consolidation of an assignment's episodes | DONE `ac79509` - both hard gates; audit pending |
 | 3 | supersede a sent message | **CERTIFIED** at `1948082` — three audits, three commits |
 | 4 | cross-seat reassignment | **CERTIFIED** at `c755a42` (2026-08-14) |
 | 5 | distinguish *stalled* from *spent* | **CERTIFIED** at `78ffe75`+`48d24f4` — separates SPENT from STALLED; **BROKEN not covered** |
