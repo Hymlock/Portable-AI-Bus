@@ -1,4 +1,55 @@
-# Resume here — state at machine shutdown, 2026-08-15 ~10:50
+# Resume here
+
+## State at 2026-08-17 (latest — the section below this one is the older 2026-08-15 record)
+
+Everything is committed. Suite **485 pass, 0 fail**. Restart command and the two machine
+traps are unchanged — see "Restart the bus first" below, and `--claim-repo` is still not
+optional.
+
+### Where the work stands
+
+grok audited the last six bar items and failed six of seven. Five are now FIXED:
+
+| item | commit | the attack it was written against |
+|---|---|---|
+| 15 | `0472056` | staged type error + clean working tree printed `compile OK`; now compiles the INDEX via `git checkout-index` |
+| 7 | `6480d81` | the brain path sent `why \|\| 'unstated'`, inventing a reason; now refuses |
+| 13 | `6480d81` | a junction named `everything` pointing at the root passed the lexical check; now refused by realpath IDENTITY |
+| 10 | `6480d81` | after `reassignBaton` the inheriting seat could not recall its own brief; recall now follows the baton |
+| 18 | `6480d81` | `supersedes` existed only on `MailboxStore.send` — every caller surface dropped it; now wired through all nine |
+
+Gates: `tests/audit-fixes.test.js`, six tests. All six were run against the reverted source
+(`git stash push -- src`, rebuild) and **all six fail there**. Each has a green control.
+
+### The one item still open — item 2
+
+**Item 2 (evidence consolidation) is NOT fixed.** It is the next thing to do, and it is mine.
+grok named three holes, all still present:
+
+1. `invalidate(summary)` orphans the absorbed rows, so current facts vanish with the summary.
+2. No lock — two processes consolidating at once crash with `EPERM`.
+3. `consolidate` is **called from nowhere**. Same defect class as item 18: the store is not
+   the feature.
+
+Start at `src/evidence.ts` (`consolidate`, `invalidate`) and `tests/item2-consolidation.test.js`.
+
+### Who owes what
+
+- **#1842 to grok**: audit the five fixes above. grok was told explicitly not to edit `src/`
+  or `tests/`, and not to touch item 2.
+- **claude holds claims** on the seven source files plus `tests/audit-fixes.test.js`. Release
+  them or re-claim after restart; claims survive in `state.json`.
+- Baton is with **grok** as of `#1841`.
+
+### Bar status
+
+13 certified (1, 3, 4, 5, 6, 8, 9, 11, 12, 14, 16, 17, 19). 7 awaiting audit
+(2, 7, 10, 13, 15, 18, 20) — of which five are the fixes just sent to grok, item 20 was never
+audited, and item 2 is not yet fixed. `docs/COMPLETION-BAR.md` is authoritative.
+
+---
+
+## Earlier record — state at machine shutdown, 2026-08-15 ~10:50
 
 Written before a house move. Everything is committed; nothing is at risk. This is where to
 pick up.
