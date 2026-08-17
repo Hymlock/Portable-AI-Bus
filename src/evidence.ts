@@ -44,6 +44,14 @@ export type EvidenceRecord = {
   supersededBy?: string;
   invalidateReason?: string;
   verifier?: VerifierRecord;
+  /**
+   * Item 2. Present only on a consolidation summary: the ids of the episodes it absorbed.
+   *
+   * Deliberately NOT a VerifierRecord - a rollup is not an observation, and dressing it as one
+   * would be the tautology this project already paid for once. Its `trust` is derived from its
+   * inputs instead, and it can never exceed the weakest of them.
+   */
+  consolidatedFrom?: string[];
 };
 
 export type VerifierRecord = {
@@ -297,6 +305,85 @@ export class EvidenceStore {
   async list(workId?: number): Promise<EvidenceRecord[]> {
     const records = (await this.load()).records;
     return workId === undefined ? records : records.filter((item) => item.workId === workId);
+  }
+
+  /**
+   * Item 2. Consolidate one assignment's episodes into a single durable summary.
+   *
+   * The gap Cwars leaves: it supersedes facts, but episodes accumulate. `Bundle.format`'s
+   * max_chars bounds what is INJECTED, not what is STORED or ranked, so retrieval quality
+   * degrades as history grows even while prompt cost stays flat. Bounding the prompt is not
+   * bounding the memory.
+   *
+   * Two properties, and they pull against each other, which is why this had to be designed
+   * rather than adapted:
+   *
+   *   1. A consolidated summary MUST NOT RESURRECT SUPERSEDED STATE. Anything already
+   *      superseded or invalidated stays out of the summary. Rolling up "everything ever said"
+   *      would quietly restore facts that were deliberately retired - the exact failure the
+   *      supersession ordering guard exists to prevent.
+   *   2. It MUST BE LOSSLESS FOR ANYTHING STILL CURRENT. Every live record is either carried
+   *      into the summary or left standing. Consolidation is a compression of history, not a
+   *      decision about truth.
+   *
+   * Originals are SUPERSEDED, never deleted, so the audit trail survives - the same rule as
+   * closeCheckpoints and message supersession.
+   *
+   * TRUST IS NOT LAUNDERED. The summary is `untrusted` unless every record it absorbs was
+   * verified; a summary cannot be more trusted than its weakest input. Rolling three untrusted
+   * claims into one confident-sounding fact is precisely how a memory system starts lying.
+   */
+  async consolidate(
+    workId: number,
+    recordedBy: string,
+    options: { minEpisodes?: number } = {}
+  ): Promise<{ summary?: EvidenceRecord; absorbed: number; reason?: string }> {
+    const minEpisodes = options.minEpisodes ?? 3;
+    const file = await this.load();
+    const live = file.records.filter(
+      (item) => item.workId === workId && !item.supersededBy && !item.invalidateReason
+    );
+    // Never consolidate a summary into another summary: repeated rollups would compound any
+    // wording drift with nothing left to check them against.
+    const episodes = live.filter((item) => item.consolidatedFrom === undefined);
+    if (episodes.length < minEpisodes) {
+      return { absorbed: 0, reason: `only ${episodes.length} live episodes; minimum is ${minEpisodes}` };
+    }
+
+    const at = nowIso();
+    const sourceEventId = file.nextEventId;
+    file.nextEventId += 1;
+    // A summary is only as trustworthy as its weakest input. Rolling three untrusted claims into
+    // one confident-sounding fact is precisely how a memory system starts lying, so trust is
+    // never laundered upward by consolidation.
+    const allVerified = episodes.every((item) => item.trust === 'verified');
+
+    const summary: EvidenceRecord = {
+      id: randomUUID(),
+      workId,
+      subject: `consolidated: work #${workId}`,
+      // Lossless for anything still current: every live episode is carried, with its own trust
+      // level visible, so a reader can still see which parts were verified.
+      statement: episodes
+        .map((item) => `[${item.trust}] ${item.subject}: ${item.statement}`)
+        .join('\n'),
+      trust: allVerified ? 'verified' : 'untrusted',
+      recordedBy,
+      sourceEventId,
+      createdAt: at,
+      updatedAt: at,
+      consolidatedFrom: episodes.map((item) => item.id).sort()
+    };
+
+    // Superseded, never deleted - the audit trail survives, as with closeCheckpoints and
+    // message supersession.
+    for (const episode of episodes) {
+      episode.supersededBy = summary.id;
+      episode.updatedAt = at;
+    }
+    file.records.push(summary);
+    await this.save(file);
+    return { summary, absorbed: episodes.length };
   }
 
   async forWake(workIds: number[]): Promise<EvidenceRecord[]> {
