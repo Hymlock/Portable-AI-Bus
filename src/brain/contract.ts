@@ -74,7 +74,15 @@ export type WakeContext = {
  * brain nobody can reason about, and `mailbox_send` is how a seat reports without stopping.
  */
 export type BrainTools = {
-  send(input: { to: string; kind: string; subject: string; body: string; keepBaton?: boolean }): Promise<unknown>;
+  /**
+   * `supersedes` is item 18's atomic superseding send: retract an earlier message BY sending
+   * its replacement, so there is no window in which both are current. `supersede()` below is
+   * still the two-step form for retracting something already sent on its own.
+   */
+  send(input: {
+    to: string; kind: string; subject: string; body: string; keepBaton?: boolean;
+    supersedes?: number; supersedeReason?: string;
+  }): Promise<unknown>;
   /** Replace an earlier message sent by this seat with a newer message from the same seat. */
   supersede(input: { seq: number; by: number; reason: string }): Promise<unknown>;
   status(): Promise<Record<string, unknown>>;

@@ -852,9 +852,25 @@ export class MailboxStore {
     const file = await this.findMessagePathUnsafe(workId);
     if (!file) return undefined;
     const message = await this.readJson<BusMessage>(file);
-    if (message.to !== seat) return undefined;
     // A retracted instruction is not recalled. Supersession is the revocation path.
     if (message.supersededBy !== undefined) return undefined;
+
+    // Item 10, audit finding: RECALL MUST FOLLOW THE BATON.
+    //
+    // `message.to !== seat` alone was wrong, and wrong in exactly the case the item exists
+    // for. After reassignBaton the successor holds the open checkpoint on the same workId with
+    // inheritedFrom set, but the source message is still addressed to the PREDECESSOR - so the
+    // seat now doing the work could not recall its own brief, while the seat that no longer
+    // has it still could. Inheritance was the live failure: a seat died when node-pty vanished
+    // and the work moved.
+    //
+    // The checkpoint, not the address, is the authority on who holds this work.
+    if (message.to !== seat) {
+      const inherited = (message.recoveryCheckpoints ?? []).some(
+        (item) => item.seat === seat && item.status === 'open'
+      );
+      if (!inherited) return undefined;
+    }
     return `#${message.seq} from ${message.from}: ${message.subject}\n\n${message.body}`;
   }
 
@@ -1045,6 +1061,28 @@ export class MailboxStore {
       }
       if (missing.length > 0) {
         throw new ClaimPathMissingError(missing);
+      }
+      // Item 13, audit finding: the lexical check above cannot see a junction. A directory
+      // junction named `everything` pointing at the repo root passes as the path "everything",
+      // and then claimsOverlap - which compares by inode - blocks every file in the tree.
+      // Another spelling of everything.
+      //
+      // So refuse by IDENTITY as well as by spelling: if a claim resolves to a claim ROOT
+      // itself, it is the whole repository whatever it is called. Ancestor claims BELOW a root
+      // are unaffected, which is the property the walk exists to support.
+      for (const candidate of resolved) {
+        for (const rootPath of claimRoots) {
+          let rootIdentity: string | undefined;
+          try {
+            const stat = await fs.stat(rootPath, { bigint: true });
+            rootIdentity = filesystemIdentityMaterial(stat.dev, stat.ino);
+          } catch {
+            continue;
+          }
+          if (candidate.identity === rootIdentity) {
+            throw new WholeRepositoryClaimError(candidate.path);
+          }
+        }
       }
       for (const [other, claims] of Object.entries(state.claims)) {
         if (other === input.agent) {
@@ -2204,15 +2242,29 @@ async function runCli(argv = process.argv.slice(2)) {
     case 'send': {
       const bodyFile = stringArg(args, 'body-file');
       const body = bodyFile ? await fs.readFile(path.resolve(bodyFile), 'utf8') : stringArg(args, 'body', true);
+      // Item 18: `--supersedes` reaches the atomic superseding send. Without it the CLI could
+      // only do the two-step send-then-supersede, which is the exact window this replaced:
+      // between the two calls BOTH instructions are live and unread.
+      const supersedes = intArg(args, 'supersedes', 0);
       const message = await store.send({
         keepBaton: optionalBoolArg(args, 'keep-baton'),
         from: stringArg(args, 'from', true),
         to: stringArg(args, 'to', true),
         kind: stringArg(args, 'kind') || 'note',
         subject: stringArg(args, 'subject', true),
-        body
+        body,
+        ...(supersedes > 0 ? { supersedes } : {}),
+        ...(stringArg(args, 'supersede-reason')
+          ? { supersedeReason: stringArg(args, 'supersede-reason') }
+          : {})
       });
-      console.log(json ? JSON.stringify(message, null, 2) : `sent #${message.seq} [round ${message.round}]`);
+      let line = `sent #${message.seq} [round ${message.round}]`;
+      // The outcome is NOT the same as "it worked". A target the recipient already read is
+      // reported as target-consumed, and saying so is the difference between a correction that
+      // landed and one that only looks like it did.
+      if (message.superseded === true) line += ` superseding #${supersedes}`;
+      else if (message.supersedeOutcome) line += ` (NOT superseded: ${message.supersedeOutcome})`;
+      console.log(json ? JSON.stringify(message, null, 2) : line);
       return 0;
     }
     case 'supersede': {

@@ -399,12 +399,21 @@ export class HarnessServer {
             // and everything else passes it. This was missing from the schema AND from the
             // handler below, so --keep-baton worked on the direct CLI and was silently
             // dropped on the HTTP path - which is the only path agents actually use.
-            keepBaton: { type: 'boolean' }
+            keepBaton: { type: 'boolean' },
+            // Item 18, audit finding - and it is the SAME defect the keepBaton note above
+            // records, made twice. `supersedes` reached only MailboxStore.send, so the
+            // atomic superseding send was unreachable from the HTTP path, which is the only
+            // path agents actually use. When a store gains a capability, every surface that
+            // fronts it is part of the change.
+            supersedes: { type: 'integer', minimum: 1 },
+            supersedeReason: { type: 'string' }
           },
           ['from', 'to', 'subject', 'body']
         )
       },
-      { name: 'mailbox_claim', description: 'Hold existing workspace paths now after conflict checks; success is final and requires no acceptance step.', inputSchema: object({ agent, paths, why: { type: 'string' } }, ['agent', 'paths']) },
+      // Item 7: `why` is REQUIRED. A claim that cannot say what it is for is refused by the
+      // store, so the schema must say so rather than let the call fail deeper in.
+      { name: 'mailbox_claim', description: 'Hold existing workspace paths now after conflict checks; success is final and requires no acceptance step.', inputSchema: object({ agent, paths, why: { type: 'string' } }, ['agent', 'paths', 'why']) },
       { name: 'mailbox_release', description: 'Release exact paths, or all claims when paths is omitted.', inputSchema: object({ agent, paths }, ['agent']) },
       { name: 'mailbox_record_evidence', description: 'Record an UNTRUSTED evidence claim keyed to mailbox work. This is not verification.', inputSchema: object({ agent, subject: { type: 'string' }, statement: { type: 'string' }, workId: { type: 'integer', minimum: 1 } }, ['agent', 'subject', 'statement']) },
       { name: 'mailbox_promote_evidence', description: 'Observe the world and promote an evidence claim. The caller names a verifier kind; it cannot supply the observation.', inputSchema: object({ agent, id: { type: 'string' }, kind: { type: 'string', enum: ['commit-diff', 'runner-result', 'lifecycle-transition'] }, invocation: { type: 'string' }, transition: { type: 'string' } }, ['agent', 'id', 'kind']) },
@@ -723,7 +732,16 @@ export class HarnessServer {
           // silently undo that.
           ...(input.keepBaton === undefined
             ? {}
-            : { keepBaton: optionalBoolean(input.keepBaton, 'keepBaton') })
+            : { keepBaton: optionalBoolean(input.keepBaton, 'keepBaton') }),
+          // Item 18: same forwarding discipline. The store owns every rule about what a
+          // supersession means, including refusing to supersede a message this seat did not
+          // send; passing `undefined` through keeps that the single definition.
+          ...(input.supersedes === undefined
+            ? {}
+            : { supersedes: requireInteger(input.supersedes, 'supersedes') }),
+          ...(input.supersedeReason === undefined
+            ? {}
+            : { supersedeReason: requireString(input.supersedeReason, 'supersedeReason', 1_000) })
         });
       case 'mailbox_claim': {
         const requested = requireStringArray(input.paths, 'paths');

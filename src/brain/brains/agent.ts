@@ -13,7 +13,12 @@ import { EvidenceRecord, formatEvidenceForPrompt, isVerifierKind } from '../../e
 
 /** Vendor-neutral action the model may request. Keep this tiny on purpose. */
 export type BrainAction =
-  | { type: 'send'; to: string; kind?: string; subject: string; body: string; keepBaton?: boolean }
+  | {
+      type: 'send'; to: string; kind?: string; subject: string; body: string; keepBaton?: boolean;
+      // Item 18: retract-by-replacing, in one operation. Reachable from the model, or the
+      // capability is not implemented.
+      supersedes?: number; supersedeReason?: string;
+    }
   | { type: 'supersede'; seq: number; by: number; reason: string }
   | { type: 'claim'; paths: string[]; why: string }
   | { type: 'release'; paths?: string[] }
@@ -427,7 +432,13 @@ function isAction(value: unknown): value is BrainAction {
       return typeof action.to === 'string' && action.to.trim().length > 0 &&
         typeof action.subject === 'string' && typeof action.body === 'string' &&
         (action.kind === undefined || typeof action.kind === 'string') &&
-        (action.keepBaton === undefined || typeof action.keepBaton === 'boolean');
+        (action.keepBaton === undefined || typeof action.keepBaton === 'boolean') &&
+        // Item 18: an unusable `supersedes` must invalidate the ACTION rather than be silently
+        // dropped. A send that quietly loses its retraction leaves the stale instruction live -
+        // worse than a rejected plan, which the model gets told about and can retry.
+        (action.supersedes === undefined ||
+          (Number.isSafeInteger(action.supersedes) && Number(action.supersedes) > 0)) &&
+        (action.supersedeReason === undefined || typeof action.supersedeReason === 'string');
     case 'supersede':
       return Number.isSafeInteger(action.seq) && Number(action.seq) > 0 &&
         Number.isSafeInteger(action.by) && Number(action.by) > 0 &&
@@ -589,7 +600,9 @@ export async function executePlan(
           kind: action.kind ?? 'note',
           subject: action.subject,
           body: action.body,
-          keepBaton: action.keepBaton
+          keepBaton: action.keepBaton,
+          supersedes: action.supersedes,
+          supersedeReason: action.supersedeReason
         }));
         if (failure) {
           failures.push(failure);

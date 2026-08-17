@@ -108,7 +108,11 @@ function workspaceTools(mailbox: MailboxStore, capabilities: CapabilityRunner, s
     tool('mailbox_send', 'Send a durable message from this seat to a registered seat.', {
       type: 'object',
       properties: {
-        to: { type: 'string' }, kind: { type: 'string' }, subject: { type: 'string' }, body: { type: 'string' }
+        to: { type: 'string' }, kind: { type: 'string' }, subject: { type: 'string' }, body: { type: 'string' },
+        // Item 18, audit finding: `supersedes` existed only on MailboxStore.send, so every
+        // caller that reaches the store through a tool surface silently dropped it. A
+        // capability no caller can invoke is not implemented.
+        supersedes: { type: 'integer', minimum: 1 }, supersedeReason: { type: 'string' }
       },
       required: ['to', 'subject', 'body'], additionalProperties: false
     }, async (input) => {
@@ -120,7 +124,13 @@ function workspaceTools(mailbox: MailboxStore, capabilities: CapabilityRunner, s
         to,
         kind: optionalString(input.kind, 'kind', 100) || 'note',
         subject: requiredString(input.subject, 'subject', 1_000),
-        body: requiredString(input.body, 'body', 256 * 1024)
+        body: requiredString(input.body, 'body', 256 * 1024),
+        // Forwarded, not defaulted: `undefined` must reach the store so its own rule about
+        // what a bare send means stays the single definition.
+        ...(input.supersedes === undefined ? {} : { supersedes: requiredInteger(input.supersedes, 'supersedes') }),
+        ...(input.supersedeReason === undefined
+          ? {}
+          : { supersedeReason: optionalString(input.supersedeReason, 'supersedeReason', 1_000) })
       });
     }),
     tool('mailbox_claim', 'Hold existing workspace-relative paths now; a successful result is final and needs no acceptance step.', {

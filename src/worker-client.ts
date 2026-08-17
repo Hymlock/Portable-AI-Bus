@@ -596,7 +596,15 @@ export function seatToolInvocation(command: string, argv: string[], seat: string
           subject: requiredOption(argv, '--subject'),
           body: messageBody(argv),
           // "I have it, I am working" - do not bounce the baton to whoever is waiting.
-          ...(flag(argv, '--keep-baton') ? { keepBaton: true } : {})
+          ...(flag(argv, '--keep-baton') ? { keepBaton: true } : {}),
+          // Item 18: retract-by-replacing in one operation, rather than send-then-supersede
+          // with both instructions live in between.
+          ...(option(argv, '--supersedes') === undefined
+            ? {}
+            : { supersedes: positiveSequence(requiredOption(argv, '--supersedes'), '--supersedes') }),
+          ...(option(argv, '--supersede-reason') === undefined
+            ? {}
+            : { supersedeReason: requiredOption(argv, '--supersede-reason') })
         }
       };
     case 'supersede':

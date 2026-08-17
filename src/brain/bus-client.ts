@@ -246,7 +246,18 @@ export function cliBusClient(options: CliBusOptions): BusClient {
             kind: String(input?.kind ?? 'note').trim() || 'note',
             subject: String(input?.subject ?? '(no subject)').slice(0, 200),
             body: String(input?.body ?? '').trim() || '(empty)',
-            ...(typeof input?.keepBaton === 'boolean' ? { keepBaton: input.keepBaton } : {})
+            ...(typeof input?.keepBaton === 'boolean' ? { keepBaton: input.keepBaton } : {}),
+            // Item 18, audit finding: a brain could not retract its own stale instruction,
+            // because `supersedes` stopped at MailboxStore.send and never reached this
+            // surface. Still model output, so accept only a positive integer and drop
+            // anything else - a malformed value must not turn a correction into a failed
+            // send, for the same reason the body is defaulted rather than rejected above.
+            ...(Number.isInteger(input?.supersedes) && Number(input?.supersedes) > 0
+              ? { supersedes: Number(input?.supersedes) }
+              : {}),
+            ...(typeof input?.supersedeReason === 'string' && input.supersedeReason.trim().length > 0
+              ? { supersedeReason: input.supersedeReason.trim().slice(0, 1_000) }
+              : {})
           });
         },
 
@@ -270,7 +281,14 @@ export function cliBusClient(options: CliBusOptions): BusClient {
           // is still in doubt.
           const list = Array.isArray(paths) ? paths.filter((p) => typeof p === 'string' && p.trim()) : [];
           if (list.length === 0) return { refused: 'claim needs a non-empty paths array' };
-          return tool(seat, 'mailbox_claim', { agent: seat, paths: list, why: why || 'unstated' });
+          // Item 7, audit finding: this used to send `why || 'unstated'`, which INVENTS a reason
+      // for a caller that supplied none - the exact backfill forbidden for legacy rows a few
+      // lines from where it is forbidden. A claim that cannot say why it exists must be
+      // refused here too, not laundered into a placeholder that reads like an explanation.
+      if (typeof why !== 'string' || why.trim().length === 0) {
+        return { refused: 'claim needs a non-empty why: say what the claim is for' };
+      }
+      return tool(seat, 'mailbox_claim', { agent: seat, paths: list, why: why.trim() });
         },
 
         async release(paths) {
