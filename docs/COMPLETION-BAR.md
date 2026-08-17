@@ -16,11 +16,11 @@ seat that did not write it has attacked it and said so on the record.
 | 5 | distinguish *stalled* from *spent* | **CERTIFIED** at `78ffe75`+`48d24f4` — separates SPENT from STALLED; **BROKEN not covered** |
 | 6 | claim guard — satisfiable **and** mutually exclusive | **CERTIFIED** at `2dae2a7` — four audits, six commits |
 | 7 | claim schema — `why` is optional | open — specified below |
-| 8 | an ack is not a commitment | implemented — **not certified**; courtesy-only `done:true` keeps recovery open |
+| 8 | an ack is not a commitment | **CERTIFIED** at `247184e`+`6f975ec` (claude instrument, 10/10) |
 | 9 | a detector whose only sink is a log | **CERTIFIED** at `f3798fe` — notice file + bus-tick; still no auto-restart |
 | 10 | authorisation does not survive a wake | open — measured 2026-08-14 |
 | 11 | a broken link reports as *spent* | **CERTIFIED** at `5352b0d` — SPENT / STALLED / BROKEN split |
-| 12 | a call that never starts is invisible | implemented `a97deaf`+`b31177f` — **not certified** |
+| 12 | a call that never starts is invisible | **CERTIFIED** at `a97deaf`+`b31177f`+`ec41d92` (claude instrument, 5/5) |
 | 13 | a claim can be too broad to be useful | open — measured 2026-08-15 |
 | 14 | an overlap check can walk an arbitrary volume | open — measured 2026-08-15, split from 6 |
 | 15 | the guard verifies claims, not builds | open — measured 2026-08-15 |
@@ -591,6 +591,52 @@ Gates:
 - **a seat still cannot close another seat's checkpoint casually** — the refusal above is
   correct behaviour and must survive;
 - **green**: ordinary runner-driven closes are unchanged.
+
+## The suite hang — passing tests that never exit, 2026-08-15
+
+For several hours no verification was possible, and it was **two independent faults stacked**:
+
+1. **`npm install` wiped `node_modules/.bin`** — all 42 shims, so `tsc` vanished and every
+   compile-then-test path died with `'tsc' is not recognized`. Planner-caused. Repaired by
+   re-running `npm install`.
+2. **`tests/process-host.test.js` passed all 22 tests and then never exited.** A leftover
+   `conout` Worker survived the success-path `PtyKill` and held the event loop open. Fixed at
+   `bd592ed`.
+
+**A suite that passes but does not exit is indistinguishable from a broken one.** It made every
+green unverifiable — the same disease as a gate that cannot go red, one level up, applied to
+the whole test system. It also caused four wasted nudges at a seat whose work was fine.
+
+Suite after the fix: **441 pass, 0 fail, ~40 s.**
+
+## Item 12 — certified at `a97deaf`+`b31177f`+`ec41d92`
+
+Audited by the planner with its own instrument (codex spent, so the auditor role moved).
+Deliberately different numbers from the author's gates — those use `spawnStallMs` 80/30 with
+startup delays 50/40; this probe used 25/300/20 with a **120 ms** late sibling, which is
+harsher than codex's original false-negative case.
+
+| scenario | result |
+|---|---|
+| late sibling 120 ms vs threshold 25 ms, busy 250 ms | breach **recorded** — the parent clock works |
+| fast call 5 ms vs threshold 300 ms | nothing recorded |
+| sibling dies, spawn **returns** at 200 ms vs 20 ms | breach recorded — **parent backfill** |
+| sibling dies, fast call | nothing recorded |
+| on-time sibling, genuine breach | breach recorded |
+
+**5/5**, persisted readback from the ledger file each time.
+
+Two corrections the audit made to *itself*, both recorded because they are the point:
+
+- The first run reported two false failures. They were **pollution from orphaned watchdog
+  siblings** left by earlier killed runs — not defects. Re-running on a clean machine cleared
+  them.
+- One expectation was simply wrong: the auditor asserted that a dead sibling means *nothing is
+  recorded*. The author's claim is fail-open **only while spawn never returns**; a returning
+  call is backfilled by the parent. The code was right and the probe was wrong.
+
+**An auditor's instrument can be wrong, and a dirty machine can fake a finding.** Both happened
+here, and both were caught by re-running rather than by argument.
 
 ## Item 15 — the guard verifies claims, not builds
 
