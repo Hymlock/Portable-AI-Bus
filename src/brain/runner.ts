@@ -28,6 +28,12 @@ export type BusClient = {
   /** Move one poison message out of delivery while retaining its durable record. */
   park?(seat: string, seq: number, reason: string): Promise<unknown>;
   loadRecovery?(seat: string): Promise<RecoveryCheckpoint | undefined>;
+  /**
+   * Item 10. Recall the assignment a checkpoint is FOR, from its source message.
+   * Returns undefined when the source is gone or was superseded — a retracted brief must not
+   * come back through recovery.
+   */
+  recallAssignment?(seat: string, workId: number): Promise<string | undefined>;
   openRecovery?(seat: string, workId: number, note: string): Promise<RecoveryCheckpoint>;
   recordRecoveryAction?(seat: string, workId: number, actionId: string): Promise<RecoveryCheckpoint>;
   closeRecovery?(seat: string, workId: number, reason: string): Promise<unknown>;
@@ -211,6 +217,8 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
   let openWork: string | undefined;
   let recovery = await bus.loadRecovery?.(seat);
   let recoveryData: string | undefined;
+  /** Item 10: the assignment the open checkpoint is FOR, recalled from its source message. */
+  let assignmentRecall: string | undefined;
   if (recovery) {
     // These are two presentations of the SAME checkpoint.note, not competing sources. The first
     // restarted wake uses recoveryData so the prompt can label and tightly cap untrusted durable
@@ -219,6 +227,27 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
     hasOpenWork = true;
     openWork = recovery.note;
     recoveryData = recovery.note;
+
+    // Item 10: a checkpoint carries STATUS, not CONTENT. Measured 2026-08-15 - a seat woke with
+    // open work and could not state its own assignment: "retained only the note that work
+    // remains open; the concrete goal, paths, and completion gates are missing". It asked five
+    // times for the brief to be resent.
+    //
+    // Nothing needed to be stored to fix that. workId IS the source message's sequence, so the
+    // brief is already on disk, unchanged, with every path and gate in it. The checkpoint held a
+    // pointer and only the subject line was ever presented.
+    //
+    // Deliberately RECALL rather than COPY: no duplicated state to drift from the source, and a
+    // brief that was later retracted must not come back - so a superseded source is refused.
+    if (bus.recallAssignment) {
+      try {
+        assignmentRecall = await bus.recallAssignment(seat, recovery.workId);
+      } catch {
+        // Recall is a convenience over durable state that already exists. If it fails, the wake
+        // proceeds with the note alone - the pre-item-10 behaviour - rather than not waking.
+        assignmentRecall = undefined;
+      }
+    }
   }
 
   try {
@@ -407,6 +436,7 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
           messages,
           openWork,
           recoveryData,
+          assignmentRecall,
           evidence,
           recoveryActionIds: recovery?.actionReceipts,
           recordRecoveryAction: workId && bus.recordRecoveryAction

@@ -837,6 +837,28 @@ export class MailboxStore {
   }
 
   /**
+   * Item 10. Recall the assignment an open checkpoint is FOR.
+   *
+   * A checkpoint carries STATUS ("work remains open") and not CONTENT. Measured 2026-08-15: a
+   * seat woke holding open work and could not state its own assignment, and asked five times
+   * for the brief to be resent. Nothing needed storing to fix it — `workId` IS the source
+   * message's sequence, so the brief was already on disk with every path and gate in it.
+   *
+   * Recall, never copy. Duplicated state drifts from its source, and a brief that was later
+   * RETRACTED must not return through recovery — so a superseded source yields nothing. That is
+   * what makes item 3's supersession the revocation path for item 10's carrying.
+   */
+  async recallAssignment(seat: string, workId: number): Promise<string | undefined> {
+    const file = await this.findMessagePathUnsafe(workId);
+    if (!file) return undefined;
+    const message = await this.readJson<BusMessage>(file);
+    if (message.to !== seat) return undefined;
+    // A retracted instruction is not recalled. Supersession is the revocation path.
+    if (message.supersededBy !== undefined) return undefined;
+    return `#${message.seq} from ${message.from}: ${message.subject}\n\n${message.body}`;
+  }
+
+  /**
    * Item 20. An operator route to close a checkpoint whose owning seat can no longer close it.
    *
    * `closeRecovery` is reachable only from the runner, so a checkpoint held by a seat with no

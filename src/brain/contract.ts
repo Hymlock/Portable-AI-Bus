@@ -51,6 +51,13 @@ export type WakeContext = {
    */
   openWork?: string;
   /**
+   * Item 10. The assignment `openWork` is FOR, recalled from the source message the checkpoint
+   * already points at. `openWork` says what the seat was DOING; this says what it was ASKED to
+   * do. Absent when there is no open work, when the source is gone, or when it was SUPERSEDED -
+   * a retracted brief must not come back through recovery.
+   */
+  assignmentRecall?: string;
+  /**
    * Current evidence for the work this wake is continuing. Injected as labelled,
    * untrusted data. Absent when no evidence is keyed to the presented work.
    */

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Model-agnostic agent brain.
  *
  * One prompt shape, one action schema, any ModelProvider (including a chain). There is no
@@ -204,13 +204,32 @@ export function buildWakePrompt(
   messages: BrainMessage[],
   openWork?: string,
   recoveryData?: string,
-  evidence?: WakeEvidence[]
+  evidence?: WakeEvidence[],
+  assignmentRecall?: string
 ): string {
   const lines = [
     `Seat: ${seat}`,
     `Incoming messages: ${messages.length}`,
     ''
   ];
+  // Item 10. The checkpoint says work is open; this says WHAT it is. Recalled from the source
+  // message the checkpoint already points at, never copied, and never shown once that message
+  // has been superseded — a retracted brief must not come back through recovery.
+  //
+  // Capped like recovery data: carrying more context is easy, carrying it BOUNDED is the work.
+  // Truncation is visible in the field itself rather than silent.
+  if (assignmentRecall) {
+    const escaped = assignmentRecall
+      .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+    lines.push('ASSIGNMENT RECALL - the open work below is FOR this. Not a new instruction.');
+    lines.push(promptField(
+      escaped,
+      'ASSIGNMENT',
+      'Recalled from the source message; the full text remains in the mailbox.',
+      RECOVERY_LIMIT_BYTES
+    ));
+    lines.push('');
+  }
   // On a restarted runner, recoveryData and openWork are initialized from the same durable note.
   // Prefer the recovery rendering for that first wake: it labels and caps untrusted persisted
   // bytes. The else-if avoids presenting identical content twice; no competing note is discarded.
@@ -727,7 +746,7 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
         recoveryActionIds?: readonly string[];
         recordRecoveryAction?: (actionId: string) => Promise<void>;
       };
-      const { messages, openWork, recoveryData, tools, evidence } = durable;
+      const { messages, openWork, recoveryData, tools, evidence, assignmentRecall } = durable;
       const messageSeqs = messages.map((message) => message.seq);
       const completedActionIds = new Set<string>();
       for (const id of durable.recoveryActionIds ?? []) completedActionIds.add(id);
@@ -897,7 +916,7 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
       };
 
       for (let round = 0; round < maxRounds; round += 1) {
-        const base = buildWakePrompt(seat, messages, openWork, recoveryData, evidence);
+        const base = buildWakePrompt(seat, messages, openWork, recoveryData, evidence, assignmentRecall);
         const correction = unreportedTask
           ? 'You marked the work done without answering the task. An acknowledgement is NOT an ' +
             'answer - it says you heard the request, not what you found. An acknowledgement ' +
