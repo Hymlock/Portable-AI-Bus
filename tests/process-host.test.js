@@ -37,7 +37,14 @@ test('Windows process host observes a real no-output child exit promptly', {
 }, () => {
   const { result, elapsedMs } = runWindowsProcessHostTimedProbe('process.exit(23)', 10_000);
 
-  assert.ok(elapsedMs < 2_000, 'child exit must not wait for the ten-second backstop');
+  // useConptyDll:true has a measured first-call floor of ~3.9-4.2s on this
+  // machine (isolated spawnSync pays it every time). The 2s budget was written
+  // against the 869ms useConptyDll:false path that hid AttachConsole failures.
+  // Prompt still means "not the 10s backstop": code 23, not 124.
+  assert.ok(
+    elapsedMs < 8_000,
+    `child exit must not wait for the ten-second backstop (${elapsedMs}ms)`
+  );
   assert.equal(result.code, 23);
   assert.match(result.stderr, /exited with code 23/);
 });
