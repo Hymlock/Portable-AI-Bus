@@ -77,4 +77,59 @@ try {
 
 const result = guardStagedPaths(seat, staged, claims);
 console.log(formatGuardResult(seat, result));
-process.exit(result.ok ? 0 : 1);
+if (!result.ok) process.exit(1);
+
+/**
+ * Item 15: the guard verified CLAIMS and not BUILDS.
+ *
+ * Measured 2026-08-15: c772aa5 changed acknowledge()'s signature in runner.ts without updating
+ * bus-client.ts, and landed with this hook ACTIVE and reporting success. `npm test` then exited
+ * 2 before running a single test, and HEAD stayed broken for twenty-five minutes while another
+ * seat worked on top of it, with every unrelated failure hidden behind the compile error.
+ *
+ * The hook answered "is this yours to commit?" and nothing answered "does this work?".
+ *
+ * Deliberately compile-only, not the full suite. Item 6 spent a whole session proving that a
+ * guard which cannot be SATISFIED gets bypassed exactly as surely as one that cannot go RED, so
+ * the green case - an honest commit stays fast - is load-bearing. tsc is seconds; the suite is
+ * forty and would push seats toward --no-verify, which is the failure this is meant to prevent.
+ *
+ * The escape hatch is explicit and LOGGED rather than achieved by disabling the hook.
+ */
+if (process.env.BUS_ALLOW_BROKEN_BUILD === '1') {
+  console.log('claim-guard: BUS_ALLOW_BROKEN_BUILD=1 - compile check SKIPPED for this commit');
+  console.log('             deliberate WIP. Say so in the commit message.');
+  process.exit(0);
+}
+
+const tsconfig = path.join(repo, 'tsconfig.json');
+if (!fs.existsSync(tsconfig)) process.exit(0);
+
+const tscCandidates = [
+  path.join(repo, 'node_modules', '.bin', process.platform === 'win32' ? 'tsc.cmd' : 'tsc'),
+  path.join(repo, 'node_modules', 'typescript', 'bin', 'tsc')
+];
+const tsc = tscCandidates.find((candidate) => fs.existsSync(candidate));
+if (!tsc) {
+  // No compiler is not a broken build. Refusing here would be the unsatisfiable-guard trap:
+  // on 2026-08-15 an npm install wiped node_modules/.bin and tsc vanished for two hours.
+  console.log('claim-guard: no local tsc found; compile check skipped');
+  process.exit(0);
+}
+
+try {
+  const isCmd = tsc.endsWith('.cmd');
+  execFileSync(isCmd ? process.env.ComSpec || 'cmd.exe' : process.execPath,
+    isCmd ? ['/c', tsc, '-p', repo, '--noEmit'] : [tsc, '-p', repo, '--noEmit'],
+    { cwd: repo, encoding: 'utf8', stdio: 'pipe' });
+  console.log('claim-guard: compile OK');
+  process.exit(0);
+} catch (error) {
+  const detail = `${error.stdout || ''}${error.stderr || ''}`.trim().split('\n').slice(0, 6).join('\n');
+  console.error('claim-guard: REFUSING - this commit does not compile.\n');
+  console.error(detail || error.message);
+  console.error('\nA commit that does not build blocks every other seat and hides every other');
+  console.error('failure behind it. Fix it, or commit deliberately with BUS_ALLOW_BROKEN_BUILD=1');
+  console.error('and say so in the message.');
+  process.exit(1);
+}
