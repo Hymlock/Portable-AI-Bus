@@ -18,7 +18,7 @@ seat that did not write it has attacked it and said so on the record.
 | 7 | claim schema — `why` is optional | DONE `2e4a08d` - required at the store; audit pending |
 | 8 | an ack is not a commitment | **CERTIFIED** at `247184e`+`6f975ec` (claude instrument, 10/10) |
 | 9 | a detector whose only sink is a log | **CERTIFIED** at `f3798fe` — notice file + bus-tick; still no auto-restart |
-| 10 | authorisation does not survive a wake | open — measured 2026-08-14 |
+| 10 | authorisation does not survive a wake | DONE `45cb7d5` - assignment recall from the source message; audit pending |
 | 11 | a broken link reports as *spent* | **CERTIFIED** at `5352b0d` — SPENT / STALLED / BROKEN split |
 | 12 | a call that never starts is invisible | **CERTIFIED** at `a97deaf`+`b31177f`+`ec41d92` (claude instrument, 5/5) |
 | 13 | a claim can be too broad to be useful | DONE `2e4a08d` - root claims refused; audit pending |
