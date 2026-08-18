@@ -220,22 +220,40 @@ test('ITEM 15 GREEN CONTROL: a relative include inside the staged tree still com
   assert.match(result.out, /compile OK \(staged index\)/);
 });
 
-test('ITEM 15: declared consequences of trusting the staged config are stated, not hidden', async (t) => {
+/**
+ * This test previously asserted exit 0 on `noCheck: true` - it ENCODED THE DEFECT.
+ *
+ * I had classified noCheck as a declared consequence of running tsc and logged it. grok
+ * overruled that classification, and under the stopping rule we adopted the classification is
+ * the auditor's to make, not mine. Its reason is better than my excuse: noCheck is the hook
+ * turning itself off from inside the artifact it is supposed to be checking. A staged config
+ * that disables checking is not a verified index; it is an unverified one that prints green.
+ */
+test('ITEM 15 RED: staged noCheck is not a verified index', async (t) => {
   const { repo, busRoot, linked } = await fixtureRepo(t);
   if (!linked) return t.skip('could not link node_modules');
-  // grok classified these as a different class from the worktree-escape hole: tsc obeys the
-  // STAGED config's own switches, which is the price of running tsc rather than writing a
-  // private typechecker. Its instruction was "log it", so a green must not read as more than
-  // it is. This is deliberately NOT called a control - it asserts new output and so cannot
-  // pass against the old guard.
   await fsp.writeFile(path.join(repo, 'tsconfig.json'), JSON.stringify({
     compilerOptions: { strict: true, noEmit: true, skipLibCheck: true, types: [], noCheck: true },
+    include: ['src']
+  }, null, 2));
+  git(repo, 'add', '-A');
+  const result = runGuard(repo, busRoot);
+  assert.equal(result.code, 1, 'noCheck is the hook turning itself off from inside the artifact');
+  assert.match(result.out, /noCheck/);
+});
+
+test('ITEM 15: a narrowing exclude is printed, not refused', async (t) => {
+  const { repo, busRoot, linked } = await fixtureRepo(t);
+  if (!linked) return t.skip('could not link node_modules');
+  // exclude stays a NOTE: it narrows what is checked without claiming the check happened.
+  // That is the line grok drew, and it is a finer one than "tsc trusts the staged config".
+  await fsp.writeFile(path.join(repo, 'tsconfig.json'), JSON.stringify({
+    compilerOptions: { strict: true, noEmit: true, skipLibCheck: true, types: [] },
     include: ['src'], exclude: ['src/nothing.ts']
   }, null, 2));
   git(repo, 'add', '-A');
   const result = runGuard(repo, busRoot);
   assert.equal(result.code, 0);
-  assert.match(result.out, /noCheck/, 'a commit checked with checking disabled must say so');
   assert.match(result.out, /excludes 1 pattern/);
 });
 
@@ -615,6 +633,72 @@ test('ITEM 2 RED: consolidate is reachable - closing an assignment compacts it',
   const summary = records.find((item) => item.consolidatedFrom !== undefined);
   assert.ok(summary, 'REGRESSION: work ended and nothing ever compacted it');
   assert.equal(summary.consolidatedFrom.length, 3);
+});
+
+test('ITEM 2 RED: operator close also compacts', async (t) => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'pab-i2op-'));
+  t.after(() => fsp.rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 50 }).catch(() => {}));
+  const store = new MailboxStore(dir);
+  await store.ensureInitialized(['claude', 'grok'], 500);
+  const source = await store.send({ from: 'claude', to: 'grok', kind: 'task', subject: 'work', body: 'do it' });
+  await store.openRecovery('grok', source.seq, 'started');
+  for (let i = 0; i < 3; i += 1) {
+    await store.recordEvidence({ agent: 'grok', subject: `step-${i}`, statement: `did ${i}`, workId: source.seq });
+  }
+
+  // Both verbs END an assignment; I had wired compaction into only one of them. The operator
+  // path is the one used when a seat is stranded, which is exactly when nobody is left to
+  // tidy up by hand.
+  await store.operatorCloseRecovery('grok', source.seq, 'stranded seat');
+
+  const records = await store.listEvidence(source.seq);
+  const summary = records.find((item) => item.consolidatedFrom !== undefined);
+  assert.ok(summary, 'REGRESSION: operator close ended the assignment and nothing compacted it');
+  assert.equal(summary.consolidatedFrom.length, 3);
+});
+
+test('ITEM 2 RED: a lock with no live owner is debris and is cleared in milliseconds', async (t) => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'pab-i2lock-'));
+  t.after(() => fsp.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 50 }).catch(() => {}));
+  const dir = path.join(root, '.ai-bus', 'runtime', 'mailbox');
+  await fsp.mkdir(dir, { recursive: true });
+  const lockPath = path.join(dir, 'evidence.json.lock');
+
+  // My rule was "recover when the pid is present AND dead", so every other shape of rubbish
+  // counted as a live owner and blocked every writer for the full ten-second timeout. Debris
+  // that outlasts its process is an outage. The positive rule: only a LIVE pid holds a lock.
+  for (const [name, contents] of [
+    ['empty bytes', ''],
+    ['unparseable', '{not-json'],
+    ['no pid at all', JSON.stringify({ at: new Date().toISOString() })],
+    ['a pid that is not a number', JSON.stringify({ pid: 'seventeen' })],
+    ['a non-integer pid', JSON.stringify({ pid: 1e308 })],
+    ['a negative pid', JSON.stringify({ pid: -5 })]
+  ]) {
+    await fsp.writeFile(lockPath, contents);
+    const store = new EvidenceStore(root);
+    const started = Date.now();
+    await store.record({ workId: 1, subject: name, statement: 'x', recordedBy: 'grok' });
+    const elapsed = Date.now() - started;
+    assert.ok(elapsed < 2000, `"${name}" blocked for ${elapsed}ms - debris must not hold the lock`);
+  }
+});
+
+test('ITEM 2 GREEN CONTROL: a lock owned by a LIVE process is respected', async (t) => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'pab-i2live-'));
+  t.after(() => fsp.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 50 }).catch(() => {}));
+  const dir = path.join(root, '.ai-bus', 'runtime', 'mailbox');
+  await fsp.mkdir(dir, { recursive: true });
+  // This process is alive, so its lock must be waited on, not stolen. Without this control a
+  // fix that simply deleted every lock would look identical to a correct one.
+  await fsp.writeFile(path.join(dir, 'evidence.json.lock'),
+    JSON.stringify({ pid: process.pid, at: new Date().toISOString() }));
+  const store = new EvidenceStore(root);
+  await assert.rejects(
+    () => store.record({ workId: 1, subject: 's', statement: 'x', recordedBy: 'grok' }),
+    /Timed out waiting for the evidence lock/,
+    'a live owner must be waited on and then time out, never overrun'
+  );
 });
 
 test('ITEM 2 GREEN CONTROL: too few episodes consolidates nothing, and says why', async (t) => {

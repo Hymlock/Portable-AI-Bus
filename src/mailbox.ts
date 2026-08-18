@@ -982,7 +982,7 @@ export class MailboxStore {
     if (typeof operatorReason !== 'string' || operatorReason.trim().length === 0) {
       throw new Error('Operator close refused: a reason is required. Nothing was closed.');
     }
-    return this.withLock(async () => {
+    const checkpoint = await this.withLock(async () => {
       const file = await this.findMessagePathUnsafe(workId);
       if (!file) return undefined;
       const message = await this.readJson<BusMessage>(file);
@@ -999,6 +999,18 @@ export class MailboxStore {
       await this.atomicJson(file, message);
       return checkpoint;
     });
+    // Item 2, found by grok: I wired consolidation into closeRecovery and not into its
+    // OPERATOR twin, so an assignment ended by an operator never compacted. Both verbs end an
+    // assignment; only one of them tidied up. Inheritance and reassignment still must NOT
+    // compact - that work is continuing, not finished.
+    if (checkpoint) {
+      try {
+        await this.evidence.consolidate(workId, seat);
+      } catch {
+        // Intentionally swallowed. Compaction is an optimisation; the close is the fact.
+      }
+    }
+    return checkpoint;
   }
 
   /**

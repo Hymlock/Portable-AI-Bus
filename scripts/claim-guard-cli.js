@@ -2,12 +2,11 @@
 /**
  * Check what you are about to commit against your claims.
  *
- *   node scripts/claim-guard-cli.js --root "<bus root>" --seat claude
- *   node scripts/claim-guard-cli.js --root "<bus root>" --seat claude --install-hook
+ * DROP-IN PATCH for scripts/claim-guard-cli.js (item 15 holes 1-4 + noCheck).
+ * Tested by tmp-audit-r6-grok.cjs. Do not treat this file as the live hook.
  *
- * `--install-hook` writes a pre-commit hook so the check runs whether or not anyone remembers
- * it. A guard that depends on being invoked is a guard that fails on the day it matters — and
- * this project has proved that repeatedly.
+ *   tsc may see the materialised index and the declared node_modules junction.
+ *   Nothing else. Unverifiable refuses.
  *
  * Exit 0 clean, 1 refused, 2 misuse.
  */
@@ -70,12 +69,6 @@ try {
   const statePath = path.join(root, '.ai-bus', 'runtime', 'mailbox', 'state.json');
   claims = JSON.parse(fs.readFileSync(statePath, 'utf8')).claims ?? {};
 } catch {
-  // No mailbox means no claims to check against: this half of the guard exists for a SHARED
-  // worktree, and a missing bus is evidence there is not one.
-  //
-  // Round 3 (grok): this used to exit(0), which switched off the COMPILE check as well - and
-  // a wrong or stale BUS_ROOT reaches it just as surely as a deliberate one. Two unrelated
-  // questions were sharing an exit. Only the claim question depends on the mailbox.
   console.log('claim-guard: no mailbox state found; claim check skipped (not a shared worktree)');
 }
 
@@ -85,50 +78,12 @@ if (claims !== undefined) {
   if (!result.ok) process.exit(1);
 }
 
-/**
- * Item 15: the guard verified CLAIMS and not BUILDS.
- *
- * Measured 2026-08-15: c772aa5 changed acknowledge()'s signature in runner.ts without updating
- * bus-client.ts, and landed with this hook ACTIVE and reporting success. `npm test` then exited
- * 2 before running a single test, and HEAD stayed broken for twenty-five minutes while another
- * seat worked on top of it, with every unrelated failure hidden behind the compile error.
- *
- * The hook answered "is this yours to commit?" and nothing answered "does this work?".
- *
- * Deliberately compile-only, not the full suite. Item 6 spent a whole session proving that a
- * guard which cannot be SATISFIED gets bypassed exactly as surely as one that cannot go RED, so
- * the green case - an honest commit stays fast - is load-bearing. tsc is seconds; the suite is
- * forty and would push seats toward --no-verify, which is the failure this is meant to prevent.
- *
- * The escape hatch is explicit and LOGGED rather than achieved by disabling the hook.
- */
 if (process.env.BUS_ALLOW_BROKEN_BUILD === '1') {
   console.log('claim-guard: BUS_ALLOW_BROKEN_BUILD=1 - compile check SKIPPED for this commit');
   console.log('             deliberate WIP. Say so in the commit message.');
   process.exit(0);
 }
 
-/**
- * `tsc -p repo` compiles the WORKING TREE, not the INDEX. Stage a type error, restore a
- * compiling working tree, and the guard printed `compile OK` while a non-compiling commit
- * landed. A pre-commit check must verify WHAT IS BEING COMMITTED, so this materialises the
- * index with `git checkout-index` - which writes exactly the staged content - and compiles it.
- *
- * SECOND AUDIT (grok, 2026-08-17). Materialising the index was right; everything around it
- * leaked, and all four holes were the same mistake: consulting the WORKING TREE about a
- * question only the INDEX can answer.
- *
- *   - tsconfig.json was checked for, and then COPIED FROM, the worktree. So renaming it away
- *     skipped the check entirely, and a worktree tsconfig with a narrow `include` compiled a
- *     subset of the staged tree and printed `compile OK (staged index)`. A staged tsconfig
- *     that does not even parse sailed through behind a good worktree one.
- *   - a missing tsconfig and a missing tsc both exited 0.
- *
- * So: the index supplies its own tsconfig, and every path that cannot actually verify the
- * staged tree now REFUSES. The escape hatch is what keeps that satisfiable - item 6 proved a
- * guard that cannot be satisfied gets bypassed exactly as surely as one that cannot go red -
- * and it is explicit and logged rather than achieved by disabling the hook.
- */
 function refuse(reason, remedy) {
   console.error(`claim-guard: REFUSING - ${reason}\n`);
   if (remedy) console.error(`${remedy}\n`);
@@ -146,39 +101,13 @@ try {
   });
 } catch (error) {
   if (scratch) fs.rmSync(scratch, { recursive: true, force: true });
-  // Previously this fell back to compiling the worktree. That is the one thing it must not do:
-  // the fallback answers a different question and reports it in the same words.
   refuse(
     `the index could not be materialised (${error.message.split('\n')[0]})`,
     'Without the staged tree there is nothing to verify.'
   );
 }
 
-/**
- * ROUND 3 (grok). "The index supplies its own tsconfig" was still an enumeration of guard-side
- * lookups, and it decided two attacks WRONGLY rather than not deciding them:
- *
- *   - a staged tsconfig whose `include` is the ABSOLUTE path of the worktree src/. The index
- *     supplied the config; the config pointed tsc at the worktree; the guard printed
- *     `compile OK (staged index)`.
- *   - a staged tsconfig that `extends` an untracked worktree-only base with a narrow include.
- *     Worse than a bypass: after such a commit lands, local tsc keeps following a base that
- *     is not in the repository at all, so it stays green locally and fails in CI.
- *
- * I stopped the guard reading the worktree and did not stop TSC reading it. So state the rule
- * about the COMPILER, which is the thing that actually reads files:
- *
- *   tsc may see the materialised index and the declared node_modules junction. Nothing else.
- *   A staged tsconfig whose extends/include/files/references resolve outside the scratch tree
- *   is UNVERIFIABLE, and unverifiable refuses.
- *
- * Note what this does NOT claim to stop, because a declared consequence is not a hole: tsc
- * still trusts the staged config's own switches. `noCheck: true` in the index disables
- * checking, and a narrow `exclude` still narrows. Those are the price of running tsc rather
- * than writing a private typechecker; they are logged loudly below rather than pretended away.
- */
 function stripJsonComments(text) {
-  // Enough for tsconfig: line and block comments outside strings, plus trailing commas.
   let out = '';
   let inString = false;
   let inLine = false;
@@ -201,36 +130,117 @@ function stripJsonComments(text) {
   return out.replace(/,(\s*[}\]])/g, '$1');
 }
 
+function comparable(value) {
+  const normalized = path.resolve(value).replace(/\\/g, '/').replace(/\/$/, '');
+  return process.platform === 'win32' ? normalized.toLocaleLowerCase('en-US') : normalized;
+}
+
+function pathContains(parent, child) {
+  const left = comparable(parent);
+  const right = comparable(child);
+  return left === right || right.startsWith(`${left}/`);
+}
+
 function withinScratch(target, scratchRoot) {
   const rel = path.relative(scratchRoot, target);
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 }
 
+function realpathOrSelf(target) {
+  try {
+    return fs.realpathSync(target);
+  } catch {
+    return target;
+  }
+}
+
 /**
- * Walks the staged config and its extends chain, refusing anything that escapes the scratch
- * tree. Returns a list of human-readable escapes; empty means the compiler can only see what
- * this commit contains.
+ * The declared node_modules junction exists so tsc can resolve types.
+ * It is not a permit to compile worktree sources under another name.
+ * A path is allowed only if its real location is inside the scratch tree
+ * or inside the real repo node_modules.
  */
-function findConfigEscapes(configPath, scratchRoot, seen = new Set()) {
+function compilerMaySee(target, scratchRoot, repoModulesReal) {
+  const real = realpathOrSelf(target);
+  if (withinScratch(real, scratchRoot)) return true;
+  if (repoModulesReal && pathContains(repoModulesReal, real)) return true;
+  if (!fs.existsSync(target) && withinScratch(target, scratchRoot)) return true;
+  return false;
+}
+
+function resolveExtendsEntry(entry, fromDir, scratchRoot) {
+  if (typeof entry !== 'string' || entry.length === 0) return null;
+  if (entry.startsWith('.') || path.isAbsolute(entry)) {
+    return path.resolve(fromDir, entry.endsWith('.json') ? entry : `${entry}.json`);
+  }
+  const slash = entry.replace(/\\/g, '/');
+  const scoped = slash.startsWith('@');
+  const segs = slash.split('/');
+  const pkgName = scoped ? segs.slice(0, 2).join('/') : segs[0];
+  const sub = scoped ? segs.slice(2).join('/') : segs.slice(1).join('/');
+  const pkgDir = path.join(scratchRoot, 'node_modules', pkgName);
+  if (sub) {
+    const asWritten = path.join(pkgDir, sub);
+    const asJson = sub.endsWith('.json') ? asWritten : `${asWritten}.json`;
+    if (fs.existsSync(asWritten)) return asWritten;
+    return asJson;
+  }
+  const tsconfig = path.join(pkgDir, 'tsconfig.json');
+  if (fs.existsSync(tsconfig)) return tsconfig;
+  try {
+    const pkgJson = JSON.parse(fs.readFileSync(path.join(pkgDir, 'package.json'), 'utf8'));
+    if (typeof pkgJson.tsconfig === 'string' && pkgJson.tsconfig.length > 0) {
+      return path.resolve(pkgDir, pkgJson.tsconfig);
+    }
+  } catch {
+    // missing or unreadable package.json: fall through
+  }
+  return tsconfig;
+}
+
+function decodeConfigText(buf) {
+  // tsc reads tsconfig the way an editor does: UTF-8, UTF-16 LE, UTF-16 BE,
+  // with or without a BOM. JSON.parse only accepts UTF-8 and rejects a BOM.
+  // r17 leftover: UTF-8 BOM + noCheck compiled a type error.
+  // r17b leftover: UTF-16 LE/BE + noCheck compiled a type error. Same class.
+  if (buf.length >= 2 && buf[0] === 0xff && buf[1] === 0xfe) {
+    return buf.slice(2).toString('utf16le');
+  }
+  if (buf.length >= 2 && buf[0] === 0xfe && buf[1] === 0xff) {
+    const swapped = Buffer.alloc(buf.length - 2);
+    for (let i = 2; i + 1 < buf.length; i += 2) {
+      swapped[i - 2] = buf[i + 1];
+      swapped[i - 1] = buf[i];
+    }
+    return swapped.toString('utf16le');
+  }
+  const text = buf.toString('utf8');
+  return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+}
+
+function readConfig(configPath) {
+  try {
+    const text = decodeConfigText(fs.readFileSync(configPath));
+    return JSON.parse(stripJsonComments(text));
+  } catch {
+    return null;
+  }
+}
+
+function findConfigEscapes(configPath, scratchRoot, repoModulesReal, seen = new Set()) {
   const escapes = [];
   const resolved = path.resolve(configPath);
   if (seen.has(resolved)) return escapes;
   seen.add(resolved);
 
-  let config;
-  try {
-    config = JSON.parse(stripJsonComments(fs.readFileSync(resolved, 'utf8')));
-  } catch (error) {
-    // A tsconfig that does not parse is its own refusal, handled by tsc. Nothing to walk.
-    return escapes;
-  }
+  const config = readConfig(resolved);
+  if (!config) return escapes;
   const base = path.dirname(resolved);
   const check = (value, label) => {
     if (typeof value !== 'string' || value.length === 0) return;
-    // A glob's fixed prefix is what decides where it starts looking.
     const literal = value.split(/[*?]/)[0];
     const target = path.resolve(base, literal);
-    if (!withinScratch(target, scratchRoot)) escapes.push(`${label}: ${value}`);
+    if (!compilerMaySee(target, scratchRoot, repoModulesReal)) escapes.push(`${label}: ${value}`);
   };
 
   for (const key of ['include', 'files', 'exclude']) {
@@ -240,31 +250,269 @@ function findConfigEscapes(configPath, scratchRoot, seen = new Set()) {
     check(reference?.path, 'references');
   }
   const options = config.compilerOptions ?? {};
-  for (const key of ['baseUrl', 'rootDir', 'outDir', 'declarationDir']) check(options[key], `compilerOptions.${key}`);
+  for (const key of ['baseUrl', 'rootDir', 'outDir', 'declarationDir', 'tsBuildInfoFile', 'outFile', 'mapRoot', 'sourceRoot']) {
+    check(options[key], `compilerOptions.${key}`);
+  }
   for (const entry of Array.isArray(options.rootDirs) ? options.rootDirs : []) check(entry, 'compilerOptions.rootDirs');
   for (const entry of Array.isArray(options.typeRoots) ? options.typeRoots : []) check(entry, 'compilerOptions.typeRoots');
   for (const [alias, targets] of Object.entries(options.paths ?? {})) {
     for (const entry of Array.isArray(targets) ? targets : []) check(entry, `compilerOptions.paths["${alias}"]`);
   }
+  // compilerOptions.types names packages, not paths. After resolve, the
+  // realpath must stay in scratch or the declared node_modules.
+  for (const entry of Array.isArray(options.types) ? options.types : []) {
+    if (typeof entry !== 'string' || entry.length === 0) continue;
+    const resolved = resolveTypesPackage(entry, scratchRoot);
+    if (resolved && !compilerMaySee(resolved, scratchRoot, repoModulesReal)) {
+      escapes.push(`compilerOptions.types: ${entry}`);
+    }
+  }
+  if (typeof options.jsxImportSource === 'string' && options.jsxImportSource.length > 0) {
+    const resolved = resolveModuleSpecifier(options.jsxImportSource, scratchRoot, scratchRoot);
+    if (resolved && !compilerMaySee(resolved, scratchRoot, repoModulesReal)) {
+      escapes.push(`compilerOptions.jsxImportSource: ${options.jsxImportSource}`);
+    }
+  }
 
   const extend = config.extends;
   for (const entry of Array.isArray(extend) ? extend : extend === undefined ? [] : [extend]) {
     if (typeof entry !== 'string') continue;
-    // A bare specifier resolves inside node_modules, which is declared and allowed.
-    const isRelative = entry.startsWith('.') || path.isAbsolute(entry);
-    if (!isRelative) continue;
-    const target = path.resolve(base, entry.endsWith('.json') ? entry : `${entry}.json`);
-    if (!withinScratch(target, scratchRoot)) {
+    const target = resolveExtendsEntry(entry, base, scratchRoot);
+    if (!target) continue;
+    if (!fs.existsSync(target)) {
+      escapes.push(`extends (missing from the index): ${entry}`);
+      continue;
+    }
+    if (!compilerMaySee(target, scratchRoot, repoModulesReal)) {
       escapes.push(`extends: ${entry}`);
       continue;
     }
-    if (fs.existsSync(target)) escapes.push(...findConfigEscapes(target, scratchRoot, seen));
-    else escapes.push(`extends (missing from the index): ${entry}`);
+    escapes.push(...findConfigEscapes(target, scratchRoot, repoModulesReal, seen));
   }
   return escapes;
 }
 
-// The INDEX must carry its own tsconfig. Reading the worktree's here was attacks 3 and 4.
+function configSetsNoCheck(configPath, scratchRoot, seen = new Set()) {
+  const resolved = path.resolve(configPath);
+  if (seen.has(resolved)) return false;
+  seen.add(resolved);
+  const config = readConfig(resolved);
+  if (!config) return false;
+  if (config.compilerOptions?.noCheck === true) return true;
+  const extend = config.extends;
+  for (const entry of Array.isArray(extend) ? extend : extend === undefined ? [] : [extend]) {
+    if (typeof entry !== 'string') continue;
+    const target = resolveExtendsEntry(entry, path.dirname(resolved), scratchRoot);
+    if (target && fs.existsSync(target) && configSetsNoCheck(target, scratchRoot, seen)) return true;
+  }
+  return false;
+}
+
+const TRIPLE_SLASH_PATH = /\/\/\/\s*<reference\b[^>]*\bpath\s*=\s*["']([^"']+)["']/;
+const TRIPLE_SLASH_TYPES = /\/\/\/\s*<reference\b[^>]*\btypes\s*=\s*["']([^"']+)["']/;
+
+function isTypeScriptSource(name) {
+  return name.endsWith('.ts') || name.endsWith('.tsx') || name.endsWith('.cts') || name.endsWith('.mts');
+}
+
+function isOwnProgramSource(file) {
+  const name = String(file).replace(/\\/g, '/');
+  if (name.endsWith('.d.ts')) return false;
+  return /\.(ts|tsx|cts|mts|js|jsx|cjs|mjs)$/i.test(name);
+}
+
+/**
+ * compilerOptions.noCheck spelled in the source. TypeScript honours a
+ * leading // @ts-nocheck (after shebang / comment banner). One file with
+ * it is the exclude-NOTE case. Every own program source with it is an
+ * unchecked success — same class as noCheck, should-refuse.
+ */
+function leadingTsNocheck(filePath) {
+  let text;
+  try {
+    text = fs.readFileSync(filePath, 'utf8').replace(/^\uFEFF/, '');
+  } catch {
+    return false;
+  }
+  for (const line of text.split(/\r?\n/).slice(0, 30)) {
+    const t = line.trim();
+    if (t === '' || t.startsWith('#!')) continue;
+    if (/^\/\/\s*@ts-nocheck\b/.test(t) || /^\/\*\s*@ts-nocheck\b/.test(t)) return true;
+    if (t.startsWith('//') || t.startsWith('/*') || t.startsWith('*')) continue;
+    return false;
+  }
+  return false;
+}
+
+function isWalkedSource(name) {
+  return isTypeScriptSource(name)
+    || name.endsWith('.js') || name.endsWith('.jsx')
+    || name.endsWith('.cjs') || name.endsWith('.mjs');
+}
+
+function isPathSpecifier(spec) {
+  return spec.startsWith('.') || spec.startsWith('/') || /^[A-Za-z]:[\\/]/.test(spec);
+}
+
+function resolveTypesPackage(name, scratchRoot) {
+  if (typeof name !== 'string' || name.length === 0) return null;
+  const slash = name.replace(/\\/g, '/');
+  const scoped = slash.startsWith('@');
+  const segs = slash.split('/');
+  const pkgName = scoped ? segs.slice(0, 2).join('/') : segs[0];
+  const atTypes = path.join(scratchRoot, 'node_modules', '@types', scoped ? segs[1] || pkgName : pkgName);
+  const pkgDir = path.join(scratchRoot, 'node_modules', pkgName);
+  if (fs.existsSync(atTypes)) return atTypes;
+  if (fs.existsSync(pkgDir)) return pkgDir;
+  return atTypes;
+}
+
+function resolveModuleSpecifier(spec, fromDir, scratchRoot) {
+  if (typeof spec !== 'string' || spec.length === 0) return null;
+  if (isPathSpecifier(spec)) return path.resolve(fromDir, spec);
+  const slash = spec.replace(/\\/g, '/');
+  const scoped = slash.startsWith('@');
+  const segs = slash.split('/');
+  const pkgName = scoped ? segs.slice(0, 2).join('/') : segs[0];
+  const pkgDir = path.join(scratchRoot, 'node_modules', pkgName);
+  const typesDir = path.join(scratchRoot, 'node_modules', '@types', scoped ? segs[1] || pkgName : pkgName);
+  if (fs.existsSync(pkgDir)) return pkgDir;
+  if (fs.existsSync(typesDir)) return typesDir;
+  return pkgDir;
+}
+
+/**
+ * Default typeRoots is node_modules/@types. The walker only saw an
+ * explicit typeRoots key. A junction under @types onto the worktree is
+ * hole 2 spelled as the default.
+ */
+function findImplicitTypeRootEscapes(scratchRoot, repoModulesReal) {
+  const escapes = [];
+  const atTypes = path.join(scratchRoot, 'node_modules', '@types');
+  let entries;
+  try {
+    entries = fs.readdirSync(atTypes, { withFileTypes: true });
+  } catch {
+    return escapes;
+  }
+  for (const ent of entries) {
+    const full = path.join(atTypes, ent.name);
+    if (!compilerMaySee(full, scratchRoot, repoModulesReal)) {
+      escapes.push(`typeRoots (default @types): ${ent.name}`);
+    }
+  }
+  return escapes;
+}
+
+function findSourceEscapes(scratchRoot, repoModulesReal) {
+  const escapes = [];
+  const relOf = (full) => path.relative(scratchRoot, full).replace(/\\/g, '/');
+  const checkTarget = (target, label) => {
+    if (!compilerMaySee(target, scratchRoot, repoModulesReal)) escapes.push(label);
+  };
+  const walk = (dir) => {
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const ent of entries) {
+      if (ent.name === 'node_modules' || ent.name === '.git') continue;
+      const full = path.join(dir, ent.name);
+      let lst;
+      try {
+        lst = fs.lstatSync(full);
+      } catch {
+        continue;
+      }
+      // File symlink, directory symlink, or junction: realpath must stay in scratch
+      // (or the declared node_modules). Do not walk an outbound reparse.
+      if (lst.isSymbolicLink() || (lst.isDirectory() && !compilerMaySee(full, scratchRoot, repoModulesReal))) {
+        if (!compilerMaySee(full, scratchRoot, repoModulesReal)) {
+          escapes.push(`staged symlink: ${relOf(full)}`);
+          continue;
+        }
+      }
+      if (lst.isDirectory() && !lst.isSymbolicLink()) {
+        walk(full);
+        continue;
+      }
+      if (lst.isDirectory()) continue;
+      if (!isWalkedSource(ent.name)) continue;
+      let text;
+      try {
+        text = fs.readFileSync(full, 'utf8');
+      } catch {
+        continue;
+      }
+      for (const line of text.split(/\r?\n/)) {
+        const pathRef = line.match(TRIPLE_SLASH_PATH);
+        if (pathRef) {
+          checkTarget(
+            path.resolve(path.dirname(full), pathRef[1]),
+            `/// <reference path> in ${relOf(full)}: ${pathRef[1]}`
+          );
+        }
+        const typesRef = line.match(TRIPLE_SLASH_TYPES);
+        if (typesRef) {
+          const resolved = resolveTypesPackage(typesRef[1], scratchRoot);
+          if (resolved) checkTarget(resolved, `/// <reference types> in ${relOf(full)}: ${typesRef[1]}`);
+        }
+        const specs = [];
+        const fromMatch = line.match(/\bfrom\s+['"]([^'"]+)['"]/);
+        const importMatch = line.match(/\bimport\s+['"]([^'"]+)['"]/);
+        const dynMatch = line.match(/\bimport\s*\(\s*['"]([^'"]+)['"]/);
+        const reqMatch = line.match(/\brequire\s*\(\s*['"]([^'"]+)['"]/);
+        if (fromMatch) specs.push(fromMatch[1]);
+        if (importMatch) specs.push(importMatch[1]);
+        if (dynMatch) specs.push(dynMatch[1]);
+        if (reqMatch) specs.push(reqMatch[1]);
+        for (const spec of specs) {
+          const resolved = resolveModuleSpecifier(spec, path.dirname(full), scratchRoot);
+          if (resolved) checkTarget(resolved, `import ${spec} in ${relOf(full)}`);
+        }
+      }
+    }
+  };
+  walk(scratchRoot);
+  return escapes;
+}
+
+function runTsc(tsc, args, cwd) {
+  const isCmd = tsc.endsWith('.cmd');
+  return execFileSync(
+    isCmd ? process.env.ComSpec || 'cmd.exe' : process.execPath,
+    isCmd ? ['/c', tsc, ...args] : [tsc, ...args],
+    { cwd, encoding: 'utf8', stdio: 'pipe' }
+  );
+}
+
+function classifyListedFiles(listText, scratchRoot, repoModulesReal, typescriptReal) {
+  const files = listText.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const program = [];
+  const leaks = [];
+  for (const file of files) {
+    const real = realpathOrSelf(file);
+    // Only the declared repo node_modules, and the typescript package the
+    // guard itself invoked (a fixture may junction that package in from
+    // another tree). A substring match on "/node_modules/" is not a
+    // permit — package.json "types" can name any outside path.
+    if (repoModulesReal && pathContains(repoModulesReal, real)) continue;
+    if (typescriptReal && pathContains(typescriptReal, real)) continue;
+    if (withinScratch(real, scratchRoot) || comparable(real).includes(comparable(scratchRoot))) {
+      program.push(file);
+      continue;
+    }
+    leaks.push(file);
+  }
+  return { program, leaks };
+}
+
+function programSourcesFromList(listText, scratchRoot, repoModulesReal, typescriptReal) {
+  return classifyListedFiles(listText, scratchRoot, repoModulesReal, typescriptReal).program;
+}
+
 const stagedTsconfig = path.join(scratch, 'tsconfig.json');
 if (!fs.existsSync(stagedTsconfig)) {
   fs.rmSync(scratch, { recursive: true, force: true });
@@ -276,8 +524,6 @@ if (!fs.existsSync(stagedTsconfig)) {
   );
 }
 
-// node_modules is deliberately not in the index; without it the compile fails for the wrong
-// reason, which is a red that is not about the staged code.
 const modules = path.join(repo, 'node_modules');
 if (!fs.existsSync(modules)) {
   fs.rmSync(scratch, { recursive: true, force: true });
@@ -298,12 +544,28 @@ const tscCandidates = [
 const tsc = tscCandidates.find((candidate) => fs.existsSync(candidate));
 if (!tsc) {
   fs.rmSync(scratch, { recursive: true, force: true });
-  // This used to exit 0 on the reasoning that "no compiler is not a broken build". True, but
-  // it is also not a verified build, and the guard printed the same silence for both.
   refuse('no local tsc was found, so nothing verified this commit', 'Run `npm install`.');
 }
 
-const escapes = findConfigEscapes(stagedTsconfig, scratch);
+let repoModulesReal;
+try {
+  repoModulesReal = fs.realpathSync(modules);
+} catch {
+  repoModulesReal = modules;
+}
+
+let typescriptReal;
+try {
+  typescriptReal = fs.realpathSync(path.join(modules, 'typescript'));
+} catch {
+  typescriptReal = null;
+}
+
+const escapes = [
+  ...findConfigEscapes(stagedTsconfig, scratch, repoModulesReal),
+  ...findSourceEscapes(scratch, repoModulesReal),
+  ...findImplicitTypeRootEscapes(scratch, repoModulesReal)
+];
 if (escapes.length > 0) {
   fs.rmSync(scratch, { recursive: true, force: true });
   refuse(
@@ -316,14 +578,16 @@ if (escapes.length > 0) {
   );
 }
 
-// Declared consequences, not holes: tsc obeys the STAGED config's own switches. Said out loud
-// so nobody reads a green as more than it is.
+if (configSetsNoCheck(stagedTsconfig, scratch)) {
+  fs.rmSync(scratch, { recursive: true, force: true });
+  refuse(
+    'the staged tsconfig sets compilerOptions.noCheck, so tsc will not type-check this commit',
+    'A green plus a NOTE is not a verified index. Remove noCheck, or use BUS_ALLOW_BROKEN_BUILD=1.'
+  );
+}
+
 try {
-  const staged = JSON.parse(stripJsonComments(fs.readFileSync(stagedTsconfig, 'utf8')));
-  if (staged?.compilerOptions?.noCheck === true) {
-    console.log('claim-guard: NOTE - the staged tsconfig sets noCheck; tsc will not type-check.');
-    console.log('             The compile below proves only that the config loads.');
-  }
+  const staged = readConfig(stagedTsconfig);
   if (Array.isArray(staged?.exclude) && staged.exclude.length > 0) {
     console.log(`claim-guard: NOTE - the staged tsconfig excludes ${staged.exclude.length} pattern(s); excluded files are not checked.`);
   }
@@ -332,10 +596,51 @@ try {
 }
 
 try {
-  const isCmd = tsc.endsWith('.cmd');
-  execFileSync(isCmd ? process.env.ComSpec || 'cmd.exe' : process.execPath,
-    isCmd ? ['/c', tsc, '-p', scratch, '--noEmit'] : [tsc, '-p', scratch, '--noEmit'],
-    { cwd: scratch, encoding: 'utf8', stdio: 'pipe' });
+  runTsc(tsc, ['-p', scratch, '--noEmit'], scratch);
+  let listed;
+  try {
+    listed = runTsc(tsc, ['-p', scratch, '--listFilesOnly'], scratch);
+  } catch (error) {
+    fs.rmSync(scratch, { recursive: true, force: true });
+    refuse(
+      'tsc reported success but the compiled program could not be listed, so nothing verified this commit',
+      error.message
+    );
+  }
+  const classified = classifyListedFiles(listed, scratch, repoModulesReal, typescriptReal);
+  if (classified.leaks.length > 0) {
+    fs.rmSync(scratch, { recursive: true, force: true });
+    refuse(
+      'tsc compiled files outside the staged tree, so nothing here verifies this commit:\n' +
+        classified.leaks.map((item) => `  - ${item}`).join('\n'),
+      'tsc may see the materialised index and node_modules, and nothing else. listFilesOnly\n' +
+        'is what the compiler actually loaded. A package.json types/exports field, a\n' +
+        'jsxImportSource package, or an allowJs import that resolves outside is the same leak\n' +
+        'as a triple-slash path — the walker is not the authority, tsc is.'
+    );
+  }
+  const program = classified.program;
+  if (program.length === 0) {
+    fs.rmSync(scratch, { recursive: true, force: true });
+    refuse(
+      'tsc compiled no program source, so an empty success is not a verified index',
+      'A solution-style root with files: [] (or any config that type-checks nothing) does not\n' +
+        'verify the staged tree. Point tsc at the staged sources, or use BUS_ALLOW_BROKEN_BUILD=1.'
+    );
+  }
+  const own = program.filter(isOwnProgramSource);
+  const nochecked = own.filter(leadingTsNocheck);
+  if (own.length > 0 && nochecked.length === own.length) {
+    fs.rmSync(scratch, { recursive: true, force: true });
+    refuse(
+      'every staged program source sets @ts-nocheck, so tsc will not type-check this commit',
+      'A green plus a NOTE is not a verified index. @ts-nocheck on the whole program is\n' +
+        'compilerOptions.noCheck spelled in the source. Remove it, or use BUS_ALLOW_BROKEN_BUILD=1.'
+    );
+  }
+  if (nochecked.length > 0) {
+    console.log(`claim-guard: NOTE - ${nochecked.length} staged file(s) set @ts-nocheck; those files are not checked.`);
+  }
   console.log('claim-guard: compile OK (staged index)');
   fs.rmSync(scratch, { recursive: true, force: true });
   process.exit(0);

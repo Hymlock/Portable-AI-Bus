@@ -481,13 +481,35 @@ export class EvidenceStore {
         await handle.close();
         owns = true;
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-        const owner = await fs.readFile(lockPath, 'utf8')
-          .then((text) => JSON.parse(text) as { pid?: number })
-          .catch(() => undefined);
-        // A lock whose owner is gone is debris, not a claim.
-        if (owner?.pid !== undefined && !evidenceProcessAlive(owner.pid)) {
-          await fs.rm(lockPath, { force: true });
+        const code = (error as NodeJS.ErrnoException).code;
+        // Windows reports EEXIST when the lock path is a DIRECTORY; Unix reports EISDIR on the
+        // open itself. Either way there is no owner there. Found by grok (r13c): a directory
+        // at the lock path made the non-recursive rm below throw instead of clearing debris.
+        if (code !== 'EEXIST' && code !== 'EISDIR') throw error;
+        const raw = await fs.readFile(lockPath, 'utf8').catch(() => '');
+        let owner: { pid?: unknown } | undefined;
+        try {
+          const text = raw.replace(/^﻿/, '').trim();
+          owner = text ? JSON.parse(text) as { pid?: unknown } : undefined;
+        } catch {
+          owner = undefined;
+        }
+        /**
+         * A lock is debris unless it NAMES A LIVE POSITIVE INTEGER PID.
+         *
+         * My version only recovered when the pid was present AND dead, so every other shape
+         * of rubbish - empty bytes, `{not-json`, a JSON object with no pid, a float, a
+         * string, a directory - was treated as a live owner and blocked every writer for the
+         * full ten-second timeout. Debris that outlasts its process is an outage, and this is
+         * the positive form of the rule: only a live owner holds the lock.
+         */
+        const pid = owner?.pid;
+        const liveOwner = typeof pid === 'number'
+          && Number.isSafeInteger(pid)
+          && pid > 0
+          && evidenceProcessAlive(pid);
+        if (!liveOwner) {
+          await fs.rm(lockPath, { force: true, recursive: true });
           continue;
         }
         if (Date.now() - started >= EVIDENCE_LOCK_TIMEOUT_MS) {
@@ -499,7 +521,7 @@ export class EvidenceStore {
     try {
       return await action();
     } finally {
-      await fs.rm(lockPath, { force: true });
+      await fs.rm(lockPath, { force: true, recursive: true });
     }
   }
 
