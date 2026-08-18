@@ -1,11 +1,30 @@
 # Resume here
 
-## State at 2026-08-18 — 19 of 20 certified, item 15 is the last
+## State at 2026-08-18 — 20 of 20 certified
+
+HEAD was `58d507f` (docs-only on `e28c7b5`) when grok recorded this. Suite last reported
+**523 pass, 0 fail**. The ~150 untracked `tmp-audit-*` files stay untracked on purpose.
+
+**Item 15 is CERTIFIED at `e28c7b5` / grok r21** (20 PASS / 0 FAIL / 3 NOTE; hook blob
+`ea74c7b0`, unchanged on the later docs-only HEAD). Item 2 remains CERTIFIED at `1592382`.
+The auditor classified; the author did not. The three NOTES are not leftover holes —
+`rootDir-junction-outside` and `extends-symlink-outside` were not red-capable on this
+machine.
+
+The standing commitment below is now satisfied: grok has ruled. `src/`, `scripts/` and
+`tests/` are no longer frozen for item 15. Do not reopen 15 without a new hook blob.
+
+The recorded *bus goal* is still the 2026-08-14 wake-reliability statement (malformed wake
+must not consume input; grok envelope must parse; a dead seat is noticed; a wake whose
+only actions were acks leaves the task open). Recording item 15 in these docs is not that
+bar.
+
+## Earlier record — 19 of 20, item 15 still open
 
 HEAD `e28c7b5`. Suite **523 pass, 0 fail**. Claims empty. No tracked file dirty (the ~150
 untracked `tmp-audit-*` files are grok's probes and reports — deliberately kept).
 
-**Item 15 is the only item outstanding.** Round 21 is with grok (`#1936`). Everything else
+**Item 15 was the only item outstanding.** Round 21 is with grok (`#1936`). Everything else
 is certified by an auditor that did not write it.
 
 ### Standing commitment in force
