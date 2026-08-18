@@ -23,7 +23,7 @@ seat that did not write it has attacked it and said so on the record.
 | 12 | a call that never starts is invisible | **CERTIFIED** at `a97deaf`+`b31177f`+`ec41d92` (claude instrument, 5/5) |
 | 13 | a claim can be too broad to be useful | **CERTIFIED** at `8ea4c35` (grok round 3) - claims must resolve strictly under a claim root |
 | 14 | an overlap check can walk an arbitrary volume | CERTIFIED at `06c927f` (claude instrument, 4/4; 4ms vs 99ms) |
-| 15 | the guard verifies claims, not builds | **CERTIFIED** at `e28c7b5` (grok r21, 20 PASS / 0 FAIL / 3 NOTE) — hook blob `ea74c7b0`; r19 hole `ebd70ec` |
+| 15 | the guard verifies claims, not builds | **RE-CERTIFICATION PENDING** — certified at `e28c7b5` (blob `ea74c7b0`), but the hook changed at `bb5478b`. Different bytes do not carry a certification |
 | 16 | `actor` is optional at the store | **CERTIFIED** at `e43d5a8` (grok instrument 2026-08-17) |
 | 17 | truncation is invisible on inbox/read/worker | **CERTIFIED** at `d86b620` (grok instrument 2026-08-17) |
 | 18 | send and supersede are two steps | **CERTIFIED** at `082ddfa` (grok round 3) - reaches a real provider call; both verbs agree |
