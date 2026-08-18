@@ -10,7 +10,7 @@ seat that did not write it has attacked it and said so on the record.
 | # | item | status |
 |---|---|---|
 | 1 | verified evidence memory | **CERTIFIED** at `ab9807a`; temporal binding **CERTIFIED** at `606d49d` |
-| 2 | consolidation of an assignment's episodes | **FAILED AUDIT, NOT YET FIXED** `ac79509` - invalidate orphans absorbed rows; no lock; called from nowhere |
+| 2 | consolidation of an assignment's episodes | FIXED after audit `8312282` - lock, undo, and a caller; audit pending |
 | 3 | supersede a sent message | **CERTIFIED** at `1948082` — three audits, three commits |
 | 4 | cross-seat reassignment | **CERTIFIED** at `c755a42` (2026-08-14) |
 | 5 | distinguish *stalled* from *spent* | **CERTIFIED** at `78ffe75`+`48d24f4` — separates SPENT from STALLED; **BROKEN not covered** |
@@ -18,15 +18,15 @@ seat that did not write it has attacked it and said so on the record.
 | 7 | claim schema — `why` is optional | **CERTIFIED** at `6480d81` (grok instrument 2026-08-17) |
 | 8 | an ack is not a commitment | **CERTIFIED** at `247184e`+`6f975ec` (claude instrument, 10/10) |
 | 9 | a detector whose only sink is a log | **CERTIFIED** at `f3798fe` — notice file + bus-tick; still no auto-restart |
-| 10 | authorisation does not survive a wake | FAILED 2nd AUDIT `6480d81` - predecessor still recalls; closed checkpoint still grants |
+| 10 | authorisation does not survive a wake | **CERTIFIED** at `082ddfa` (grok round 3) - an open checkpoint is the only authority |
 | 11 | a broken link reports as *spent* | **CERTIFIED** at `5352b0d` — SPENT / STALLED / BROKEN split |
 | 12 | a call that never starts is invisible | **CERTIFIED** at `a97deaf`+`b31177f`+`ec41d92` (claude instrument, 5/5) |
-| 13 | a claim can be too broad to be useful | FAILED 2nd AUDIT `6480d81` - parent-of-root junction; missing claim root + foreign tree |
+| 13 | a claim can be too broad to be useful | **CERTIFIED** at `8ea4c35` (grok round 3) - claims must resolve strictly under a claim root |
 | 14 | an overlap check can walk an arbitrary volume | CERTIFIED at `06c927f` (claude instrument, 4/4; 4ms vs 99ms) |
-| 15 | the guard verifies claims, not builds | FAILED 2nd AUDIT `0472056` - worktree tsconfig overwrites the index copy; two skips exit 0 |
+| 15 | the guard verifies claims, not builds | FAILED round 3; refixed `8b5ae78` - tsc may see only the index + node_modules; audit pending |
 | 16 | `actor` is optional at the store | **CERTIFIED** at `e43d5a8` (grok instrument 2026-08-17) |
 | 17 | truncation is invisible on inbox/read/worker | **CERTIFIED** at `d86b620` (grok instrument 2026-08-17) |
-| 18 | send and supersede are two steps | FAILED 2nd AUDIT `6480d81` - PLAN_SCHEMA omits it; atomic and two-step disagree |
+| 18 | send and supersede are two steps | **CERTIFIED** at `082ddfa` (grok round 3) - reaches a real provider call; both verbs agree |
 | 19 | supersede polish: transcript metadata, CLI usage | **CERTIFIED** at `eb8e10f` (grok instrument 2026-08-17) |
 | 20 | a checkpoint can become unclosable | DONE `2e4a08d` - operator close, reason required; audit pending |
 
