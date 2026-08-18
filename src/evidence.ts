@@ -197,6 +197,18 @@ type EvidenceFile = {
 
 const SCHEMA = 1 as const;
 const EVIDENCE_LIMIT_BYTES = 2048;
+const EVIDENCE_LOCK_TIMEOUT_MS = 10_000;
+
+/** Signal 0 tests for existence without delivering anything. EPERM means alive but foreign. */
+function evidenceProcessAlive(pid: number): boolean {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
 
 export class EvidencePromotionError extends Error {
   constructor(message: string) {
@@ -213,24 +225,28 @@ export class EvidenceStore {
   }
 
   async record(input: RecordInput): Promise<EvidenceRecord> {
-    const file = await this.load();
-    const now = nowIso();
-    const sourceEventId = input.sourceEventId ?? file.nextEventId;
-    file.nextEventId = Math.max(file.nextEventId, sourceEventId + 1);
-    const record: EvidenceRecord = {
-      id: randomUUID(),
-      workId: input.workId,
-      subject: input.subject.trim(),
-      statement: input.statement,
-      trust: 'untrusted',
-      recordedBy: input.recordedBy,
-      sourceEventId,
-      createdAt: now,
-      updatedAt: now
-    };
-    file.records.push(record);
-    await this.save(file);
-    return record;
+    // `nextEventId` is a counter read then written, so two unlocked recorders hand out the
+    // same sourceEventId - and sourceEventId is what orders supersession.
+    return this.withLock(async () => {
+      const file = await this.load();
+      const now = nowIso();
+      const sourceEventId = input.sourceEventId ?? file.nextEventId;
+      file.nextEventId = Math.max(file.nextEventId, sourceEventId + 1);
+      const record: EvidenceRecord = {
+        id: randomUUID(),
+        workId: input.workId,
+        subject: input.subject.trim(),
+        statement: input.statement,
+        trust: 'untrusted',
+        recordedBy: input.recordedBy,
+        sourceEventId,
+        createdAt: now,
+        updatedAt: now
+      };
+      file.records.push(record);
+      await this.save(file);
+      return record;
+    });
   }
 
   async get(id: string): Promise<EvidenceRecord> {
@@ -247,6 +263,12 @@ export class EvidenceStore {
   }
 
   async promote(id: string, observation?: BusObservation | null): Promise<EvidenceRecord> {
+    // The supersession-ordering guard below reads the current verified fact and then writes
+    // it. Unlocked, two promotions can each decide they are newest and both win.
+    return this.withLock(async () => this.promoteUnsafe(id, observation));
+  }
+
+  private async promoteUnsafe(id: string, observation?: BusObservation | null): Promise<EvidenceRecord> {
     const file = await this.load();
     const record = file.records.find((item) => item.id === id);
     if (!record) throw new Error(`evidence ${id} does not exist`);
@@ -291,15 +313,45 @@ export class EvidenceStore {
   }
 
   async invalidate(id: string, reason: string): Promise<EvidenceRecord> {
-    const file = await this.load();
-    const record = file.records.find((item) => item.id === id);
-    if (!record) throw new Error(`evidence ${id} does not exist`);
-    record.trust = 'untrusted';
-    record.invalidateReason = reason.trim();
-    record.updatedAt = nowIso();
-    delete record.supersededBy;
-    await this.save(file);
-    return record;
+    return this.withLock(async () => {
+      const file = await this.load();
+      const record = file.records.find((item) => item.id === id);
+      if (!record) throw new Error(`evidence ${id} does not exist`);
+      const at = nowIso();
+      record.trust = 'untrusted';
+      record.invalidateReason = reason.trim();
+      record.updatedAt = at;
+      delete record.supersededBy;
+
+      /**
+       * Item 2, audit finding: invalidating a SUMMARY orphaned everything it absorbed.
+       *
+       * The episodes carry `supersededBy: <summary id>`, so `currentEvidence` filters them
+       * out; invalidating the summary filters that out too, and the assignment's entire
+       * history silently became invisible. Not wrong-looking - GONE, which is worse, because
+       * an empty result reads like "nothing was ever recorded".
+       *
+       * The principle was already written above this method: consolidation is a COMPRESSION
+       * OF HISTORY, NOT A DECISION ABOUT TRUTH. Undoing the compression must therefore restore
+       * what it compressed. Rejecting the summary says the rollup was bad, never that the
+       * episodes did not happen.
+       *
+       * Their own trust levels are untouched: they return exactly as trusted as they were
+       * before being absorbed, which is why absorption records that per-episode rather than
+       * flattening it.
+       */
+      if (record.consolidatedFrom !== undefined) {
+        const absorbed = new Set(record.consolidatedFrom);
+        for (const item of file.records) {
+          if (absorbed.has(item.id) && item.supersededBy === record.id) {
+            delete item.supersededBy;
+            item.updatedAt = at;
+          }
+        }
+      }
+      await this.save(file);
+      return record;
+    });
   }
 
   async list(workId?: number): Promise<EvidenceRecord[]> {
@@ -334,6 +386,14 @@ export class EvidenceStore {
    * claims into one confident-sounding fact is precisely how a memory system starts lying.
    */
   async consolidate(
+    workId: number,
+    recordedBy: string,
+    options: { minEpisodes?: number } = {}
+  ): Promise<{ summary?: EvidenceRecord; absorbed: number; reason?: string }> {
+    return this.withLock(async () => this.consolidateUnsafe(workId, recordedBy, options));
+  }
+
+  private async consolidateUnsafe(
     workId: number,
     recordedBy: string,
     options: { minEpisodes?: number } = {}
@@ -390,6 +450,57 @@ export class EvidenceStore {
     const wanted = new Set(workIds.filter((item) => Number.isSafeInteger(item) && item > 0));
     if (wanted.size === 0) return [];
     return currentEvidence(await this.list()).filter((item) => wanted.has(item.workId));
+  }
+
+  /**
+   * Item 2, audit finding: EVERY mutating path was read-modify-write with no lock.
+   *
+   * `save()` is atomic per write - temp file plus rename - which made this look safe and is
+   * why it survived review. Atomic writes stop a TORN file; they do nothing about a LOST
+   * UPDATE. Two processes that both load, both mutate, and both save leave whichever finished
+   * second as the only survivor, and grok measured the crash directly: two concurrent
+   * consolidates, EPERM on the rename.
+   *
+   * That matters most for exactly the operation this item added. Consolidation supersedes
+   * every episode it absorbs; losing that update leaves episodes pointing at a summary that
+   * was rolled back, or a summary whose sources are still live - the memory is then internally
+   * inconsistent rather than merely stale.
+   *
+   * Same shape as the mailbox lock, including recovery from a dead owner, because a lock that
+   * a crashed process can hold forever is an outage rather than a guard.
+   */
+  private async withLock<T>(action: () => Promise<T>): Promise<T> {
+    const lockPath = `${this.filePath}.lock`;
+    await fs.mkdir(path.dirname(this.filePath), { recursive: true });
+    const started = Date.now();
+    let owns = false;
+    while (!owns) {
+      try {
+        const handle = await fs.open(lockPath, 'wx');
+        await handle.writeFile(JSON.stringify({ pid: process.pid, at: nowIso() }));
+        await handle.close();
+        owns = true;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+        const owner = await fs.readFile(lockPath, 'utf8')
+          .then((text) => JSON.parse(text) as { pid?: number })
+          .catch(() => undefined);
+        // A lock whose owner is gone is debris, not a claim.
+        if (owner?.pid !== undefined && !evidenceProcessAlive(owner.pid)) {
+          await fs.rm(lockPath, { force: true });
+          continue;
+        }
+        if (Date.now() - started >= EVIDENCE_LOCK_TIMEOUT_MS) {
+          throw new Error(`Timed out waiting for the evidence lock: ${lockPath}`);
+        }
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+    }
+    try {
+      return await action();
+    } finally {
+      await fs.rm(lockPath, { force: true });
+    }
   }
 
   private async load(): Promise<EvidenceFile> {

@@ -867,12 +867,33 @@ export class MailboxStore {
     return this.evidence.list(workId);
   }
 
+  /**
+   * Item 2, audit finding: `consolidate` was CALLED FROM NOWHERE.
+   *
+   * It was implemented, tested and unreachable - the same defect as item 18, and the reason
+   * the bar says the store is not the feature. Memory that only compacts when someone
+   * remembers to ask never compacts, so this is wired to the moment an assignment ENDS: the
+   * episodes are complete, nothing further will be added under that workId, and the seat is
+   * about to stop thinking about it.
+   *
+   * Deliberately best-effort. Compaction failing must never fail the close - losing the record
+   * that work finished, in order to tidy the record of how it went, would be a bad trade.
+   */
+  async consolidateEvidence(
+    workId: number,
+    recordedBy: string,
+    options: { minEpisodes?: number } = {}
+  ): Promise<{ summary?: EvidenceRecord; absorbed: number; reason?: string }> {
+    this.assertAgent(recordedBy, 'evidence recorder');
+    return this.evidence.consolidate(workId, recordedBy, options);
+  }
+
   async evidenceForWake(workIds: number[]): Promise<EvidenceRecord[]> {
     return this.evidence.forWake(workIds);
   }
 
   async closeRecovery(agent: string, workId: number, reason: string): Promise<RecoveryCheckpoint | undefined> {
-    return this.withLock(async () => {
+    const checkpoint = await this.withLock(async () => {
       const file = await this.findMessagePathUnsafe(workId);
       if (!file) return undefined;
       const message = await this.readJson<BusMessage>(file);
@@ -884,6 +905,18 @@ export class MailboxStore {
       await this.atomicJson(file, message);
       return checkpoint;
     });
+    // Item 2: an assignment ending is when its episodes are complete, so it is the moment to
+    // compact them. Outside the mailbox lock - the evidence store takes its own - and
+    // best-effort, because tidying the record of HOW work went must never fail the record
+    // THAT it finished.
+    if (checkpoint) {
+      try {
+        await this.evidence.consolidate(workId, agent);
+      } catch {
+        // Intentionally swallowed. Compaction is an optimisation; the close is the fact.
+      }
+    }
+    return checkpoint;
   }
 
   /**
@@ -2514,6 +2547,22 @@ async function runCli(argv = process.argv.slice(2)) {
       console.log(json ? JSON.stringify(record, null, 2) : `promoted ${record.id} trust=${record.trust}`);
       return 0;
     }
+    case 'consolidate-evidence': {
+      // Item 2: reachable by hand as well as automatically on close, so an operator can compact
+      // long-running work without waiting for it to end.
+      const result = await store.consolidateEvidence(
+        intArg(args, 'work-id', 0),
+        stringArg(args, 'agent', true),
+        { minEpisodes: optionalIntArg(args, 'min-episodes') ?? undefined }
+      );
+      console.log(json
+        ? JSON.stringify(result, null, 2)
+        : result.summary
+          ? `consolidated ${result.absorbed} episodes into ${result.summary.id} trust=${result.summary.trust}`
+          // Not an error, and not a success either. Saying which is the point.
+          : `nothing consolidated: ${result.reason ?? 'no reason given'}`);
+      return 0;
+    }
     case 'list-evidence': {
       const workId = optionalIntArg(args, 'work-id');
       const records = await store.listEvidence(workId);
@@ -2558,7 +2607,7 @@ async function runCli(argv = process.argv.slice(2)) {
     }
     default:
       throw new Error(
-        'usage: mailbox <init|send|inbox|read|parked|requeue|supersede|wait|claim|release|claims|close-recovery|status|doctor|goal|assign|stall-check|reassign|record-evidence|promote-evidence|list-evidence|configure-halting|complete-step|complete-goal|halt|resume> [options]'
+        'usage: mailbox <init|send|inbox|read|parked|requeue|supersede|wait|claim|release|claims|close-recovery|status|doctor|goal|assign|stall-check|reassign|record-evidence|promote-evidence|list-evidence|consolidate-evidence|configure-halting|complete-step|complete-goal|halt|resume> [options]'
       );
   }
 }

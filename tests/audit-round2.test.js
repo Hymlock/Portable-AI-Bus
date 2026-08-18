@@ -388,6 +388,157 @@ async function findMessageFile(root, seq) {
   return path.join(dir, match);
 }
 
+// ---------------------------------------------------------------------------
+// ITEM 2. Consolidation was implemented, tested, and unreachable; invalidating a summary
+// orphaned everything it absorbed; and nothing was locked.
+// ---------------------------------------------------------------------------
+
+const { EvidenceStore } = require('../dist/evidence.js');
+
+async function evidenceFixture(t, count = 3) {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'pab-i2b-'));
+  t.after(() => fsp.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 50 }).catch(() => {}));
+  const store = new EvidenceStore(root);
+  for (let i = 0; i < count; i += 1) {
+    await store.record({ workId: 42, subject: `step-${i}`, statement: `did thing ${i}`, recordedBy: 'grok' });
+  }
+  return { root, store };
+}
+
+test('ITEM 2 RED: invalidating a summary restores the episodes it absorbed', async (t) => {
+  const { store } = await evidenceFixture(t);
+  const { summary, absorbed } = await store.consolidate(42, 'grok');
+  assert.equal(absorbed, 3);
+
+  // Before the fix this left NOTHING current: the episodes point at the summary and the
+  // summary is invalidated, so the assignment's whole history silently disappeared.
+  await store.invalidate(summary.id, 'the rollup mangled the wording');
+
+  const all = await store.list(42);
+  const live = all.filter((item) => !item.supersededBy && !item.invalidateReason);
+  assert.equal(live.length, 3, 'REGRESSION: rejecting the SUMMARY erased the FACTS');
+  assert.deepEqual(live.map((item) => item.subject).sort(), ['step-0', 'step-1', 'step-2']);
+});
+
+test('ITEM 2: restored episodes keep their own trust, and the summary stays rejected', async (t) => {
+  const { store } = await evidenceFixture(t);
+  const { summary } = await store.consolidate(42, 'grok');
+  await store.invalidate(summary.id, 'bad rollup');
+  const all = await store.list(42);
+  const restored = all.filter((item) => item.consolidatedFrom === undefined);
+  assert.ok(restored.every((item) => item.trust === 'untrusted'),
+    'they come back exactly as trusted as they were - consolidation is not a decision about truth');
+  const rejected = all.find((item) => item.id === summary.id);
+  assert.equal(rejected.invalidateReason, 'bad rollup', 'and the summary itself stays rejected');
+});
+
+test('ITEM 2 RED: four PROCESSES consolidating at once do not crash or lose an update', async (t) => {
+  /**
+   * grok's finding was a multi-PROCESS crash - EPERM on the rename.
+   *
+   * My first attempt at this gate ran two consolidations in ONE process and passed against the
+   * unlocked code, because two awaits in a single event loop interleave politely. It was a
+   * gate that could not go red - the exact defect this project keeps naming, in the instrument
+   * meant to detect it. It needs real processes AND a file big enough that the writes actually
+   * overlap; on a six-record file each save finishes before the next begins and nothing ever
+   * contends.
+   */
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'pab-i2proc-'));
+  t.after(() => fsp.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 50 }).catch(() => {}));
+
+  // Written directly rather than through record(), so the fixture does not depend on the very
+  // locking this gate is testing.
+  const dir = path.join(root, '.ai-bus', 'runtime', 'mailbox');
+  await fsp.mkdir(dir, { recursive: true });
+  const filler = 'x'.repeat(2048);
+  const records = Array.from({ length: 300 }, (_, i) => ({
+    id: `record-${i}`, workId: 42, subject: `step-${i}`, statement: `${filler} ${i}`,
+    trust: 'untrusted', recordedBy: 'grok', sourceEventId: i + 1,
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
+  }));
+  await fsp.writeFile(path.join(dir, 'evidence.json'),
+    JSON.stringify({ schema: 1, nextEventId: 301, records }, null, 2));
+
+  // A BARRIER, and it is what makes this gate able to fail at all. Without it each child pays
+  // its own node startup - tens of milliseconds, and varying - while the load-modify-save
+  // window is a few. The processes overlap in wall-clock time and never in the critical
+  // section, so the gate reported green against code with no lock whatsoever.
+  const startAt = Date.now() + 1500;
+  const script = (seat) => `
+    const { EvidenceStore } = require(${JSON.stringify(path.join(REPO, 'dist', 'evidence.js'))});
+    while (Date.now() < ${startAt}) { /* spin to the barrier - sleeping would re-introduce jitter */ }
+    new EvidenceStore(${JSON.stringify(root)}).consolidate(42, ${JSON.stringify(seat)})
+      .then((r) => { console.log(JSON.stringify({ ok: true, absorbed: r.absorbed })); })
+      .catch((e) => { console.log(JSON.stringify({ ok: false, error: e.message })); });
+  `;
+  const run = (seat) => new Promise((resolve) => {
+    require('node:child_process').execFile(process.execPath, ['-e', script(seat)],
+      { encoding: 'utf8' }, (error, stdout) => resolve({ error, stdout: stdout.trim() }));
+  });
+
+  const results = await Promise.all(['grok', 'codex', 'claude', 'worker'].map(run));
+  for (const result of results) {
+    assert.ok(result.stdout, `a consolidating process produced no output: ${result.error?.message}`);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.ok, true, `REGRESSION: concurrent consolidate crashed: ${parsed.error}`);
+  }
+
+  // The lost update is the subtler half and the one that survives a crash-free run: each
+  // process loads, absorbs all 300, and saves. Unlocked, the last writer wins and the earlier
+  // summaries - along with the supersessions they wrote - simply vanish.
+  const store = new EvidenceStore(root);
+  const all = await store.list(42);
+  const summaries = all.filter((item) => item.consolidatedFrom !== undefined);
+  assert.equal(summaries.length, 1,
+    `exactly one rollup; the other three must find nothing left to absorb. Saw ${summaries.length}`);
+  const live = all.filter((item) => !item.supersededBy && !item.invalidateReason);
+  assert.equal(live.length, 1, 'and the only current record is that summary');
+  assert.equal(summaries[0].consolidatedFrom.length, 300, 'which absorbed every episode exactly once');
+});
+
+test('ITEM 2 RED: concurrent records do not collide on sourceEventId', async (t) => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'pab-i2c-'));
+  t.after(() => fsp.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 50 }).catch(() => {}));
+  const store = new EvidenceStore(root);
+  // sourceEventId is a read-then-write counter, and it is what ORDERS supersession.
+  await Promise.all(Array.from({ length: 8 }, (_, i) =>
+    store.record({ workId: 7, subject: `s${i}`, statement: 'x', recordedBy: 'grok' })));
+  const records = await store.list(7);
+  assert.equal(records.length, 8, 'every record survives; none is lost to a clobbering write');
+  assert.equal(new Set(records.map((r) => r.sourceEventId)).size, 8, 'and each gets its own event id');
+});
+
+test('ITEM 2 RED: consolidate is reachable - closing an assignment compacts it', async (t) => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'pab-i2d-'));
+  t.after(() => fsp.rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 50 }).catch(() => {}));
+  const store = new MailboxStore(dir);
+  await store.ensureInitialized(['claude', 'grok'], 500);
+  const source = await store.send({ from: 'claude', to: 'grok', kind: 'task', subject: 'work', body: 'do it' });
+  await store.openRecovery('grok', source.seq, 'started');
+  for (let i = 0; i < 3; i += 1) {
+    await store.recordEvidence({ agent: 'grok', subject: `step-${i}`, statement: `did ${i}`, workId: source.seq });
+  }
+
+  // The whole point of the finding: it was implemented, tested, and called from nowhere.
+  await store.closeRecovery('grok', source.seq, 'done');
+
+  const records = await store.listEvidence(source.seq);
+  const summary = records.find((item) => item.consolidatedFrom !== undefined);
+  assert.ok(summary, 'REGRESSION: work ended and nothing ever compacted it');
+  assert.equal(summary.consolidatedFrom.length, 3);
+});
+
+test('ITEM 2 GREEN CONTROL: too few episodes consolidates nothing, and says why', async (t) => {
+  const { store } = await evidenceFixture(t, 2);
+  const result = await store.consolidate(42, 'grok');
+  assert.equal(result.absorbed, 0);
+  assert.ok(result.summary === undefined);
+  assert.match(result.reason, /minimum is 3/, 'a no-op must say why rather than look like a success');
+  // And the episodes are untouched, not half-absorbed.
+  const live = (await store.list(42)).filter((item) => !item.supersededBy);
+  assert.equal(live.length, 2);
+});
+
 test('ITEM 13 GREEN CONTROL: ordinary claims below the root still succeed', async (t) => {
   const { workspace, store } = await claimFixture(t);
   // Without this, a fix that refused everything would look identical to a correct one.
