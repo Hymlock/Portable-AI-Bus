@@ -1,79 +1,80 @@
 # Resume here
 
-## State at 2026-08-17, end of the audit rounds
+## State at 2026-08-18 — 19 of 20 certified, item 15 is the last
 
-Everything is committed. Suite **515 pass, 0 fail**. **17 of 20 bar items certified.**
-Restart command and the two machine traps are unchanged — see "Restart the bus first"
-below, and `--claim-repo` is still not optional.
+HEAD `e28c7b5`. Suite **523 pass, 0 fail**. Claims empty. No tracked file dirty (the ~150
+untracked `tmp-audit-*` files are grok's probes and reports — deliberately kept).
+
+**Item 15 is the only item outstanding.** Round 21 is with grok (`#1936`). Everything else
+is certified by an auditor that did not write it.
+
+### Standing commitment in force
+
+I make **no edits to `src/`, `scripts/` or `tests/` until grok rules on item 15.** r20 read
+22 PASS / 0 FAIL and grok declined to certify anyway, because my uncommitted edits appeared
+mid-wake — it was measuring one artifact and reporting on another. Its refusal was correct.
+Docs are not covered by this and may still be edited.
 
 ### The stopping rule — grok's, not mine
 
-This is the most important thing on the page, because it is what makes "finished" mean
-something. I proposed a rule; grok rejected it as too low and was right:
-
-> *An item is certified when an audit round finds no defect of a class not already fixed*
-> — **rejected.** grok: *"It is too low if YOU classify the leftover."*
-
-The rule now in force:
-
 - A **VARIANT** is a new spelling of something the stated rule already decides.
 - A **HOLE** is an attack the stated rule does not decide, or decides **wrongly**.
-- **The auditor classifies each leftover. The author may argue; the author may not decide.**
-- Certify when a round produces no hole and no new class.
-- Known-accepted leftovers are written as *consequences of the rule*, never as
-  "adjacent, so drop it".
-- Rules are stated **positively**. Every round lost so far was lost to an enumeration of
-  bad cases, which always has an edge to step around.
+- **The auditor classifies. The author may argue; the author may not decide.**
+- Rules are stated **positively** — every round lost was lost to an enumeration of bad
+  cases, and an enumeration always has an edge to step around.
 
-### Round history — three rounds, and what each one cost
+My own proposal was rejected as too low, and it was: it let the author classify the
+leftovers, which would have certified item 15's class while it was still open.
 
-Every round grok failed items, and every failure was *adjacent* to the fix rather than a
-repeat of it. That is the author's habit, not the auditor being difficult.
+### Round history
 
 | round | verdict |
 |---|---|
 | 1 | 6 of 7 failed |
-| 2 | item 7 certified; 13, 10, 18, 15 failed |
-| 3 | 13, 10, 18 **certified**; 15 failed again |
-| 4 | **in flight** — item 15 refixed, item 2, item 20 |
+| 2 | 7 certified; 13, 10, 18, 15 failed |
+| 3 | 13, 10, 18 certified; 15 failed |
+| 10–18 | **blocked** — claude held the four repair paths and went dark for 8 hours |
+| 19 | **2 and 20 certified**; 15 had one hole (substring exemption) |
+| 20 | 22 PASS / 0 FAIL; 15 not certified — tree changed mid-wake |
+| 21 | in flight |
 
-### Where each open item stands
+### The two findings worth not re-deriving
 
-- **Item 2** — fixed at `8312282`, never audited. Lock with dead-owner recovery on record/
-  promote/invalidate/consolidate; invalidating a summary restores the episodes it absorbed;
-  consolidation now runs when a checkpoint closes, plus `mailbox consolidate-evidence`.
-- **Item 15** — refixed at `8b5ae78` after failing round 3. The rule is now about the
-  **compiler**: *tsc may see the materialised index and the declared node_modules, nothing
-  else.* `noCheck` and a narrowing `exclude` in the staged config are **not** fixed — grok
-  classified them as a different class, so they are printed loudly instead. Under the rule
-  above that is grok's call, and it has been asked to overrule if it disagrees.
-- **Item 20** — implemented, **never audited by anyone**. In grok's round-4 brief.
+**The substring that sat under its own lesson.** `classifyListedFiles` exempted anything
+where `comparable(real).includes(comparable(scratchRoot))`. `<scratch>x/index.d.ts` is a
+*different directory* that merely starts with the same characters, and a `package.json`
+`"types"` naming it was loaded by tsc while the hook printed `compile OK`. It sat **three
+lines under a comment saying a substring match is not a permit**, with `pathContains`
+already defined and used on the two lines above. Fixed at `ebd70ec`.
 
-### A mistake worth not repeating
+**The scratch root was never resolved.** `mkdtempSync(os.tmpdir())` is lexical; every file
+tsc lists is realpathed. Where tmpdir is itself a link — `/var` → `/private/var` on macOS,
+a redirected TEMP or junction on Windows — every legitimate staged file resolves outside
+its own scratch tree. Fail-closed, so not a leak, but it is **item 6's failure**: on macOS
+this would have refused every commit, and a guard that cannot be satisfied gets bypassed
+just as surely as one that cannot go red. This machine's tmpdir is not a link, so nothing
+in 523 tests would have shown it. Fixed at `e28c7b5`; the gate reproduces macOS on Windows
+with a junction.
 
-My first item-2 concurrency gate ran two consolidations in **one process** and passed
-against code with no lock at all — a gate that could not go red, in the instrument built to
-detect exactly that. It needed four real processes, a 300-record file, and a wall-clock
-barrier before it reproduced grok's `EPERM`. Without the barrier each child pays its own
-node startup and they never meet in the critical section.
+### Mistakes recorded on purpose
 
-Two existing gates in `tests/item10-recall.test.js` also had to change: they recalled a
-brief with no checkpoint open and asserted success, so they encoded the defect. Said here
-because a changed test is the easiest place to hide a lowered bar.
+- **The 8-hour block was mine.** I held four repair paths and my monitor died unnoticed.
+  Grok measured holes for nine rounds and could not fix them, reporting BLOCKED each time.
+  The bus worked; the seat did not.
+- **A gate of mine could not go red.** The first item-2 concurrency gate ran two
+  consolidations in one process and passed against code with no lock at all. It needed four
+  real processes, a 300-record file and a wall-clock barrier before it reproduced grok's
+  `EPERM`.
+- **Two gates encoded the defect.** `item10-recall.test.js` recalled a brief with no
+  checkpoint open and asserted success; a test asserting exit 0 on `noCheck` did the same.
+  Both changed, both called out — a changed test is the easiest place to lower a bar quietly.
 
-### Who owes what
+### Where the evidence lives
 
-- **#1867 to grok**: round 4 — item 15, item 2, item 20.
-- grok writes probes as `tmp-audit-*` at the repo root and its reports as
-  `tmp-audit-*-report.txt`. Untracked on purpose. **Read the latest before touching any
-  open item.**
-- claude holds claims on the source files and the audit test files.
-
-### The gates
-
-`tests/audit-round2.test.js` — 31 tests covering items 15, 13, 10, 18 and 2. Every RED gate
-has been run against reverted source and seen to fail; every green control has been run
-against both states and seen to pass. `tests/audit-fixes.test.js` — 6 more, same discipline.
+`tests/audit-round2.test.js` (38) and `tests/audit-fixes.test.js` (6). Every RED gate has
+been run against reverted source and seen to fail; every green control against both states
+and seen to pass. Grok's reports are `tmp-audit-r*-verdict.md` at the repo root — **read the
+newest before touching item 15.**
 
 ---
 
