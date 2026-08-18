@@ -10,7 +10,7 @@ seat that did not write it has attacked it and said so on the record.
 | # | item | status |
 |---|---|---|
 | 1 | verified evidence memory | **CERTIFIED** at `ab9807a`; temporal binding **CERTIFIED** at `606d49d` |
-| 2 | consolidation of an assignment's episodes | FIXED after audit `8312282` - lock, undo, and a caller; audit pending |
+| 2 | consolidation of an assignment's episodes | **CERTIFIED** at `1592382` (grok r19, 12 attacks) - lock, undo, and a caller |
 | 3 | supersede a sent message | **CERTIFIED** at `1948082` — three audits, three commits |
 | 4 | cross-seat reassignment | **CERTIFIED** at `c755a42` (2026-08-14) |
 | 5 | distinguish *stalled* from *spent* | **CERTIFIED** at `78ffe75`+`48d24f4` — separates SPENT from STALLED; **BROKEN not covered** |
@@ -23,12 +23,12 @@ seat that did not write it has attacked it and said so on the record.
 | 12 | a call that never starts is invisible | **CERTIFIED** at `a97deaf`+`b31177f`+`ec41d92` (claude instrument, 5/5) |
 | 13 | a claim can be too broad to be useful | **CERTIFIED** at `8ea4c35` (grok round 3) - claims must resolve strictly under a claim root |
 | 14 | an overlap check can walk an arbitrary volume | CERTIFIED at `06c927f` (claude instrument, 4/4; 4ms vs 99ms) |
-| 15 | the guard verifies claims, not builds | FAILED round 3; refixed `8b5ae78` - tsc may see only the index + node_modules; audit pending |
+| 15 | the guard verifies claims, not builds | r19 hole fixed `ebd70ec` - tsc may see only the index + node_modules; audit pending |
 | 16 | `actor` is optional at the store | **CERTIFIED** at `e43d5a8` (grok instrument 2026-08-17) |
 | 17 | truncation is invisible on inbox/read/worker | **CERTIFIED** at `d86b620` (grok instrument 2026-08-17) |
 | 18 | send and supersede are two steps | **CERTIFIED** at `082ddfa` (grok round 3) - reaches a real provider call; both verbs agree |
 | 19 | supersede polish: transcript metadata, CLI usage | **CERTIFIED** at `eb8e10f` (grok instrument 2026-08-17) |
-| 20 | a checkpoint can become unclosable | DONE `2e4a08d` - operator close, reason required; audit pending |
+| 20 | a checkpoint can become unclosable | **CERTIFIED** (grok 9/9) - operator close, reason required |
 
 Items 1–7 were the original bar. **Items 8–11 were all added on 2026-08-14/15 from measured
 failures, not planning** — three of the four were found by the system failing in front of us
