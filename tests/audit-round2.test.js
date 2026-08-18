@@ -230,6 +230,164 @@ test('ITEM 13 RED: a claim root that does not exist refuses rather than silently
   );
 });
 
+// ---------------------------------------------------------------------------
+// ITEM 10. Round 1 made recall follow the baton by falling back to the checkpoint when the
+// ADDRESS did not match, leaving the address as an authority. grok went around it three ways,
+// all through the address. The rule is now: an open checkpoint for that seat, or nothing.
+// ---------------------------------------------------------------------------
+
+async function recallFixture(t) {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'pab-i10c-'));
+  t.after(() => fsp.rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 50 }).catch(() => {}));
+  const store = new MailboxStore(dir);
+  await store.ensureInitialized(['claude', 'grok', 'codex'], 500);
+  const source = await store.send({
+    from: 'claude', to: 'grok', kind: 'task',
+    subject: 'ITEM 2 consolidation', body: 'PATHS: src/evidence.ts\nGATES: invalidate must not orphan.'
+  });
+  await store.openRecovery('grok', source.seq, 'started');
+  return { store, source };
+}
+
+test('ITEM 10 RED: the PREDECESSOR stops recalling work the baton took away', async (t) => {
+  const { store, source } = await recallFixture(t);
+  assert.ok(await store.recallAssignment('grok', source.seq), 'grok holds it to begin with');
+
+  const moved = await store.reassignBaton({ to: 'codex', reason: 'grok went dark', force: true });
+  assert.equal(moved.inheritedWorkId, source.seq, 'the fixture must really move the work');
+
+  assert.ok(await store.recallAssignment('codex', source.seq), 'the successor recalls it');
+  assert.equal(await store.recallAssignment('grok', source.seq), undefined,
+    'REGRESSION: the seat that LOST the work still received the brief, because message.to still named it');
+});
+
+test('ITEM 10 RED: an addressee with every checkpoint closed recalls nothing', async (t) => {
+  const { store, source } = await recallFixture(t);
+  await store.operatorCloseRecovery('grok', source.seq, 'instruction withdrawn');
+  // item10-recall.test.js appeared to cover this, but it only proved the RUNNER declines to
+  // ask. This asks the store directly, which is what any other caller does.
+  assert.equal(await store.recallAssignment('grok', source.seq), undefined,
+    'a closed checkpoint must revoke recall at the STORE, not merely in the runner');
+});
+
+test('ITEM 10 RED: an addressee that closed its OWN checkpoint recalls nothing', async (t) => {
+  const { store, source } = await recallFixture(t);
+  await store.closeRecovery('grok', source.seq, 'finished');
+  assert.equal(await store.recallAssignment('grok', source.seq), undefined,
+    'self-closing is still closing; the address must not resurrect the brief');
+});
+
+test('ITEM 10 RED: the predecessor cannot re-open a checkpoint on work that moved', async (t) => {
+  const { store, source } = await recallFixture(t);
+  await store.reassignBaton({ to: 'codex', reason: 'grok went dark', force: true });
+  await assert.rejects(
+    () => store.openRecovery('grok', source.seq, 're-opening what I lost'),
+    /held by codex/,
+    'one assignment, one holder - two open checkpoints hand the brief to two seats at once'
+  );
+  assert.equal(await store.recallAssignment('grok', source.seq), undefined);
+});
+
+test('ITEM 10 GREEN CONTROL: the holder keeps recalling across ordinary wakes', async (t) => {
+  const { store, source } = await recallFixture(t);
+  // Without this a fix that revoked everything would look identical to a correct one.
+  const brief = await store.recallAssignment('grok', source.seq);
+  assert.match(brief, /PATHS: src\/evidence\.ts/);
+  assert.match(brief, /GATES: invalidate must not orphan/, 'the gates come back, not just the subject');
+  assert.ok(await store.recallAssignment('grok', source.seq), 'and again on the next wake');
+});
+
+// ---------------------------------------------------------------------------
+// ITEM 18. Round 1 wired nine caller surfaces and stopped one layer short of the one that
+// gates the model, then left the two retract verbs disagreeing about what is legal.
+// ---------------------------------------------------------------------------
+
+const { PLAN_SCHEMA, buildDefaultSystem } = require('../dist/brain/brains/agent.js');
+
+test('ITEM 18 RED: the constrained-decoding schema lets a seat emit an atomic retract', () => {
+  // A field absent here cannot be emitted however well the tool surfaces are wired - the
+  // schema is upstream of all of them.
+  const props = PLAN_SCHEMA?.properties?.actions?.items?.properties
+    ?? PLAN_SCHEMA?.properties?.actions?.items?.oneOf?.[0]?.properties;
+  assert.ok(props, 'the plan schema must expose action properties for this gate to mean anything');
+  assert.ok(props.supersedes, 'REGRESSION: a schema-constrained seat cannot emit supersedes');
+  assert.ok(props.supersedeReason);
+});
+
+test('ITEM 18 RED: the system prompt describes the atomic retract, not only the two-step', () => {
+  const system = buildDefaultSystem('claude');
+  const text = Array.isArray(system) ? system.join('\n') : String(system);
+  assert.match(text, /supersedes/,
+    'REGRESSION: a seat told only about two-step supersede will use the two-step window');
+  assert.match(text, /one step|ONE step/i, 'and it must say why to prefer it');
+});
+
+test('ITEM 18 RED: an atomic retract cannot be redirected to a different recipient', async (t) => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'pab-i18x-'));
+  t.after(() => fsp.rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 50 }).catch(() => {}));
+  const store = new MailboxStore(dir);
+  await store.ensureInitialized(['claude', 'grok', 'codex'], 500);
+
+  const toGrok = await store.send({ from: 'claude', to: 'grok', kind: 'task', subject: 'do X', body: 'X' });
+  await assert.rejects(
+    () => store.send({
+      from: 'claude', to: 'codex', kind: 'task', subject: 'replacement', body: 'Y', supersedes: toGrok.seq
+    }),
+    /sent to grok, not codex/,
+    'this retracted grok\'s brief and gave the replacement to codex - grok lost the work silently'
+  );
+  // Nothing was sent, so grok's original is untouched and still deliverable.
+  const inbox = await store.inbox('grok');
+  assert.equal(inbox.length, 1);
+  assert.equal(inbox[0].seq, toGrok.seq);
+});
+
+test('ITEM 18 RED: the two-step verb cannot retract mail the recipient already read', async (t) => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'pab-i18y-'));
+  t.after(() => fsp.rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 50 }).catch(() => {}));
+  const store = new MailboxStore(dir);
+  await store.ensureInitialized(['claude', 'grok'], 500);
+
+  const original = await store.send({ from: 'claude', to: 'grok', kind: 'task', subject: 'do X', body: 'X' });
+  await store.acknowledge('grok', [original.seq]);
+  const replacement = await store.send({ from: 'claude', to: 'grok', kind: 'task', subject: 'do Y', body: 'Y' });
+
+  // The atomic path already refuses this and reports target-consumed. The old verb did it
+  // anyway, so which verb you used decided what was legal.
+  await assert.rejects(
+    () => store.supersedeMessage(original.seq, replacement.seq, 'changed my mind', 'claude'),
+    /already read it/,
+    'you cannot retract an instruction that was already acted on'
+  );
+});
+
+test('ITEM 18: an atomic supersession records WHEN, as the two-step always did', async (t) => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'pab-i18z-'));
+  t.after(() => fsp.rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 50 }).catch(() => {}));
+  const store = new MailboxStore(dir);
+  await store.ensureInitialized(['claude', 'grok'], 500);
+
+  const original = await store.send({ from: 'claude', to: 'grok', kind: 'task', subject: 'stale', body: 'old' });
+  const correction = await store.send({
+    from: 'claude', to: 'grok', kind: 'task', subject: 'fresh', body: 'new',
+    supersedes: original.seq, supersedeReason: 'settled already'
+  });
+  assert.equal(correction.superseded, true);
+
+  const raw = JSON.parse(await fsp.readFile(await findMessageFile(dir, original.seq), 'utf8'));
+  assert.equal(raw.supersededBy, correction.seq);
+  assert.ok(raw.supersededAt, 'history must say when it stopped being current');
+  assert.equal(raw.supersedeReason, 'settled already');
+});
+
+async function findMessageFile(root, seq) {
+  const dir = path.join(root, '.ai-bus', 'runtime', 'mailbox', 'inbox');
+  const names = await fsp.readdir(dir);
+  const match = names.find((name) => name.startsWith(`${String(seq).padStart(6, '0')}-`) || name.includes(`${seq}-`));
+  assert.ok(match, `no message file for #${seq} among ${names.join(', ')}`);
+  return path.join(dir, match);
+}
+
 test('ITEM 13 GREEN CONTROL: ordinary claims below the root still succeed', async (t) => {
   const { workspace, store } = await claimFixture(t);
   // Without this, a fix that refused everything would look identical to a correct one.

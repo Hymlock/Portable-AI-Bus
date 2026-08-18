@@ -93,6 +93,10 @@ test('ITEM 10: a SUPERSEDED (unread) assignment is never recalled', async (t) =>
     const source = await store.send({
       from: 'claude', to: 'grok', kind: 'task', subject: 'COMMIT NOW', body: 'ship it'
     });
+    // The checkpoint is what grants recall - see the note below, which said so before the
+    // store enforced it. This line used to be absent, and the gate passed on the ADDRESS
+    // alone; grok's second audit showed that was the store answering anyone who asked.
+    await store.openRecovery('grok', source.seq, 'working');
     assert.ok(await store.recallAssignment('grok', source.seq), 'recallable while it stands');
     await store.send({
       from: 'claude', to: 'grok', kind: 'task', subject: 'DO NOT COMMIT', body: 'hold',
@@ -135,9 +139,10 @@ test('ITEM 10: closing the checkpoint is the revocation path for a CONSUMED brie
 test('ITEM 10: recall never crosses seats', async (t) => {
   await withStore(t, async (store) => {
     const source = await store.send({ from: 'claude', to: 'grok', kind: 'task', subject: 's', body: BRIEF });
+    await store.openRecovery('grok', source.seq, 'working');
     assert.ok(await store.recallAssignment('grok', source.seq));
     assert.equal(await store.recallAssignment('claude', source.seq), undefined,
-      'only the addressee may recall it');
+      'only the seat holding an open checkpoint may recall it - and claude holds none');
   });
 });
 

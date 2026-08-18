@@ -46,7 +46,10 @@ export type AgentBrainOptions = {
   log?: (event: string, data?: unknown) => void;
 };
 
-const buildDefaultSystem = (exampleRecipient: string) => [
+// Exported so a gate can assert what the model is actually TOLD. Item 18's second audit found
+// the atomic retract wired through every tool surface and described in none of them, which
+// leaves a capability that exists and is never used.
+export const buildDefaultSystem = (exampleRecipient: string) => [
   'You are a bus seat agent. You receive mail and decide actions.',
   'Reply with ONLY a JSON object (no markdown fences). This example is valid and may be copied:',
   JSON.stringify({
@@ -62,7 +65,8 @@ const buildDefaultSystem = (exampleRecipient: string) => [
   }),
   'Action field requirements (descriptions, not copyable JSON):',
   'send requires string fields type, to, subject, and body; kind may be ack, report, finding, or note; keepBaton is an optional boolean.',
-  'supersede requires type, positive integer seq and by fields, and a non-empty reason; both messages must have been sent by this seat.',
+  'send may also carry supersedes, a positive integer sequence you sent earlier to the SAME recipient, with an optional supersedeReason. This retracts that message and delivers its replacement in ONE step, so there is no window where both are current. Prefer it over sending and then superseding. If the recipient has already read the target it cannot be retracted, and the result says so rather than reporting success.',
+  'supersede requires type, positive integer seq and by fields, and a non-empty reason; both messages must have been sent by this seat and addressed to the same recipient, and the target must be unread.',
   'claim requires type, a non-empty paths string array, and a non-empty why string.',
   'release requires type and may include a non-empty paths string array.',
   'capability requires type and id, and may include a positive integer timeoutMs.',
@@ -121,6 +125,13 @@ export const PLAN_SCHEMA = {
           subject: { type: 'string' },
           body: { type: 'string' },
           keepBaton: { type: 'boolean' },
+          // Item 18, second audit. This schema constrains decoding, so a field absent here is
+          // a field the model CANNOT emit however well the tool surfaces below it are wired.
+          // Round 1 wired nine caller surfaces and stopped one layer short of the only one
+          // that gates the model - the same "a capability no caller can invoke is not
+          // implemented" defect the item is about, one level up.
+          supersedes: { type: 'number' },
+          supersedeReason: { type: 'string' },
           seq: { type: 'number' },
           by: { type: 'number' },
           reason: { type: 'string' },

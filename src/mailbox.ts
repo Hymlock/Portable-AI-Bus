@@ -460,6 +460,21 @@ export class MailboxStore {
             `Cannot supersede #${input.supersedes}: already superseded by #${target.supersededBy}. Nothing was sent.`
           );
         }
+        /**
+         * Item 18, second audit: the two verbs disagreed about who may be retracted.
+         *
+         * `supersedeMessage` refuses when the replacement is addressed to a different seat.
+         * The atomic path did not, so `send({ to: 'codex', supersedes: <grok's message> })`
+         * retracted grok's instruction and delivered the replacement to codex - leaving grok
+         * with a silently cancelled brief and no replacement at all. Which verb you used
+         * changed what was legal, which means one of them was wrong.
+         */
+        if (target.to !== message.to) {
+          throw new Error(
+            `Cannot supersede #${input.supersedes}: it was sent to ${target.to}, not ${message.to}. ` +
+            'A replacement must reach the seat whose instruction it retracts. Nothing was sent.'
+          );
+        }
         if (target.read) {
           // TOO LATE, and say so honestly rather than pretending. The correction is still worth
           // delivering; claiming a supersession that did not happen would be worse than a plain
@@ -475,6 +490,9 @@ export class MailboxStore {
       if (supersededTarget) {
         // Both effects, one lock, before either is visible to a reader.
         supersededTarget.message.supersededBy = seq;
+        // supersededAt was written by the two-step path and not by this one, so history could
+        // not say WHEN an atomically retracted message stopped being current.
+        supersededTarget.message.supersededAt = nowIso();
         supersededTarget.message.supersedeReason = input.supersedeReason?.trim() || `superseded by #${seq}`;
         await this.atomicJson(supersededTarget.file, supersededTarget.message);
       }
@@ -638,6 +656,22 @@ export class MailboxStore {
         if (message.supersededBy === by && message.supersedeReason === reason.trim()) return message;
         throw new Error(`message #${seq} is already superseded by message #${message.supersededBy}`);
       }
+      /**
+       * Item 18, second audit: the two verbs disagreed about CONSUMED targets.
+       *
+       * The atomic path reports `target-consumed` and refuses to mark a message the recipient
+       * has already read - you cannot retract an instruction that was already acted on, and
+       * saying otherwise is a report that the correction landed when it did not. This path
+       * marked it anyway, so the old verb could do what the new one correctly refuses. Marking
+       * it also HIDES it from the inbox, which is how a seat loses the record of work it is
+       * part-way through doing.
+       */
+      if (message.read) {
+        throw new Error(
+          `Cannot supersede #${seq}: ${message.to} has already read it. Supersession retracts UNREAD mail; ` +
+          'send a correction instead, and close the checkpoint if the work should stop.'
+        );
+      }
       message.supersededBy = by;
       message.supersededAt = nowIso();
       message.supersedeReason = reason.trim();
@@ -713,6 +747,22 @@ export class MailboxStore {
       );
       if (source.to !== agent && !holdsInherited) {
         throw new Error(`message #${workId} is addressed to ${source.to}, not ${agent}`);
+      }
+      /**
+       * Item 10, third attack. Being the addressee was enough to open a checkpoint, so after
+       * the baton moved the PREDECESSOR could re-open one on the same work - producing two
+       * open checkpoints on one assignment and handing the brief back to a seat that no
+       * longer had it, alongside the seat that did.
+       *
+       * One assignment, one holder. Someone else's open checkpoint means the work moved.
+       */
+      const heldByAnother = (source.recoveryCheckpoints ?? []).find(
+        (item) => item.seat !== agent && item.status === 'open'
+      );
+      if (heldByAnother) {
+        throw new Error(
+          `work #${workId} is held by ${heldByAnother.seat}, not ${agent}. It moved; ask for it back rather than re-opening it.`
+        );
       }
       const at = nowIso();
       for (const message of messages) {
@@ -855,22 +905,27 @@ export class MailboxStore {
     // A retracted instruction is not recalled. Supersession is the revocation path.
     if (message.supersededBy !== undefined) return undefined;
 
-    // Item 10, audit finding: RECALL MUST FOLLOW THE BATON.
-    //
-    // `message.to !== seat` alone was wrong, and wrong in exactly the case the item exists
-    // for. After reassignBaton the successor holds the open checkpoint on the same workId with
-    // inheritedFrom set, but the source message is still addressed to the PREDECESSOR - so the
-    // seat now doing the work could not recall its own brief, while the seat that no longer
-    // has it still could. Inheritance was the live failure: a seat died when node-pty vanished
-    // and the work moved.
-    //
-    // The checkpoint, not the address, is the authority on who holds this work.
-    if (message.to !== seat) {
-      const inherited = (message.recoveryCheckpoints ?? []).some(
-        (item) => item.seat === seat && item.status === 'open'
-      );
-      if (!inherited) return undefined;
-    }
+    /**
+     * Item 10. RECALL IS GRANTED BY AN OPEN CHECKPOINT, NEVER BY THE ADDRESS.
+     *
+     * Round 1 made recall follow the baton by falling back to the checkpoint when the address
+     * did not match. grok's second audit went around it three ways, all through the address:
+     * after inheritance the PREDECESSOR still recalled the brief it had lost; after every
+     * checkpoint was closed - by an operator, or by the addressee itself - the addressee still
+     * recalled it; and the predecessor could re-open a checkpoint on the same work because the
+     * address still named it.
+     *
+     * `item10-recall.test.js` appeared to cover the second of those, but it only proved the
+     * RUNNER declines to ask. The store still answered anyone who did.
+     *
+     * So drop the address as an authority entirely. Holding an open checkpoint on this work is
+     * the whole test: it is true for the addressee that is working, true for a successor that
+     * inherited, and false for everyone else including the seat that used to hold it.
+     */
+    const holdsOpenCheckpoint = (message.recoveryCheckpoints ?? []).some(
+      (item) => item.seat === seat && item.status === 'open'
+    );
+    if (!holdsOpenCheckpoint) return undefined;
     return `#${message.seq} from ${message.from}: ${message.subject}\n\n${message.body}`;
   }
 
