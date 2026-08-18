@@ -65,20 +65,25 @@ if (staged.length === 0) {
   process.exit(0);
 }
 
-let claims = {};
+let claims;
 try {
   const statePath = path.join(root, '.ai-bus', 'runtime', 'mailbox', 'state.json');
   claims = JSON.parse(fs.readFileSync(statePath, 'utf8')).claims ?? {};
 } catch {
-  // No mailbox means no claims to check against. Passing is the honest outcome: this guard
-  // exists for a SHARED worktree, and a missing bus is evidence there is not one.
-  console.log('claim-guard: no mailbox state found; skipping (not a shared worktree)');
-  process.exit(0);
+  // No mailbox means no claims to check against: this half of the guard exists for a SHARED
+  // worktree, and a missing bus is evidence there is not one.
+  //
+  // Round 3 (grok): this used to exit(0), which switched off the COMPILE check as well - and
+  // a wrong or stale BUS_ROOT reaches it just as surely as a deliberate one. Two unrelated
+  // questions were sharing an exit. Only the claim question depends on the mailbox.
+  console.log('claim-guard: no mailbox state found; claim check skipped (not a shared worktree)');
 }
 
-const result = guardStagedPaths(seat, staged, claims);
-console.log(formatGuardResult(seat, result));
-if (!result.ok) process.exit(1);
+if (claims !== undefined) {
+  const result = guardStagedPaths(seat, staged, claims);
+  console.log(formatGuardResult(seat, result));
+  if (!result.ok) process.exit(1);
+}
 
 /**
  * Item 15: the guard verified CLAIMS and not BUILDS.
@@ -149,6 +154,116 @@ try {
   );
 }
 
+/**
+ * ROUND 3 (grok). "The index supplies its own tsconfig" was still an enumeration of guard-side
+ * lookups, and it decided two attacks WRONGLY rather than not deciding them:
+ *
+ *   - a staged tsconfig whose `include` is the ABSOLUTE path of the worktree src/. The index
+ *     supplied the config; the config pointed tsc at the worktree; the guard printed
+ *     `compile OK (staged index)`.
+ *   - a staged tsconfig that `extends` an untracked worktree-only base with a narrow include.
+ *     Worse than a bypass: after such a commit lands, local tsc keeps following a base that
+ *     is not in the repository at all, so it stays green locally and fails in CI.
+ *
+ * I stopped the guard reading the worktree and did not stop TSC reading it. So state the rule
+ * about the COMPILER, which is the thing that actually reads files:
+ *
+ *   tsc may see the materialised index and the declared node_modules junction. Nothing else.
+ *   A staged tsconfig whose extends/include/files/references resolve outside the scratch tree
+ *   is UNVERIFIABLE, and unverifiable refuses.
+ *
+ * Note what this does NOT claim to stop, because a declared consequence is not a hole: tsc
+ * still trusts the staged config's own switches. `noCheck: true` in the index disables
+ * checking, and a narrow `exclude` still narrows. Those are the price of running tsc rather
+ * than writing a private typechecker; they are logged loudly below rather than pretended away.
+ */
+function stripJsonComments(text) {
+  // Enough for tsconfig: line and block comments outside strings, plus trailing commas.
+  let out = '';
+  let inString = false;
+  let inLine = false;
+  let inBlock = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    const next = text[i + 1];
+    if (inLine) { if (ch === '\n') { inLine = false; out += ch; } continue; }
+    if (inBlock) { if (ch === '*' && next === '/') { inBlock = false; i += 1; } continue; }
+    if (inString) {
+      out += ch;
+      if (ch === '\\') { out += next ?? ''; i += 1; } else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') { inString = true; out += ch; continue; }
+    if (ch === '/' && next === '/') { inLine = true; i += 1; continue; }
+    if (ch === '/' && next === '*') { inBlock = true; i += 1; continue; }
+    out += ch;
+  }
+  return out.replace(/,(\s*[}\]])/g, '$1');
+}
+
+function withinScratch(target, scratchRoot) {
+  const rel = path.relative(scratchRoot, target);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+/**
+ * Walks the staged config and its extends chain, refusing anything that escapes the scratch
+ * tree. Returns a list of human-readable escapes; empty means the compiler can only see what
+ * this commit contains.
+ */
+function findConfigEscapes(configPath, scratchRoot, seen = new Set()) {
+  const escapes = [];
+  const resolved = path.resolve(configPath);
+  if (seen.has(resolved)) return escapes;
+  seen.add(resolved);
+
+  let config;
+  try {
+    config = JSON.parse(stripJsonComments(fs.readFileSync(resolved, 'utf8')));
+  } catch (error) {
+    // A tsconfig that does not parse is its own refusal, handled by tsc. Nothing to walk.
+    return escapes;
+  }
+  const base = path.dirname(resolved);
+  const check = (value, label) => {
+    if (typeof value !== 'string' || value.length === 0) return;
+    // A glob's fixed prefix is what decides where it starts looking.
+    const literal = value.split(/[*?]/)[0];
+    const target = path.resolve(base, literal);
+    if (!withinScratch(target, scratchRoot)) escapes.push(`${label}: ${value}`);
+  };
+
+  for (const key of ['include', 'files', 'exclude']) {
+    for (const entry of Array.isArray(config[key]) ? config[key] : []) check(entry, key);
+  }
+  for (const reference of Array.isArray(config.references) ? config.references : []) {
+    check(reference?.path, 'references');
+  }
+  const options = config.compilerOptions ?? {};
+  for (const key of ['baseUrl', 'rootDir', 'outDir', 'declarationDir']) check(options[key], `compilerOptions.${key}`);
+  for (const entry of Array.isArray(options.rootDirs) ? options.rootDirs : []) check(entry, 'compilerOptions.rootDirs');
+  for (const entry of Array.isArray(options.typeRoots) ? options.typeRoots : []) check(entry, 'compilerOptions.typeRoots');
+  for (const [alias, targets] of Object.entries(options.paths ?? {})) {
+    for (const entry of Array.isArray(targets) ? targets : []) check(entry, `compilerOptions.paths["${alias}"]`);
+  }
+
+  const extend = config.extends;
+  for (const entry of Array.isArray(extend) ? extend : extend === undefined ? [] : [extend]) {
+    if (typeof entry !== 'string') continue;
+    // A bare specifier resolves inside node_modules, which is declared and allowed.
+    const isRelative = entry.startsWith('.') || path.isAbsolute(entry);
+    if (!isRelative) continue;
+    const target = path.resolve(base, entry.endsWith('.json') ? entry : `${entry}.json`);
+    if (!withinScratch(target, scratchRoot)) {
+      escapes.push(`extends: ${entry}`);
+      continue;
+    }
+    if (fs.existsSync(target)) escapes.push(...findConfigEscapes(target, scratchRoot, seen));
+    else escapes.push(`extends (missing from the index): ${entry}`);
+  }
+  return escapes;
+}
+
 // The INDEX must carry its own tsconfig. Reading the worktree's here was attacks 3 and 4.
 const stagedTsconfig = path.join(scratch, 'tsconfig.json');
 if (!fs.existsSync(stagedTsconfig)) {
@@ -186,6 +301,34 @@ if (!tsc) {
   // This used to exit 0 on the reasoning that "no compiler is not a broken build". True, but
   // it is also not a verified build, and the guard printed the same silence for both.
   refuse('no local tsc was found, so nothing verified this commit', 'Run `npm install`.');
+}
+
+const escapes = findConfigEscapes(stagedTsconfig, scratch);
+if (escapes.length > 0) {
+  fs.rmSync(scratch, { recursive: true, force: true });
+  refuse(
+    'the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n' +
+      escapes.map((item) => `  - ${item}`).join('\n'),
+    'tsc may see the materialised index and node_modules, and nothing else. A config that\n' +
+      'names the working tree means the guard would be checking files this commit does not\n' +
+      'contain - and an `extends` that is not itself staged would keep resolving locally\n' +
+      'after the commit lands, staying green here and failing in CI.'
+  );
+}
+
+// Declared consequences, not holes: tsc obeys the STAGED config's own switches. Said out loud
+// so nobody reads a green as more than it is.
+try {
+  const staged = JSON.parse(stripJsonComments(fs.readFileSync(stagedTsconfig, 'utf8')));
+  if (staged?.compilerOptions?.noCheck === true) {
+    console.log('claim-guard: NOTE - the staged tsconfig sets noCheck; tsc will not type-check.');
+    console.log('             The compile below proves only that the config loads.');
+  }
+  if (Array.isArray(staged?.exclude) && staged.exclude.length > 0) {
+    console.log(`claim-guard: NOTE - the staged tsconfig excludes ${staged.exclude.length} pattern(s); excluded files are not checked.`);
+  }
+} catch {
+  // Unparseable is tsc's refusal to make, below.
 }
 
 try {

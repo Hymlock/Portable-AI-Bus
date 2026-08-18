@@ -150,6 +150,95 @@ test('ITEM 15 RED: a missing compiler refuses rather than exiting 0', async (t) 
   assert.match(result.out, /npm install/, 'and it must say how to satisfy it, or it gets bypassed');
 });
 
+// Round 3 (grok): I stopped the GUARD reading the worktree and did not stop TSC reading it.
+// The rule is now about the compiler - it may see the materialised index and node_modules,
+// nothing else - so these two attacks are decided by the rule rather than enumerated.
+
+test('ITEM 15 RED: a staged tsconfig cannot point tsc at the worktree by absolute path', async (t) => {
+  const { repo, busRoot, linked } = await fixtureRepo(t);
+  if (!linked) return t.skip('could not link node_modules');
+  await fsp.writeFile(path.join(repo, 'src', 'index.ts'), 'export const broken: number = "no";\n');
+  await fsp.writeFile(path.join(repo, 'tsconfig.json'), JSON.stringify({
+    compilerOptions: { strict: true, noEmit: true, skipLibCheck: true, types: [] },
+    include: [path.join(repo, 'src').replace(/\\/g, '/')]
+  }, null, 2));
+  git(repo, 'add', '-A');
+  // A compiling worktree copy, so the only broken file is the staged one.
+  await fsp.writeFile(path.join(repo, 'src', 'index.ts'), 'export const good: number = 1;\n');
+
+  const result = runGuard(repo, busRoot);
+  assert.equal(result.code, 1, `must REFUSE; got exit ${result.code}: ${result.out}`);
+  assert.match(result.out, /OUTSIDE the staged tree/,
+    'the index supplied the config, and the config pointed the compiler at the working tree');
+});
+
+test('ITEM 15 RED: a staged tsconfig cannot extend an untracked worktree-only base', async (t) => {
+  const { repo, busRoot, linked } = await fixtureRepo(t);
+  if (!linked) return t.skip('could not link node_modules');
+  await fsp.writeFile(path.join(repo, 'src', 'index.ts'), 'export const broken: number = "no";\n');
+  // The base exists ONLY in the worktree and narrows the check to the good file.
+  await fsp.writeFile(path.join(repo, 'tsconfig.worktree-only.json'), JSON.stringify({
+    compilerOptions: { strict: true, noEmit: true, skipLibCheck: true, types: [] },
+    include: ['src/ok.ts']
+  }, null, 2));
+  await fsp.writeFile(path.join(repo, 'tsconfig.json'), JSON.stringify({
+    extends: path.join(repo, 'tsconfig.worktree-only.json').replace(/\\/g, '/')
+  }, null, 2));
+  // Stage the type error and the extending config, but NOT the base.
+  git(repo, 'add', 'src', 'tsconfig.json', '.gitignore');
+
+  const result = runGuard(repo, busRoot);
+  assert.equal(result.code, 1, `must REFUSE; got exit ${result.code}: ${result.out}`);
+  assert.match(result.out, /OUTSIDE the staged tree|extends/,
+    'an extends the commit does not contain keeps resolving locally and fails only in CI');
+});
+
+test('ITEM 15: a missing mailbox skips the CLAIM check without switching off the compile', async (t) => {
+  const { repo, linked } = await fixtureRepo(t);
+  if (!linked) return t.skip('could not link node_modules');
+  await fsp.writeFile(path.join(repo, 'src', 'index.ts'), 'export const broken: number = "no";\n');
+  git(repo, 'add', '-A');
+  // A wrong or stale BUS_ROOT reaches this path as surely as a deliberate one. Two unrelated
+  // questions used to share an exit.
+  const result = runGuard(repo, path.join(repo, 'no-bus-here'));
+  assert.equal(result.code, 1, `must still REFUSE on the compile; got exit ${result.code}: ${result.out}`);
+  assert.match(result.out, /claim check skipped/, 'and it must say which half was skipped');
+});
+
+test('ITEM 15 GREEN CONTROL: a relative include inside the staged tree still compiles', async (t) => {
+  const { repo, busRoot, linked } = await fixtureRepo(t);
+  if (!linked) return t.skip('could not link node_modules');
+  // The containment rule must not refuse ordinary configs, or it becomes the unsatisfiable
+  // guard that item 6 proved gets bypassed.
+  await fsp.writeFile(path.join(repo, 'tsconfig.json'), JSON.stringify({
+    compilerOptions: { strict: true, noEmit: true, skipLibCheck: true, types: [], baseUrl: '.' },
+    include: ['src/**/*.ts'], exclude: ['src/nothing.ts']
+  }, null, 2));
+  git(repo, 'add', '-A');
+  const result = runGuard(repo, busRoot);
+  assert.equal(result.code, 0, `an honest commit must pass, got: ${result.out}`);
+  assert.match(result.out, /compile OK \(staged index\)/);
+});
+
+test('ITEM 15: declared consequences of trusting the staged config are stated, not hidden', async (t) => {
+  const { repo, busRoot, linked } = await fixtureRepo(t);
+  if (!linked) return t.skip('could not link node_modules');
+  // grok classified these as a different class from the worktree-escape hole: tsc obeys the
+  // STAGED config's own switches, which is the price of running tsc rather than writing a
+  // private typechecker. Its instruction was "log it", so a green must not read as more than
+  // it is. This is deliberately NOT called a control - it asserts new output and so cannot
+  // pass against the old guard.
+  await fsp.writeFile(path.join(repo, 'tsconfig.json'), JSON.stringify({
+    compilerOptions: { strict: true, noEmit: true, skipLibCheck: true, types: [], noCheck: true },
+    include: ['src'], exclude: ['src/nothing.ts']
+  }, null, 2));
+  git(repo, 'add', '-A');
+  const result = runGuard(repo, busRoot);
+  assert.equal(result.code, 0);
+  assert.match(result.out, /noCheck/, 'a commit checked with checking disabled must say so');
+  assert.match(result.out, /excludes 1 pattern/);
+});
+
 test('ITEM 15: the escape hatch still works, because an unsatisfiable guard gets bypassed', async (t) => {
   const { repo, busRoot, linked } = await fixtureRepo(t);
   if (!linked) return t.skip('could not link node_modules');
