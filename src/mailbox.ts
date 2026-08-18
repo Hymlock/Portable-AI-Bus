@@ -1033,9 +1033,30 @@ export class MailboxStore {
       const claimRoots = input.repoRoot
         ? [path.resolve(input.repoRoot), this.paths.root]
         : [this.paths.root];
-      const resolved: Array<{ path: string; root: string; identity: string }> = [];
+      /**
+       * Resolve the roots FIRST, before any path is looked at.
+       *
+       * A configured root that does not exist is a MISCONFIGURATION, not a licence. Under the
+       * old code it silently dropped out of the comparison and took the containment rule with
+       * it - which is exactly how grok's foreign-tree attack got in. Checking here rather than
+       * after resolution also means the caller is told what is actually wrong: a bad root
+       * previously surfaced as "path does not exist", sending someone to hunt the wrong bug.
+       */
+      const rootRealPaths: string[] = [];
+      for (const rootPath of claimRoots) {
+        try {
+          rootRealPaths.push(this.canonicalComparablePath(await fs.realpath(rootPath)));
+        } catch {
+          throw new Error(
+            `claim root does not exist: ${rootPath}. Refusing every claim rather than checking against a root that is not there.`
+          );
+        }
+      }
+      // `real` is the resolved destination, junctions and symlinks followed. The lexical path
+      // says what was asked for; only this says where it actually lands.
+      const resolved: Array<{ path: string; root: string; identity: string; real: string }> = [];
       for (const requestedPath of requested) {
-        let match: { path: string; root: string; identity: string } | undefined;
+        let match: { path: string; root: string; identity: string; real: string } | undefined;
         for (const root of claimRoots) {
           const candidate = path.resolve(root, requestedPath);
           if (!(await this.exists(candidate))) continue;
@@ -1044,7 +1065,8 @@ export class MailboxStore {
             match = {
               path: requestedPath,
               root: this.canonicalComparablePath(await fs.realpath(root)),
-              identity: filesystemIdentityMaterial(identity.dev, identity.ino)
+              identity: filesystemIdentityMaterial(identity.dev, identity.ino),
+              real: this.canonicalComparablePath(await fs.realpath(candidate))
             };
           } catch {
             // The path can disappear between exists() and identity discovery. Treat that as
@@ -1062,26 +1084,30 @@ export class MailboxStore {
       if (missing.length > 0) {
         throw new ClaimPathMissingError(missing);
       }
-      // Item 13, audit finding: the lexical check above cannot see a junction. A directory
-      // junction named `everything` pointing at the repo root passes as the path "everything",
-      // and then claimsOverlap - which compares by inode - blocks every file in the tree.
-      // Another spelling of everything.
-      //
-      // So refuse by IDENTITY as well as by spelling: if a claim resolves to a claim ROOT
-      // itself, it is the whole repository whatever it is called. Ancestor claims BELOW a root
-      // are unaffected, which is the property the walk exists to support.
+      /**
+       * Item 13. The lexical check above cannot see a junction: `everything` pointing at the
+       * repo root passes as the path "everything", and claimsOverlap - which compares by inode
+       * - then blocks every file in the tree. Another spelling of everything.
+       *
+       * The first fix refused a claim whose identity EQUALS a claim root, and grok's second
+       * audit walked straight around it twice: a junction to the root's PARENT is not equal to
+       * the root but contains it, and with a `repoRoot` that does not exist a junction to an
+       * unrelated tree is not equal to anything and was simply allowed.
+       *
+       * Both are the same mistake - enumerating bad destinations. So state the rule positively
+       * instead, which is the only form that closes the class: A CLAIM MUST RESOLVE STRICTLY
+       * UNDER A CLAIM ROOT. Equal to a root is not under it; above a root is not under it; a
+       * foreign tree is not under it. Ancestor claims BELOW a root are untouched, which is the
+       * property the overlap walk exists to support.
+       */
       for (const candidate of resolved) {
-        for (const rootPath of claimRoots) {
-          let rootIdentity: string | undefined;
-          try {
-            const stat = await fs.stat(rootPath, { bigint: true });
-            rootIdentity = filesystemIdentityMaterial(stat.dev, stat.ino);
-          } catch {
-            continue;
-          }
-          if (candidate.identity === rootIdentity) {
-            throw new WholeRepositoryClaimError(candidate.path);
-          }
+        const under = rootRealPaths.some(
+          // canonicalComparablePath normalises to forward slashes, so compare with `/`, not
+          // path.sep - on Windows the latter matches nothing and refuses every claim.
+          (rootReal) => candidate.real !== rootReal && candidate.real.startsWith(`${rootReal}/`)
+        );
+        if (!under) {
+          throw new WholeRepositoryClaimError(candidate.path);
         }
       }
       for (const [other, claims] of Object.entries(state.claims)) {

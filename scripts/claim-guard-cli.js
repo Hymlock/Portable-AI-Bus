@@ -103,13 +103,77 @@ if (process.env.BUS_ALLOW_BROKEN_BUILD === '1') {
   process.exit(0);
 }
 
-const tsconfig = path.join(repo, 'tsconfig.json');
-if (!fs.existsSync(tsconfig)) {
-  // Audit finding: this used to exit(0) silently, so a repo with no tsconfig looked identical
-  // to a repo that compiled. A skipped check must SAY it was skipped - a guard whose silence
-  // means two different things is not a guard.
-  console.log('claim-guard: no tsconfig.json; compile check SKIPPED');
-  process.exit(0);
+/**
+ * `tsc -p repo` compiles the WORKING TREE, not the INDEX. Stage a type error, restore a
+ * compiling working tree, and the guard printed `compile OK` while a non-compiling commit
+ * landed. A pre-commit check must verify WHAT IS BEING COMMITTED, so this materialises the
+ * index with `git checkout-index` - which writes exactly the staged content - and compiles it.
+ *
+ * SECOND AUDIT (grok, 2026-08-17). Materialising the index was right; everything around it
+ * leaked, and all four holes were the same mistake: consulting the WORKING TREE about a
+ * question only the INDEX can answer.
+ *
+ *   - tsconfig.json was checked for, and then COPIED FROM, the worktree. So renaming it away
+ *     skipped the check entirely, and a worktree tsconfig with a narrow `include` compiled a
+ *     subset of the staged tree and printed `compile OK (staged index)`. A staged tsconfig
+ *     that does not even parse sailed through behind a good worktree one.
+ *   - a missing tsconfig and a missing tsc both exited 0.
+ *
+ * So: the index supplies its own tsconfig, and every path that cannot actually verify the
+ * staged tree now REFUSES. The escape hatch is what keeps that satisfiable - item 6 proved a
+ * guard that cannot be satisfied gets bypassed exactly as surely as one that cannot go red -
+ * and it is explicit and logged rather than achieved by disabling the hook.
+ */
+function refuse(reason, remedy) {
+  console.error(`claim-guard: REFUSING - ${reason}\n`);
+  if (remedy) console.error(`${remedy}\n`);
+  console.error('This check verifies the INDEX - what this commit would actually contain.');
+  console.error('If you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1');
+  console.error('and say so in the message.');
+  process.exit(1);
+}
+
+let scratch;
+try {
+  scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'claim-guard-index-'));
+  execFileSync('git', ['checkout-index', '--all', '--prefix', `${scratch.replace(/\\/g, '/')}/`], {
+    cwd: repo, encoding: 'utf8', stdio: 'pipe'
+  });
+} catch (error) {
+  if (scratch) fs.rmSync(scratch, { recursive: true, force: true });
+  // Previously this fell back to compiling the worktree. That is the one thing it must not do:
+  // the fallback answers a different question and reports it in the same words.
+  refuse(
+    `the index could not be materialised (${error.message.split('\n')[0]})`,
+    'Without the staged tree there is nothing to verify.'
+  );
+}
+
+// The INDEX must carry its own tsconfig. Reading the worktree's here was attacks 3 and 4.
+const stagedTsconfig = path.join(scratch, 'tsconfig.json');
+if (!fs.existsSync(stagedTsconfig)) {
+  fs.rmSync(scratch, { recursive: true, force: true });
+  refuse(
+    'the index contains no tsconfig.json, so the staged tree cannot be compiled',
+    fs.existsSync(path.join(repo, 'tsconfig.json'))
+      ? 'There is one in your working tree but it is not tracked or not staged. Stage it.'
+      : 'Add a tsconfig.json, or use the escape hatch below.'
+  );
+}
+
+// node_modules is deliberately not in the index; without it the compile fails for the wrong
+// reason, which is a red that is not about the staged code.
+const modules = path.join(repo, 'node_modules');
+if (!fs.existsSync(modules)) {
+  fs.rmSync(scratch, { recursive: true, force: true });
+  refuse('node_modules is missing, so the staged tree cannot be type-checked',
+    'Run `npm install`. On 2026-08-15 an npm install wiped node_modules/.bin for two hours; this is that.');
+}
+try {
+  fs.symlinkSync(modules, path.join(scratch, 'node_modules'), 'junction');
+} catch (error) {
+  fs.rmSync(scratch, { recursive: true, force: true });
+  refuse(`node_modules could not be staged for the index tree (${error.code || error.message})`);
 }
 
 const tscCandidates = [
@@ -118,59 +182,22 @@ const tscCandidates = [
 ];
 const tsc = tscCandidates.find((candidate) => fs.existsSync(candidate));
 if (!tsc) {
-  // No compiler is not a broken build. Refusing here would be the unsatisfiable-guard trap:
-  // on 2026-08-15 an npm install wiped node_modules/.bin and tsc vanished for two hours.
-  console.log('claim-guard: no local tsc found; compile check skipped');
-  process.exit(0);
-}
-
-/**
- * Audit finding, and it was the hole this item exists to close: `tsc -p repo` compiles the
- * WORKING TREE, not the INDEX. Stage a type error, restore a compiling working tree, and the
- * guard printed `compile OK` while a non-compiling commit landed.
- *
- * A pre-commit check must verify WHAT IS BEING COMMITTED. So materialise the index into a
- * temporary worktree and compile that. `git worktree add` from the index is not a thing, so
- * this uses `git checkout-index`, which writes exactly the staged content and nothing else.
- */
-let compileTarget = repo;
-let scratch;
-try {
-  scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'claim-guard-index-'));
-  execFileSync('git', ['checkout-index', '--all', '--prefix', `${scratch.replace(/\\/g, '/')}/`], {
-    cwd: repo, encoding: 'utf8', stdio: 'pipe'
-  });
-  // tsconfig and node_modules are not in the index; the compiler needs both.
-  fs.copyFileSync(tsconfig, path.join(scratch, 'tsconfig.json'));
-  const modules = path.join(repo, 'node_modules');
-  if (fs.existsSync(modules)) {
-    try {
-      fs.symlinkSync(modules, path.join(scratch, 'node_modules'), 'junction');
-    } catch {
-      // Without types the compile would fail for the wrong reason. Fall back to the working
-      // tree and SAY SO rather than reporting a red that is not about the staged code.
-      compileTarget = repo;
-      scratch = undefined;
-      console.log('claim-guard: could not stage an index tree; compiling the WORKING TREE instead');
-    }
-  }
-  if (scratch) compileTarget = scratch;
-} catch (error) {
-  compileTarget = repo;
-  scratch = undefined;
-  console.log(`claim-guard: could not read the index (${error.message.split('\n')[0]}); compiling the WORKING TREE instead`);
+  fs.rmSync(scratch, { recursive: true, force: true });
+  // This used to exit 0 on the reasoning that "no compiler is not a broken build". True, but
+  // it is also not a verified build, and the guard printed the same silence for both.
+  refuse('no local tsc was found, so nothing verified this commit', 'Run `npm install`.');
 }
 
 try {
   const isCmd = tsc.endsWith('.cmd');
   execFileSync(isCmd ? process.env.ComSpec || 'cmd.exe' : process.execPath,
-    isCmd ? ['/c', tsc, '-p', compileTarget, '--noEmit'] : [tsc, '-p', compileTarget, '--noEmit'],
-    { cwd: compileTarget, encoding: 'utf8', stdio: 'pipe' });
-  console.log(compileTarget === repo ? 'claim-guard: compile OK (working tree)' : 'claim-guard: compile OK (staged index)');
-  if (scratch) fs.rmSync(scratch, { recursive: true, force: true });
+    isCmd ? ['/c', tsc, '-p', scratch, '--noEmit'] : [tsc, '-p', scratch, '--noEmit'],
+    { cwd: scratch, encoding: 'utf8', stdio: 'pipe' });
+  console.log('claim-guard: compile OK (staged index)');
+  fs.rmSync(scratch, { recursive: true, force: true });
   process.exit(0);
 } catch (error) {
-  if (scratch) fs.rmSync(scratch, { recursive: true, force: true });
+  fs.rmSync(scratch, { recursive: true, force: true });
   const detail = `${error.stdout || ''}${error.stderr || ''}`.trim().split('\n').slice(0, 6).join('\n');
   console.error('claim-guard: REFUSING - this commit does not compile.\n');
   console.error(detail || error.message);
