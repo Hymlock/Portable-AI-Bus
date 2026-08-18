@@ -69,14 +69,39 @@ async function fixtureRepo(t) {
   return { dir, repo, busRoot, linked };
 }
 
-function runGuard(repo, busRoot) {
+function runGuard(repo, busRoot, preload) {
+  // `preload` runs before the hook and is how the scratch directory name is forced. Scratch
+  // names are random mkdtemp values, so the sibling-path attack below cannot be staged
+  // without pinning one - grok's method, kept rather than replaced by a source assertion,
+  // because "the bad substring is gone from the file" is not the same claim as "a listed
+  // leak is refused".
+  const argv = preload ? ['-r', preload, GUARD] : [GUARD];
   try {
-    const stdout = execFileSync(process.execPath, [GUARD, '--repo', repo, '--seat', 'claude', '--root', busRoot],
+    const stdout = execFileSync(process.execPath, [...argv, '--repo', repo, '--seat', 'claude', '--root', busRoot],
       { cwd: repo, encoding: 'utf8', stdio: 'pipe' });
     return { code: 0, out: stdout };
   } catch (error) {
     return { code: error.status ?? 1, out: `${error.stdout || ''}${error.stderr || ''}` };
   }
+}
+
+/** Pins the guard's scratch directory so a sibling `<scratch>x` path can be created. */
+async function writeScratchPinPreload(dir, pinnedScratch) {
+  const file = path.join(dir, 'pin-scratch.cjs');
+  await fsp.writeFile(file, `
+    const fs = require('node:fs');
+    const real = fs.mkdtempSync;
+    let used = false;
+    fs.mkdtempSync = (prefix, ...rest) => {
+      if (!used && String(prefix).includes('claim-guard-index-')) {
+        used = true;
+        fs.mkdirSync(${JSON.stringify(pinnedScratch)}, { recursive: true });
+        return ${JSON.stringify(pinnedScratch)};
+      }
+      return real(prefix, ...rest);
+    };
+  `);
+  return file;
 }
 
 // ---------------------------------------------------------------------------
@@ -240,6 +265,50 @@ test('ITEM 15 RED: staged noCheck is not a verified index', async (t) => {
   const result = runGuard(repo, busRoot);
   assert.equal(result.code, 1, 'noCheck is the hook turning itself off from inside the artifact');
   assert.match(result.out, /noCheck/);
+});
+
+test('ITEM 15 RED: a SIBLING of the scratch directory is not inside it', async (t) => {
+  const { dir, repo, busRoot, linked } = await fixtureRepo(t);
+  if (!linked) return t.skip('could not link node_modules');
+
+  // grok's r19b attack. The exemption test was `comparable(real).includes(comparable(scratch))`,
+  // which accepts `<scratch>x/...` - a different directory that merely starts with the same
+  // characters. Containment needs a separator. This is the same class as the `/node_modules/`
+  // substring from r11, and it sat three lines under a comment saying so.
+  const pinned = path.join(dir, 'claim-guard-index-PINNED');
+  const sibling = `${pinned}x`;
+  await fsp.mkdir(sibling, { recursive: true });
+  await fsp.writeFile(path.join(sibling, 'index.d.ts'), 'declare const leaked: number;\n');
+
+  // A package.json "types" reaches the outside file without an import the source walker sees.
+  const pkgDir = path.join(repo, 'node_modules', 'leaky-types');
+  await fsp.mkdir(pkgDir, { recursive: true });
+  await fsp.writeFile(path.join(pkgDir, 'package.json'),
+    JSON.stringify({ name: 'leaky-types', version: '1.0.0', types: path.join(sibling, 'index.d.ts').replace(/\\/g, '/') }));
+  await fsp.writeFile(path.join(repo, 'src', 'index.ts'), "import 'leaky-types';\nexport const good: number = 1;\n");
+  await fsp.writeFile(path.join(repo, 'tsconfig.json'), JSON.stringify({
+    compilerOptions: { strict: true, noEmit: true, skipLibCheck: true, types: ['leaky-types'] },
+    include: ['src']
+  }, null, 2));
+  git(repo, 'add', 'src', 'tsconfig.json', '.gitignore');
+
+  const preload = await writeScratchPinPreload(dir, pinned);
+  const result = runGuard(repo, busRoot, preload);
+  assert.equal(result.code, 1,
+    `a file tsc loaded from outside the staged tree must REFUSE; got exit ${result.code}: ${result.out}`);
+});
+
+test('ITEM 15 GREEN CONTROL: pinning the scratch name alone does not break an honest commit', async (t) => {
+  const { dir, repo, busRoot, linked } = await fixtureRepo(t);
+  if (!linked) return t.skip('could not link node_modules');
+  // The preload is machinery, not the thing under test. If pinning by itself turned a green
+  // into a red, the gate above would prove nothing about substrings.
+  const pinned = path.join(dir, 'claim-guard-index-PINNED2');
+  git(repo, 'add', '-A');
+  const preload = await writeScratchPinPreload(dir, pinned);
+  const result = runGuard(repo, busRoot, preload);
+  assert.equal(result.code, 0, `an honest commit must still pass under a pinned scratch: ${result.out}`);
+  assert.match(result.out, /compile OK \(staged index\)/);
 });
 
 test('ITEM 15: a narrowing exclude is printed, not refused', async (t) => {

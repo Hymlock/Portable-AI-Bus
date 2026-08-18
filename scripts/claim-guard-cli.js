@@ -500,7 +500,13 @@ function classifyListedFiles(listText, scratchRoot, repoModulesReal, typescriptR
     // permit — package.json "types" can name any outside path.
     if (repoModulesReal && pathContains(repoModulesReal, real)) continue;
     if (typescriptReal && pathContains(typescriptReal, real)) continue;
-    if (withinScratch(real, scratchRoot) || comparable(real).includes(comparable(scratchRoot))) {
+    // r19b (grok): this carried `|| comparable(real).includes(comparable(scratchRoot))`, three
+    // lines under a comment saying a substring match is not a permit. `<scratch>x/index.d.ts`
+    // contains the scratch path as a substring and is a DIFFERENT directory; a package.json
+    // "types" naming it was listed by tsc and the hook printed `compile OK`. Same class as the
+    // `/node_modules/` substring from r11 - the lesson was written down and then violated in
+    // the same block. Containment needs a separator, so pathContains is the only test.
+    if (withinScratch(real, scratchRoot) || pathContains(scratchRoot, real)) {
       program.push(file);
       continue;
     }
