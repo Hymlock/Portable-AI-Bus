@@ -8,6 +8,15 @@
  *   tsc may see the materialised index and the declared node_modules junction.
  *   Nothing else. Unverifiable refuses.
  *
+ *   A staged file is evidence about what tsc will see only if it can enter the
+ *   compilation program. Authority for membership is tsc --listFilesOnly, not
+ *   an include-glob matcher and not "looks like source". Source-text inspection
+ *   (import / require / triple-slash) runs only on classified.program files.
+ *   Config escapes, staged reparse points, and implicit @types stay whole-tree
+ *   and run before tsc. Walking a file tsc did not load is the item-6 hole:
+ *   the audit evidence commit was refused on comment text in a .cjs tsc never
+ *   loaded.
+ *
  * Exit 0 clean, 1 refused, 2 misuse.
  */
 
@@ -420,12 +429,20 @@ function findImplicitTypeRootEscapes(scratchRoot, repoModulesReal) {
   return escapes;
 }
 
-function findSourceEscapes(scratchRoot, repoModulesReal) {
+function relOfScratch(full, scratchRoot) {
+  return path.relative(scratchRoot, full).replace(/\\/g, '/');
+}
+
+function pushIfOutside(escapes, target, scratchRoot, repoModulesReal, label) {
+  if (!compilerMaySee(target, scratchRoot, repoModulesReal)) escapes.push(label);
+}
+
+/**
+ * Whole-index reparse scan. A staged symlink or junction is a property of the
+ * commit, not of the program. This is not a source-text scan.
+ */
+function findReparseEscapes(scratchRoot, repoModulesReal) {
   const escapes = [];
-  const relOf = (full) => path.relative(scratchRoot, full).replace(/\\/g, '/');
-  const checkTarget = (target, label) => {
-    if (!compilerMaySee(target, scratchRoot, repoModulesReal)) escapes.push(label);
-  };
   const walk = (dir) => {
     let entries;
     try {
@@ -446,53 +463,81 @@ function findSourceEscapes(scratchRoot, repoModulesReal) {
       // (or the declared node_modules). Do not walk an outbound reparse.
       if (lst.isSymbolicLink() || (lst.isDirectory() && !compilerMaySee(full, scratchRoot, repoModulesReal))) {
         if (!compilerMaySee(full, scratchRoot, repoModulesReal)) {
-          escapes.push(`staged symlink: ${relOf(full)}`);
+          escapes.push(`staged symlink: ${relOfScratch(full, scratchRoot)}`);
           continue;
         }
       }
-      if (lst.isDirectory() && !lst.isSymbolicLink()) {
-        walk(full);
-        continue;
-      }
-      if (lst.isDirectory()) continue;
-      if (!isWalkedSource(ent.name)) continue;
-      let text;
-      try {
-        text = fs.readFileSync(full, 'utf8');
-      } catch {
-        continue;
-      }
-      for (const line of text.split(/\r?\n/)) {
-        const pathRef = line.match(TRIPLE_SLASH_PATH);
-        if (pathRef) {
-          checkTarget(
-            path.resolve(path.dirname(full), pathRef[1]),
-            `/// <reference path> in ${relOf(full)}: ${pathRef[1]}`
-          );
-        }
-        const typesRef = line.match(TRIPLE_SLASH_TYPES);
-        if (typesRef) {
-          const resolved = resolveTypesPackage(typesRef[1], scratchRoot);
-          if (resolved) checkTarget(resolved, `/// <reference types> in ${relOf(full)}: ${typesRef[1]}`);
-        }
-        const specs = [];
-        const fromMatch = line.match(/\bfrom\s+['"]([^'"]+)['"]/);
-        const importMatch = line.match(/\bimport\s+['"]([^'"]+)['"]/);
-        const dynMatch = line.match(/\bimport\s*\(\s*['"]([^'"]+)['"]/);
-        const reqMatch = line.match(/\brequire\s*\(\s*['"]([^'"]+)['"]/);
-        if (fromMatch) specs.push(fromMatch[1]);
-        if (importMatch) specs.push(importMatch[1]);
-        if (dynMatch) specs.push(dynMatch[1]);
-        if (reqMatch) specs.push(reqMatch[1]);
-        for (const spec of specs) {
-          const resolved = resolveModuleSpecifier(spec, path.dirname(full), scratchRoot);
-          if (resolved) checkTarget(resolved, `import ${spec} in ${relOf(full)}`);
-        }
-      }
+      if (lst.isDirectory() && !lst.isSymbolicLink()) walk(full);
     }
   };
   walk(scratchRoot);
   return escapes;
+}
+
+/**
+ * Source-text inspection of files tsc actually loaded (classified.program).
+ * Walking a file tsc did not load is not evidence about what tsc will see.
+ * Do not reimplement include/exclude/allowJs here — listFilesOnly is the set.
+ */
+function findSourceTextEscapes(programFiles, scratchRoot, repoModulesReal) {
+  const escapes = [];
+  for (const file of programFiles) {
+    const full = path.resolve(file);
+    if (!isWalkedSource(full.replace(/\\/g, '/'))) continue;
+    let text;
+    try {
+      text = fs.readFileSync(full, 'utf8');
+    } catch {
+      continue;
+    }
+    const rel = relOfScratch(full, scratchRoot);
+    for (const line of text.split(/\r?\n/)) {
+      const pathRef = line.match(TRIPLE_SLASH_PATH);
+      if (pathRef) {
+        pushIfOutside(
+          escapes,
+          path.resolve(path.dirname(full), pathRef[1]),
+          scratchRoot,
+          repoModulesReal,
+          `/// <reference path> in ${rel}: ${pathRef[1]}`
+        );
+      }
+      const typesRef = line.match(TRIPLE_SLASH_TYPES);
+      if (typesRef) {
+        const resolved = resolveTypesPackage(typesRef[1], scratchRoot);
+        if (resolved) {
+          pushIfOutside(
+            escapes,
+            resolved,
+            scratchRoot,
+            repoModulesReal,
+            `/// <reference types> in ${rel}: ${typesRef[1]}`
+          );
+        }
+      }
+      const specs = [];
+      const fromMatch = line.match(/\bfrom\s+['"]([^'"]+)['"]/);
+      const importMatch = line.match(/\bimport\s+['"]([^'"]+)['"]/);
+      const dynMatch = line.match(/\bimport\s*\(\s*['"]([^'"]+)['"]/);
+      const reqMatch = line.match(/\brequire\s*\(\s*['"]([^'"]+)['"]/);
+      if (fromMatch) specs.push(fromMatch[1]);
+      if (importMatch) specs.push(importMatch[1]);
+      if (dynMatch) specs.push(dynMatch[1]);
+      if (reqMatch) specs.push(reqMatch[1]);
+      for (const spec of specs) {
+        const resolved = resolveModuleSpecifier(spec, path.dirname(full), scratchRoot);
+        if (resolved) {
+          pushIfOutside(escapes, resolved, scratchRoot, repoModulesReal, `import ${spec} in ${rel}`);
+        }
+      }
+    }
+  }
+  return escapes;
+}
+
+/** @deprecated name kept so existing comments still point at a function. */
+function findSourceEscapes(scratchRoot, repoModulesReal) {
+  return findReparseEscapes(scratchRoot, repoModulesReal);
 }
 
 function runTsc(tsc, args, cwd) {
@@ -585,7 +630,7 @@ try {
 
 const escapes = [
   ...findConfigEscapes(stagedTsconfig, scratch, repoModulesReal),
-  ...findSourceEscapes(scratch, repoModulesReal),
+  ...findReparseEscapes(scratch, repoModulesReal),
   ...findImplicitTypeRootEscapes(scratch, repoModulesReal)
 ];
 if (escapes.length > 0) {
@@ -630,6 +675,17 @@ try {
     );
   }
   const classified = classifyListedFiles(listed, scratch, repoModulesReal, typescriptReal);
+  const textEscapes = findSourceTextEscapes(classified.program, scratch, repoModulesReal);
+  if (textEscapes.length > 0) {
+    fs.rmSync(scratch, { recursive: true, force: true });
+    refuse(
+      'the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n' +
+        textEscapes.map((item) => `  - ${item}`).join('\n'),
+      'tsc may see the materialised index and node_modules, and nothing else. Source-text\n' +
+        'inspection runs only on files tsc actually loaded. A file tsc did not load is not\n' +
+        'evidence about what tsc will see.'
+    );
+  }
   if (classified.leaks.length > 0) {
     fs.rmSync(scratch, { recursive: true, force: true });
     refuse(

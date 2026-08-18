@@ -355,6 +355,180 @@ test('ITEM 15: a narrowing exclude is printed, not refused', async (t) => {
   assert.match(result.out, /excludes 1 pattern/);
 });
 
+async function grantClaimPaths(busRoot, extraPaths) {
+  const statePath = path.join(busRoot, '.ai-bus', 'runtime', 'mailbox', 'state.json');
+  const claims = [
+    { path: 'src' },
+    { path: 'tsconfig.json' },
+    ...extraPaths.map((p) => ({ path: p }))
+  ];
+  await fsp.writeFile(statePath, JSON.stringify({ claims: { claude: claims } }));
+}
+
+async function writeHiddenModule(dir) {
+  const hidden = path.join(dir, 'hidden-mod');
+  await fsp.mkdir(hidden, { recursive: true });
+  await fsp.writeFile(path.join(hidden, 'index.ts'), 'export const n = 1;\n');
+  return hidden.replace(/\\/g, '/');
+}
+
+// ---------------------------------------------------------------------------
+// ITEM 15 walker-scope hole (2026-08-18). The content scanner walked every
+// staged file that looked like source. A .cjs tsc never loads is not evidence
+// about what tsc will see. Authority is listFilesOnly, not include globs.
+// ---------------------------------------------------------------------------
+
+test('ITEM 15 GREEN: unimported docs .cjs attack-string is not in the program', async (t) => {
+  const { repo, busRoot, linked } = await fixtureRepo(t);
+  if (!linked) return t.skip('could not link node_modules');
+  await fsp.mkdir(path.join(repo, 'docs'), { recursive: true });
+  await fsp.writeFile(
+    path.join(repo, 'docs', 'tmp-audit-r18-grok.cjs'),
+    '/*\n *   type-position import("C:/hidden/mod")\n *   import("C:/hidden/mod")\n */\nmodule.exports = 1;\n'
+  );
+  await grantClaimPaths(busRoot, ['docs']);
+  git(repo, 'add', '-A');
+  const result = runGuard(repo, busRoot);
+  assert.equal(result.code, 0, `docs evidence must be committable; got: ${result.out}`);
+  assert.match(result.out, /compile OK \(staged index\)/);
+  assert.doesNotMatch(result.out, /C:\/hidden\/mod/);
+});
+
+test('ITEM 15 GREEN: src/*.cjs with allowJs off is not in the program', async (t) => {
+  const { repo, busRoot, linked } = await fixtureRepo(t);
+  if (!linked) return t.skip('could not link node_modules');
+  await fsp.writeFile(
+    path.join(repo, 'src', 'probe.cjs'),
+    'require("C:/hidden/mod");\nmodule.exports = 1;\n'
+  );
+  git(repo, 'add', '-A');
+  const result = runGuard(repo, busRoot);
+  assert.equal(result.code, 0,
+    `unloaded src/*.cjs must not refuse; a glob walk of include/ still would. got: ${result.out}`);
+  assert.match(result.out, /compile OK \(staged index\)/);
+});
+
+test('ITEM 15 RED: absolute import in a program file still refuses', async (t) => {
+  const { repo, busRoot, linked } = await fixtureRepo(t);
+  if (!linked) return t.skip('could not link node_modules');
+  await fsp.writeFile(
+    path.join(repo, 'src', 'index.ts'),
+    'import { n } from "C:/hidden/mod";\nexport const good: number = 1;\n'
+  );
+  git(repo, 'add', '-A');
+  const result = runGuard(repo, busRoot);
+  assert.equal(result.code, 1, `program absolute import must REFUSE; got: ${result.out}`);
+});
+
+test('ITEM 15 RED: import-pulled docs file that names a real outside module still refuses', async (t) => {
+  const { dir, repo, busRoot, linked } = await fixtureRepo(t);
+  if (!linked) return t.skip('could not link node_modules');
+  const hidden = await writeHiddenModule(dir);
+  await fsp.mkdir(path.join(repo, 'docs'), { recursive: true });
+  await fsp.writeFile(path.join(repo, 'docs', 'outside.ts'), `export { n } from "${hidden}";\n`);
+  await fsp.writeFile(path.join(repo, 'src', 'index.ts'), 'export { n } from "../docs/outside";\n');
+  await grantClaimPaths(busRoot, ['docs']);
+  git(repo, 'add', '-A');
+  const result = runGuard(repo, busRoot);
+  assert.equal(result.code, 1,
+    `import-pull of a real outside module must REFUSE via listFilesOnly; got: ${result.out}`);
+});
+
+test('ITEM 15 RED: files[] naming a docs leak still refuses', async (t) => {
+  const { dir, repo, busRoot, linked } = await fixtureRepo(t);
+  if (!linked) return t.skip('could not link node_modules');
+  const hidden = await writeHiddenModule(dir);
+  await fsp.mkdir(path.join(repo, 'docs'), { recursive: true });
+  await fsp.writeFile(path.join(repo, 'docs', 'outside.ts'), `export { n } from "${hidden}";\n`);
+  await fsp.writeFile(path.join(repo, 'tsconfig.json'), JSON.stringify({
+    compilerOptions: { strict: true, noEmit: true, skipLibCheck: true, types: [] },
+    files: ['src/index.ts', 'docs/outside.ts']
+  }, null, 2));
+  await grantClaimPaths(busRoot, ['docs']);
+  git(repo, 'add', '-A');
+  const result = runGuard(repo, busRoot);
+  assert.equal(result.code, 1, `files[] docs leak must REFUSE; got: ${result.out}`);
+});
+
+test('ITEM 15 RED: omitted include (default **/*) still catches a docs leak', async (t) => {
+  const { dir, repo, busRoot, linked } = await fixtureRepo(t);
+  if (!linked) return t.skip('could not link node_modules');
+  const hidden = await writeHiddenModule(dir);
+  await fsp.mkdir(path.join(repo, 'docs'), { recursive: true });
+  await fsp.writeFile(path.join(repo, 'docs', 'outside.ts'), `export { n } from "${hidden}";\n`);
+  await fsp.writeFile(path.join(repo, 'tsconfig.json'), JSON.stringify({
+    compilerOptions: { strict: true, noEmit: true, skipLibCheck: true, types: [] }
+  }, null, 2));
+  await grantClaimPaths(busRoot, ['docs']);
+  git(repo, 'add', '-A');
+  const result = runGuard(repo, busRoot);
+  assert.equal(result.code, 1, `default include docs leak must REFUSE; got: ${result.out}`);
+});
+
+test('ITEM 15 RED: allowJs puts src/*.cjs in the program, so a real hidden require refuses', async (t) => {
+  const { dir, repo, busRoot, linked } = await fixtureRepo(t);
+  if (!linked) return t.skip('could not link node_modules');
+  const hidden = await writeHiddenModule(dir);
+  await fsp.writeFile(path.join(repo, 'src', 'probe.cjs'), `const { n } = require("${hidden}");\nmodule.exports = n;\n`);
+  await fsp.writeFile(path.join(repo, 'tsconfig.json'), JSON.stringify({
+    compilerOptions: { strict: true, noEmit: true, skipLibCheck: true, types: [], allowJs: true, checkJs: true },
+    include: ['src']
+  }, null, 2));
+  git(repo, 'add', '-A');
+  const result = runGuard(repo, busRoot);
+  assert.equal(result.code, 1, `allowJs .cjs leak must REFUSE; got: ${result.out}`);
+});
+
+test('ITEM 15 RED: staged directory symlink under src still refuses', async (t) => {
+  const { dir, repo, busRoot, linked } = await fixtureRepo(t);
+  if (!linked) return t.skip('could not link node_modules');
+  const outside = path.join(dir, 'outside-tree');
+  await fsp.mkdir(outside, { recursive: true });
+  await fsp.writeFile(path.join(outside, 'leaked.ts'), 'export const n = 1;\n');
+  // A Windows junction is followed by `git add` and lands as ordinary files, which is
+  // not this attack. Stage a real git symlink (mode 120000) so checkout-index can
+  // recreate a reparse. If this machine cannot materialise that as a symlink, the
+  // case is not red-capable here — same NOTE class as extends-symlink-outside.
+  git(repo, 'config', 'core.symlinks', 'true');
+  const target = outside.replace(/\\/g, '/');
+  const blob = execFileSync('git', ['hash-object', '-w', '--stdin'], {
+    cwd: repo, input: target, encoding: 'utf8'
+  }).trim();
+  git(repo, 'update-index', '--add', '--cacheinfo', `120000,${blob},src/leaked`);
+  git(repo, 'add', 'src/index.ts', 'src/ok.ts', 'tsconfig.json', '.gitignore');
+  const listed = git(repo, 'ls-files', '-s', 'src/leaked');
+  if (!listed.startsWith('120000')) return t.skip('git did not store a symlink');
+  const result = runGuard(repo, busRoot);
+  if (result.code === 0 && !/symlink/i.test(result.out)) {
+    return t.skip('checkout-index did not materialise a reparse point on this machine');
+  }
+  assert.equal(result.code, 1, `staged dir symlink under src must REFUSE; got: ${result.out}`);
+  assert.match(result.out, /symlink|OUTSIDE|leaked/i);
+});
+
+test('ITEM 15 GREEN: rootDirs does not load an unimported docs attack file', async (t) => {
+  const { repo, busRoot, linked } = await fixtureRepo(t);
+  if (!linked) return t.skip('could not link node_modules');
+  await fsp.mkdir(path.join(repo, 'docs'), { recursive: true });
+  await fsp.writeFile(
+    path.join(repo, 'docs', 'outside.ts'),
+    'import { n } from "C:/hidden/mod";\nexport const x = 1;\n'
+  );
+  await fsp.writeFile(path.join(repo, 'tsconfig.json'), JSON.stringify({
+    compilerOptions: {
+      strict: true, noEmit: true, skipLibCheck: true, types: [],
+      rootDirs: ['src', 'docs']
+    },
+    include: ['src']
+  }, null, 2));
+  await grantClaimPaths(busRoot, ['docs']);
+  git(repo, 'add', '-A');
+  const result = runGuard(repo, busRoot);
+  assert.equal(result.code, 0,
+    `rootDirs is not membership; unimported docs must not refuse. got: ${result.out}`);
+  assert.match(result.out, /compile OK \(staged index\)/);
+});
+
 test('ITEM 15: the escape hatch still works, because an unsatisfiable guard gets bypassed', async (t) => {
   const { repo, busRoot, linked } = await fixtureRepo(t);
   if (!linked) return t.skip('could not link node_modules');
