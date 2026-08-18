@@ -1,0 +1,29 @@
+{
+  "rows": [
+    {
+      "name": "twostep-cross-recipient",
+      "status": "PASS",
+      "detail": "superseding message #2 is addressed to codex, not grok"
+    },
+    {
+      "name": "twostep-cross-leaves-original",
+      "status": "PASS",
+      "detail": "inbox=1:-"
+    },
+    {
+      "name": "twostep-consumed",
+      "status": "PASS",
+      "detail": "Cannot supersede #3: grok has already read it. Supersession retracts UNREAD mail; send a correction instead, and close the checkpoint if the work should stop."
+    },
+    {
+      "name": "twostep-empty-reason",
+      "status": "NOTE",
+      "detail": "supersession reason must not be empty"
+    },
+    {
+      "name": "twostep-writes-supersededAt",
+      "status": "PASS",
+      "detail": "{\"supersededBy\":8,\"supersededAt\":\"2026-08-18T02:34:36.500Z\"}"
+    }
+  ]
+}

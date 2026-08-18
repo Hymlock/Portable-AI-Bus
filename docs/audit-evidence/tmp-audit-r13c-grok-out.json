@@ -1,0 +1,42 @@
+{
+  "pass": 6,
+  "fail": 1,
+  "note": 0,
+  "results": [
+    {
+      "name": "empty-lock-is-debris",
+      "status": "PASS",
+      "detail": "recovered in 5ms"
+    },
+    {
+      "name": "unparseable-lock-is-debris",
+      "status": "PASS",
+      "detail": "recovered in 3ms"
+    },
+    {
+      "name": "missing-pid-lock-is-debris",
+      "status": "PASS",
+      "detail": "recovered in 4ms"
+    },
+    {
+      "name": "lock-path-is-directory",
+      "status": "FAIL",
+      "detail": "1ms Path is a directory: rm returned EISDIR (is a directory) C:\\Users\\hymlo\\AppData\\Local\\Temp\\pab-r13c-lockdir-8Mmiox\\.ai-bus\\runtime\\mailbox\\evidence.json.lock"
+    },
+    {
+      "name": "string-pid-is-debris",
+      "status": "PASS",
+      "detail": "recovered in 3ms"
+    },
+    {
+      "name": "live-pid-not-debris",
+      "status": "PASS",
+      "detail": "10005ms Timed out waiting for the evidence lock: C:\\Users\\hymlo\\AppData\\Local\\Temp\\pab-r13c-live-hWQTmg\\.ai-bus\\runtime\\mailbox\\evidence.json.lock"
+    },
+    {
+      "name": "bom-live-pid-not-debris",
+      "status": "PASS",
+      "detail": "10031ms Timed out waiting for the evidence lock: C:\\Users\\hymlo\\AppData\\Local\\Temp\\pab-r13c-bom-K0axN9\\.ai-bus\\runtime\\mailbox\\evidence.json.lock"
+    }
+  ]
+}

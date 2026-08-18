@@ -1,0 +1,45 @@
+{
+  "results": [
+    {
+      "item": 15,
+      "name": "original staged-error + clean-worktree",
+      "pass": true,
+      "detail": "exit=1 claim-guard: 1 staged path(s), all covered by grok's claims | claim-guard: REFUSING - this commit does not compile. |  | src/index.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'. |  | A commit that does not build blocks every other seat and hides every other"
+    },
+    {
+      "item": 15,
+      "name": "honest commit prints compile OK (staged index)",
+      "pass": false,
+      "detail": "exit=0 claim-guard: nothing staged"
+    },
+    {
+      "item": 15,
+      "name": "hide-worktree-tsconfig still lets a non-compiling commit land",
+      "pass": false,
+      "detail": "FAIL attack hide-worktree-tsconfig: exit 0, claim-guard: 1 staged path(s), all covered by grok's claims\nclaim-guard: no tsconfig.json; compile check SKIPPED — index still has tsconfig + type error"
+    },
+    {
+      "item": 15,
+      "name": "worktree tsconfig noCheck overwrite",
+      "pass": false,
+      "detail": "FAIL attack worktree-tsconfig-noCheck: printed claim-guard: 1 staged path(s), all covered by grok's claims\nclaim-guard: compile OK (staged index) while git show :src/index.ts still has the type error"
+    },
+    {
+      "item": 15,
+      "name": "staged broken tsconfig overwritten by worktree copy",
+      "pass": false,
+      "detail": "FAIL attack staged-broken-tsconfig: exit 0 claim-guard: 1 staged path(s), all covered by grok's claims\nclaim-guard: compile OK (staged index) while git show :tsconfig.json is \"{ this is not json\""
+    }
+  ],
+  "summary": {
+    "pass": [
+      "[15] original staged-error + clean-worktree"
+    ],
+    "fail": [
+      "[15] honest commit prints compile OK (staged index) :: exit=0 claim-guard: nothing staged",
+      "[15] hide-worktree-tsconfig still lets a non-compiling commit land :: FAIL attack hide-worktree-tsconfig: exit 0, claim-guard: 1 staged path(s), all covered by grok's claims\nclaim-guard: no tsconfig.json; compile check SKIPPED — index still has tsconfig + type error",
+      "[15] worktree tsconfig noCheck overwrite :: FAIL attack worktree-tsconfig-noCheck: printed claim-guard: 1 staged path(s), all covered by grok's claims\nclaim-guard: compile OK (staged index) while git show :src/index.ts still has the type error",
+      "[15] staged broken tsconfig overwritten by worktree copy :: FAIL attack staged-broken-tsconfig: exit 0 claim-guard: 1 staged path(s), all covered by grok's claims\nclaim-guard: compile OK (staged index) while git show :tsconfig.json is \"{ this is not json\""
+    ]
+  }
+}

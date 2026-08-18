@@ -1,0 +1,59 @@
+AUDIT round 4. Brief named 8b5ae78 (item 15) and 8312282 (item 2); item 20 taken because there was room.
+HEAD here is 373e17650558eaef550bc94486b5cfc8d59abd2f.
+I read src/ and attacked dist/ + scripts/claim-guard-cli.js.
+I did not edit src/ or tests/.
+Instrument: tmp-audit-r4-grok.cjs (this session, own, not the author's suite).
+
+Counts: 15 13P/7F/1N; 2 10P/2F/1N; 20 6P/0F/0N.
+
+============================================================
+ITEM 15
+============================================================
+  [PASS] honest-green: code=0 out=claim-guard: 4 staged path(s), all covered by claude's claims
+  [PASS] staged-type-error-red: code=1 out=claim-guard: 4 staged path(s), all covered by claude's claims
+  [PASS] absolute-include-refused: code=1 out=claim-guard: 4 staged path(s), all covered by claude's claims
+  [PASS] untracked-extends-refused: code=1 out=claim-guard: 4 staged path(s), all covered by claude's claims
+  [PASS] hatch-is-loud: code=0 out=claim-guard: 4 staged path(s), all covered by claude's claims
+  [PASS] paths-absolute-worktree-refused: code=1 out=claim-guard: 4 staged path(s), all covered by claude's claims
+  [PASS] references-absolute-worktree-refused: code=1 out=claim-guard: 4 staged path(s), all covered by claude's claims
+  [PASS] rootDirs-absolute-worktree-refused: code=1 out=claim-guard: 4 staged path(s), all covered by claude's claims
+  [FAIL] bare-extends-package-file: code=0 out=claim-guard: 4 staged path(s), all covered by claude's claims
+  [FAIL] bare-extends-array: code=0 out=claim-guard: 4 staged path(s), all covered by claude's claims
+  [FAIL] bare-extends-package-name: code=0 out=claim-guard: 4 staged path(s), all covered by claude's claims
+  [PASS] bare-extends-control-worktree-also-broken: code=1 out=claim-guard: 4 staged path(s), all covered by claude's claims
+  [PASS] relative-extends-same-package: code=1 out=claim-guard: 4 staged path(s), all covered by claude's claims
+  [FAIL] node-modules-junction-include: code=0 out=claim-guard: 4 staged path(s), all covered by claude's claims
+  [PASS] source-import-absolute-worktree: code=1 out=claim-guard: 4 staged path(s), all covered by claude's claims
+  [FAIL] triple-slash-absolute-worktree: code=0 out=claim-guard: 4 staged path(s), all covered by claude's claims
+  [FAIL] staged-symlink-file-pointing-out: code=0 out=claim-guard: 4 staged path(s), all covered by claude's claims
+  [PASS] subdir-tsconfig-not-auto-picked: code=1 out=claim-guard: 5 staged path(s), all covered by claude's claims
+  [PASS] staged-node-modules-fail-closed: code=1 out=claim-guard: REFUSING - 3 of 7 staged path(s) are not yours
+  [NOTE] nocheck-lands-type-error: code=0 out=claim-guard: 4 staged path(s), all covered by claude's claims
+  [FAIL] tsBuildInfoFile-outside: code=0 leakedTsbuildinfo=true out=claim-guard: 4 staged path(s), all covered by claude's claims
+
+============================================================
+ITEM 2
+============================================================
+  [PASS] invalidate-restores-episodes: absorbed=3 live=step-0,step-1,step-2
+  [PASS] two-summaries-over-time: afterS2=b-0,b-1,b-2,consolidated: work #42 afterS1=a-0,a-1,a-2,b-0,b-1,b-2
+  [PASS] already-superseded-before-absorption: absorbedA1=false a1.supersededBy=8bdfbb95-adfc-413e-84c6-6a154eff067c live=fact,other,third
+  [PASS] restore-keeps-own-trust-and-does-not-launder: summary.trust=untrusted v.trust=verified u.trust=untrusted
+  [PASS] reinvalidate-old-summary-does-not-steal: live=consolidated: work #1:e0f124ab stolen=false
+  [PASS] dead-owner-lock-recovers: elapsedMs=4 pidWas=28644 id=e596f906-1b53-47fa-8143-5997f169971c
+  [FAIL] empty-lock-file-recovery: elapsedMs=10012 error=Timed out waiting for the evidence lock: C:\Users\hymlo\AppData\Local\Temp\pab-r4-i2empty-hOAJBb\.ai-bus\runtime\mailbox\evidence.json.lock (empty lock has no owner; treating it as live waits the full timeout)
+  [PASS] closeRecovery-compacts: summary=7700fa68-c2b2-465d-8527-f862784feeac stillOpen=false
+  [PASS] closeRecovery-survives-consolidate-throw: closed=closed stillOpen=false
+  [FAIL] operatorClose-does-not-consolidate: summaries=0 live=3 (assignment ended via operator close; item 2 said compact on CLOSE)
+  [PASS] four-process-concurrent-record: childOk=true,true,true,true n=4 eventIds=1,2,3,4 subjects=p-claude,p-codex,p-grok,p-worker
+  [PASS] four-process-concurrent-consolidate: crashed=false absorbed=0,0,0,300 summaries=1 live=1 NOTE: last-write-wins without a lock also yields 1 summary of 300; this gate cannot go red on a silent lost update.
+  [NOTE] author-consolidate-gate-cannot-see-lost-update: tests/audit-round2.test.js four-process consolidate asserts: no crash, exactly 1 summary, 300 absorbed, 1 live. Last writer winning on unlocked code produces the same shape. The EPERM crash is the only red it can show. Concurrent RECORD (above) is the lost-update instrument.
+
+============================================================
+ITEM 20
+============================================================
+  [PASS] seat-cannot-close-anothers: stolen=undefined still=open
+  [PASS] operator-closes-stranded: status=closed reason=operator-closed: item 9 certified hours ago still=false recall=no
+  [PASS] operator-empty-reason-refused: refused=true still=open
+  [PASS] operator-close-already-closed-is-noop: again=undefined
+  [PASS] ordinary-runner-close-unchanged: stillOpen=false
+  [PASS] cli-close-recovery-reaches-operator-path: code=0 still=false out=closed 1: operator-closed: operator from CLI

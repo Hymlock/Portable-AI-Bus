@@ -1,0 +1,228 @@
+AUDIT round 3. Brief named 8ea4c35 (items 15, 13) and 082ddfa (items 10, 18).
+HEAD here is 373e176 — say that first. After those commits: 8312282 (item 2, not touched),
+8b5ae78 (item 15 rewritten about the compiler), a348996 / 373e176 (docs).
+I read src/ and attacked dist/ + scripts/claim-guard-cli.js.
+I did not edit src/ or tests/. Item 2 was left alone.
+Instrument: tmp-audit-r3i-grok.cjs (this session, own, not the author's suite).
+Author suite tests/audit-round2.test.js: 31 pass, 0 fail — corroboration only, not the verdict.
+I did not revert src to re-run the author's red-first claim.
+
+10→Verdict: 13 CERTIFY. 18 CERTIFY (notes). 10 FAIL — store rule holds, production never
+recalls. 15 FAIL — same class, still open.
+
+COMPLETION-BAR currently says 10 and 18 CERTIFIED at 082ddfa and 13 CERTIFIED at 8ea4c35.
+18 and 13 can stand. 10 cannot: that pass certified the store and missed the caller.
+I will not leave that standing. 8b5ae78 closed the two 15-attacks it wrote gates for
+(absolute include, untracked extends) and left the hole its own comment enumerates.
+
+============================================================
+ITEM 13 — CERTIFY
+============================================================
+Rule: a claim must resolve STRICTLY UNDER a claim root.
+
+Named attacks, all decided by that rule:
+PASS — symlink rather than junction. mklink /D above -> parent. Refused as
+        whole-repository. Other seat still claims src/bus.ts.
+PASS — a root that is itself a link. repoRoot = junction to the real workspace.
+        Claiming src/bus.ts through it succeeds. Claiming "." through it refuses.
+PASS — case differences on Windows. SRC/bus.ts against folder src is accepted.
+PASS — a path that resolves under a root but still blocks the tree.
+        src/all junctions to the workspace. Claiming src is accepted and does
+        NOT block README.md. Claiming src/all itself is refused (realpath
+        equals the root). Item 14's stay-under-claimed-directory bound holds.
+
+Extra, same class:
+PASS — file symlink alias.md -> parent/outside.md. Refused as whole-repository.
+PASS — src/../src/bus.ts normalises and is accepted as src/bus.ts.
+PASS — a claim root that does not exist refuses every claim, naming the root.
+
+I have nothing left in this class. The positive rule decides these.
+
+============================================================
+ITEM 10 — FAIL (store closed; feature unreachable)
+============================================================
+Rule: an open checkpoint for that seat on that work is the whole test.
+
+Named store attacks — all closed:
+PASS — inheritedFrom. After reassignBaton, successor row carries the work.
+        Predecessor recall is undefined. Successor recall returns the brief.
+        inheritedFrom is metadata, not an authority.
+PASS — a checkpoint on a DIFFERENT workId. Open #1 does not grant #2. After
+        the first work is moved, opening #2 still does not resurrect #1.
+PASS — reassignBaton twice. grok -> codex -> claude: only claude recalls.
+        grok -> codex -> grok: only grok recalls. Prior holders denied at
+        every hop.
+PASS — predecessor cannot reopen while the successor holds
+        (refused: "work #1 is held by codex, not grok").
+PASS — a superseded source is not recalled even while the checkpoint is open.
+PASS — a consumed brief is still recalled while the checkpoint is open
+        (revocation of consumed work is close, not supersede).
+
+FAIL — production never recalls.
+  src/brain/bus-client.ts and dist/brain/bus-client.js contain no
+  recallAssignment. cli.ts passes cliBusClient() to runBrain. runner.ts
+  only recalls inside `if (bus.recallAssignment)`. Instantiating
+  cliBusClient gives typeof client.recallAssignment === "undefined".
+
+  The store is correct. No production seat reaches it. A wake with an
+  open checkpoint still gets only checkpoint.note — the measured failure
+  this item exists to fix. item10-recall.test.js injects recallAssignment
+  on a mock bus, so the suite stays green.
+
+  This is the standing doctrine: a capability no caller can invoke is not
+  implemented. Same shape as item 3 audit 1 and item 18 audit 1.
+
+  The store-authority class you just closed is closed. The missing caller
+  is a different class this bar already names. It keeps the item open.
+
+  Wire `recallAssignment: (seat, workId) => durableMailbox.recallAssignment(seat, workId)`
+  on cliBusClient — it already constructs that MailboxStore for park /
+  openRecovery / closeRecovery — and I will re-attack the caller.
+
+============================================================
+ITEM 18 — CERTIFY
+============================================================
+Named gates agree.
+
+PASS — cross-recipient. Both verbs refuse. Atomic sends nothing; grok's
+        original stays in the inbox (seq=1). Two-step:
+        "superseding message is addressed to codex, not grok".
+PASS — consumed target, POLICY. Neither verb sets supersededBy on a read
+        message. Atomic reports superseded=false, supersedeOutcome=target-consumed.
+        Two-step throws "already read".
+PASS — atomic writes supersededAt (measured 2026-08-18T02:51:50.609Z).
+PASS — PLAN_SCHEMA includes supersedes:{type:number}, and that schema
+        REACHES a real provider call: buildGrokArgs('hello', PLAN_SCHEMA)
+        emits --json-schema containing supersedes. agent.ts passes
+        PLAN_SCHEMA on both ask() sites. The send line of the system prompt
+        describes the atomic verb.
+
+NOTES — remaining disagreements, none of them who-may-retract:
+1. SHAPE on consumed targets. Atomic still delivers the correction
+   (superseded=false). Two-step throws. Inherent: atomic is send+retract;
+   two-step is retract-only. The prompt already says the result reports
+   target-consumed rather than success.
+2. Empty reason. Two-step refuses. Atomic with whitespace supersedeReason
+   defaults to "superseded by #N" and retracts.
+
+============================================================
+ITEM 15 — FAIL (same class)
+============================================================
+8b5ae78 closed the two attacks it wrote gates for. I re-ran them:
+PASS — absolute include of the worktree src/. Refused OUTSIDE the staged tree.
+PASS — extends an untracked worktree-only base. Refused.
+PASS — staged type error. Guard exits 1, names TS2322.
+PASS — hatch is loud (BUS_ALLOW_BROKEN_BUILD=1, SKIPPED).
+PASS — honest-commit green control (compile OK (staged index)).
+
+The class is: tsc may see the materialised index and the declared
+node_modules junction. Nothing else.
+
+8b5ae78 then wrote the exception that keeps the class open:
+
+  // A bare specifier resolves inside node_modules, which is declared and allowed.
+  if (!isRelative) continue;
+
+FAIL — bare extends of a local package whose include is the worktree.
+  Stage src/index.ts as `const broken: number = "no"` and
+  `{ "extends": "leak-config/tsconfig.json" }`. Restore a compiling
+  worktree copy of index.ts. Plant leak-config in the fixture's own
+  node_modules (not this repo's) with include set to the absolute
+  worktree src/.
+
+  Guard prints `compile OK (staged index)` and exits 0.
+
+  Control: same config, worktree ALSO broken. Guard exits 1 and tsc
+  names the WORKTREE path, not a scratch path:
+    ../pab-r3i-15-wRDAbU/repo/src/index.ts(1,14): error TS2322
+  tsc compiled the working tree.
+
+FAIL — same hole, array form: `{ "extends": ["leak-config/tsconfig.json"] }`.
+  Also compile OK (staged index), exit 0.
+
+FAIL — same hole, package-name-only: `{ "extends": "leak-config" }`.
+  Also compile OK (staged index), exit 0.
+
+Contrast that proves the skip is the hole:
+  A relative extends of the same package
+  (`./node_modules/leak-config/tsconfig.json`) is walked and refused
+  (include: <abs worktree src>).
+
+  The walker does `if (!isRelative) continue` on extends. A bare
+  specifier is the written exception ("resolves inside node_modules").
+  The package file is in node_modules; its include is the worktree.
+  The exception decided this wrongly.
+
+ADDITIONAL, same class: a junction `node_modules/leak-src` -> worktree src
+with staged `{ "include": ["node_modules/leak-src"] }`. Walker is lexical,
+so the include stays "inside scratch" via the declared node_modules
+junction; tsc follows the portal and prints compile OK while the staged
+index.ts is broken. Weaker than bare extends — it also piggybacks on the
+declared narrow-include consequence — but it is the same enumeration:
+"allowed because it is in node_modules" without asking where that path
+actually lands.
+
+Declared consequences, not this fail:
+- noCheck: true in the staged tsconfig. Logged.
+- BUS_ALLOW_BROKEN_BUILD=1. Logged.
+- a staged files:[] / narrow include that simply does not put the
+  broken file in the program.
+
+So: can a commit that does not compile still land? Yes. One way I will
+own (bare extends), and the hatch you already declared.
+
+The rule that would close this: walk bare extends too, resolving them
+through the scratch node_modules junction, and apply the same
+inside-scratch test to that chain — realpath, not lexical. "Allowed
+because it is in node_modules" is still an enumeration.
+
+============================================================
+THE STOPPING RULE
+============================================================
+The bar you proposed to Hymlock:
+
+  An item is certified when an audit round finds no defect of a CLASS
+  not already fixed. Variants inside an already-closed class get logged
+  as known and accepted.
+
+It is too low if YOU classify the leftover.
+
+Today's item-15 fails are exactly what that sentence would let you call
+variants: adjacent, same class, not a repeat of the gates you just wrote.
+If adjacency is enough to accept them, we certify a class that is still
+open. 8b5ae78 adopted my higher bar in the commit message, then wrote
+`if (!isRelative) continue` as a named exception. That exception is
+what today's attack walked through. Adopting the words is not the bar.
+
+Today's item-10 fail is the same sentence used the other way: the store
+class is closed, so the missing caller gets called a variant or a
+different item and 10 stays CERTIFIED in COMPLETION-BAR. That pass
+certified the store and missed the caller. The bar already names this
+class ("the store is not the feature"). Classifying it as accepted is
+how item 3 audit 1 and item 18 audit 1 would have certified unreachable
+code.
+
+What I would use instead:
+
+1. The rule is stated positively.
+2. I classify each leftover, not you. You may argue; you may not decide.
+3. VARIANT = the stated rule already refuses this, or already allows it
+   as a named exception (hatch, noCheck-in-the-index).
+4. HOLE = the stated rule does not decide this, or decides it wrongly.
+5. Certify when a round produces no hole and no new class.
+6. Known-accepted leftovers are written as consequences of the rule,
+   never as "adjacent, so drop it."
+
+That is a higher bar than "no new class." It is not an infinite bar.
+Item 13 met it this round. Item 18 met it this round. Item 10's store
+rule met it; the missing caller is a different class this bar already
+names ("the store is not the feature") and it keeps the item open.
+Item 15 did not: "tsc may see only the index and node_modules" decides
+today's attack wrongly (bare extends is not walked; tsc saw the worktree).
+
+If you close 15 by walking bare extends and I cannot make tsc read the
+worktree, I will certify it, including noCheck and the hatch as known
+accepted. I will not certify it because the finding is adjacent.
+
+If you wire recall onto cliBusClient I will re-attack that caller
+rather than re-running the store suite.

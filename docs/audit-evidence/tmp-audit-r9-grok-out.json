@@ -1,0 +1,90 @@
+{
+  "against": "tmp-audit-r6-patches/claim-guard-cli.js (r8b-updated)",
+  "head": "373e176",
+  "notHead": true,
+  "pass": 4,
+  "fail": 4,
+  "noteOrSkip": 8,
+  "results": [
+    {
+      "name": "implicit-atypes-junction/control",
+      "status": "PASS",
+      "detail": "worktree tsc compiles via the leak"
+    },
+    {
+      "name": "implicit-atypes-junction",
+      "status": "FAIL",
+      "detail": "code=0\nclaim-guard: 3 staged path(s), all covered by claude's claims\nclaim-guard: compile OK (staged index)\n"
+    },
+    {
+      "name": "compilerOptions-types-junction/control",
+      "status": "PASS",
+      "detail": "worktree tsc compiles via the leak"
+    },
+    {
+      "name": "compilerOptions-types-junction",
+      "status": "FAIL",
+      "detail": "code=0\nclaim-guard: 3 staged path(s), all covered by claude's claims\nclaim-guard: compile OK (staged index)\n"
+    },
+    {
+      "name": "triple-slash-types/control",
+      "status": "PASS",
+      "detail": "worktree tsc compiles via the leak"
+    },
+    {
+      "name": "triple-slash-types",
+      "status": "FAIL",
+      "detail": "code=0\nclaim-guard: 3 staged path(s), all covered by claude's claims\nclaim-guard: compile OK (staged index)\n"
+    },
+    {
+      "name": "triple-slash-types-then-path/control",
+      "status": "NOTE",
+      "detail": "worktree tsc does not compile this spelling: src/index.ts(1,23): error TS2688: Cannot find type definition file for 'es2020'.\r\nsrc/index.ts(2,22): error TS2304: Cannot find name 'HiddenFix'.\r\nCommand failed: C:\\WINDOWS\\system32\\cmd.exe /c C:\\Users\\hymlo\\AppData\\Local\\Temp\\pab-r9-KO9JUA\\repo\\node_modules\\.bin\\tsc.cmd -p C:\\Users\\hymlo\\AppData\\Local\\Temp\\pab-r9-KO9JUA\\repo --noEmit"
+    },
+    {
+      "name": "triple-slash-types-then-path",
+      "status": "NOTE",
+      "detail": "no red-capable control; guard code=1 claim-guard: 3 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - this commit does not compile.\n\nsrc/index.ts(1,23): error TS2688: Cannot find type definition file for 'es2020'.\r\nsrc/index.ts(2,22): error TS2304: Cannot find name 'HiddenFix'.\n\nA commit that does not build blocks every other seat and hides every other\nfailure behind it. Fix it, or commit deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "name": "dynamic-import-absolute/control",
+      "status": "NOTE",
+      "detail": "worktree tsc does not compile this spelling: error TS2468: Cannot find global value 'Promise'.\r\nsrc/index.ts(1,40): error TS2712: A dynamic import call in ES5 requires the 'Promise' constructor.  Make sure you have a declaration for the 'Promise' constructor or include 'ES2015' in your '--lib' option.\r\nCommand failed: C:\\WINDOWS\\system32\\cmd.exe /c C:\\Users\\hymlo\\AppData\\Local\\Temp\\pab-r9-p9BFI5\\repo\\node_modules\\.bin\\tsc.cmd -p C:\\Users\\hymlo\\AppData\\Local\\Temp\\pab-r9-p9BFI5\\repo --noEmit"
+    },
+    {
+      "name": "dynamic-import-absolute",
+      "status": "NOTE",
+      "detail": "no red-capable control; guard code=1 claim-guard: 3 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - this commit does not compile.\n\nerror TS2468: Cannot find global value 'Promise'.\r\nsrc/index.ts(1,40): error TS2712: A dynamic import call in ES5 requires the 'Promise' constructor.  Make sure you have a declaration for the 'Promise' constructor or include 'ES2015' in your '--lib' option.\n\nA commit that does not build blocks every other seat and hides every other\nfailure behind it. Fix it, or commit deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "name": "require-absolute/control",
+      "status": "NOTE",
+      "detail": "worktree tsc does not compile this spelling: src/index.ts(1,31): error TS2591: Cannot find name 'require'. Do you need to install type definitions for node? Try `npm i --save-dev @types/node` and then add 'node' to the types field in your tsconfig.\r\nCommand failed: C:\\WINDOWS\\system32\\cmd.exe /c C:\\Users\\hymlo\\AppData\\Local\\Temp\\pab-r9-5Vtt7E\\repo\\node_modules\\.bin\\tsc.cmd -p C:\\Users\\hymlo\\AppData\\Local\\Temp\\pab-r9-5Vtt7E\\repo --noEmit"
+    },
+    {
+      "name": "require-absolute",
+      "status": "NOTE",
+      "detail": "no red-capable control; guard code=1 claim-guard: 3 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - this commit does not compile.\n\nsrc/index.ts(1,31): error TS2591: Cannot find name 'require'. Do you need to install type definitions for node? Try `npm i --save-dev @types/node` and then add 'node' to the types field in your tsconfig.\n\nA commit that does not build blocks every other seat and hides every other\nfailure behind it. Fix it, or commit deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "name": "tsconfig-file-symlink/control",
+      "status": "NOTE",
+      "detail": "worktree tsc did not compile: src/index.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'.\r\nCommand failed: C:\\WINDOWS\\system32\\cmd.exe /c C:\\Users\\hymlo\\AppData\\Local\\Temp\\pab-r9-PLRCRS\\repo\\node_modules\\.bin\\tsc.cmd -p C:\\Users\\hymlo\\AppData\\Local\\Temp\\pab-r9-PLRCRS\\repo --noEmit"
+    },
+    {
+      "name": "tsconfig-file-symlink",
+      "status": "NOTE",
+      "detail": "no red-capable control; guard 1 claim-guard: 3 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - include: C:/Users/hymlo/AppData/Local/Temp/pab-r9-PLRCRS/repo/src\n  - staged symlink: tsconfig.json\n\ntsc may see the materialised index and node_modules, and nothing else. A config that\nnames the working tree means the guard would be checking files this commit does not\ncontain - and an `extends` that is not itself staged would keep resolving locally\nafter the commit lands, staying green here and failing in CI.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "name": "bare-package-junction-to-worktree/control",
+      "status": "PASS",
+      "detail": "worktree tsc compiles via the leak"
+    },
+    {
+      "name": "bare-package-junction-to-worktree",
+      "status": "FAIL",
+      "detail": "code=0\nclaim-guard: 5 staged path(s), all covered by claude's claims\nclaim-guard: compile OK (staged index)\n"
+    }
+  ]
+}

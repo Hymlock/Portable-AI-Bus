@@ -1,0 +1,245 @@
+{
+  "head": "373e17650558eaef550bc94486b5cfc8d59abd2f",
+  "results": [
+    {
+      "item": 15,
+      "name": "honest-green",
+      "status": "PASS",
+      "detail": "code=0 out=claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: compile OK (staged index)"
+    },
+    {
+      "item": 15,
+      "name": "staged-type-error-red",
+      "status": "PASS",
+      "detail": "code=1 out=claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - this commit does not compile.\n\nsrc/index.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'.\n\nA commit that does not build blocks every other seat and hides every other\nfailure behind it. Fix it, or commit deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message."
+    },
+    {
+      "item": 15,
+      "name": "absolute-include-refused",
+      "status": "PASS",
+      "detail": "code=1 out=claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - include: C:/Users/hymlo/AppData/Local/Temp/pab-r4-iA3iSM/repo/src\n\ntsc may see the materialised index and node_modules, and nothing else. A config that\nnames the working tree means the guard would be checking files this commit does not\ncontain - and an `extends` that is not itself staged would keep resolvi"
+    },
+    {
+      "item": 15,
+      "name": "untracked-extends-refused",
+      "status": "PASS",
+      "detail": "code=1 out=claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - extends: C:/Users/hymlo/AppData/Local/Temp/pab-r4-ZpCIvN/repo/tsconfig.worktree-only.json\n\ntsc may see the materialised index and node_modules, and nothing else. A config that\nnames the working tree means the guard would be checking files this commit does not\ncontain - and an `extends` that is not itself s"
+    },
+    {
+      "item": 15,
+      "name": "hatch-is-loud",
+      "status": "PASS",
+      "detail": "code=0 out=claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: BUS_ALLOW_BROKEN_BUILD=1 - compile check SKIPPED for this commit\n             deliberate WIP. Say so in the commit message."
+    },
+    {
+      "item": 15,
+      "name": "paths-absolute-worktree-refused",
+      "status": "PASS",
+      "detail": "code=1 out=claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - compilerOptions.paths[\"@src/*\"]: C:/Users/hymlo/AppData/Local/Temp/pab-r4-eveSld/repo/src/*\n\ntsc may see the materialised index and node_modules, and nothing else. A config that\nnames the working tree means the guard would be checking files this commit does not\ncontain - and an `extends` that is not itself"
+    },
+    {
+      "item": 15,
+      "name": "references-absolute-worktree-refused",
+      "status": "PASS",
+      "detail": "code=1 out=claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - references: C:/Users/hymlo/AppData/Local/Temp/pab-r4-ylG7xE/repo/src\n\ntsc may see the materialised index and node_modules, and nothing else. A config that\nnames the working tree means the guard would be checking files this commit does not\ncontain - and an `extends` that is not itself staged would keep reso"
+    },
+    {
+      "item": 15,
+      "name": "rootDirs-absolute-worktree-refused",
+      "status": "PASS",
+      "detail": "code=1 out=claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - compilerOptions.rootDirs: C:/Users/hymlo/AppData/Local/Temp/pab-r4-8bVDh4/repo/src\n\ntsc may see the materialised index and node_modules, and nothing else. A config that\nnames the working tree means the guard would be checking files this commit does not\ncontain - and an `extends` that is not itself staged w"
+    },
+    {
+      "item": 15,
+      "name": "bare-extends-package-file",
+      "status": "FAIL",
+      "detail": "code=0 out=claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: compile OK (staged index)"
+    },
+    {
+      "item": 15,
+      "name": "bare-extends-array",
+      "status": "FAIL",
+      "detail": "code=0 out=claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: compile OK (staged index)"
+    },
+    {
+      "item": 15,
+      "name": "bare-extends-package-name",
+      "status": "FAIL",
+      "detail": "code=0 out=claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: compile OK (staged index)"
+    },
+    {
+      "item": 15,
+      "name": "bare-extends-control-worktree-also-broken",
+      "status": "PASS",
+      "detail": "code=1 out=claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - this commit does not compile.\n\n../pab-r4-G8fC3x/repo/src/index.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'.\n\nA commit that does not build blocks every other seat and hides every other\nfailure behind it. Fix it, or commit deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message."
+    },
+    {
+      "item": 15,
+      "name": "relative-extends-same-package",
+      "status": "PASS",
+      "detail": "code=1 out=claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - include: C:/Users/hymlo/AppData/Local/Temp/pab-r4-JCXLat/repo/src\n\ntsc may see the materialised index and node_modules, and nothing else. A config that\nnames the working tree means the guard would be checking files this commit does not\ncontain - and an `extends` that is not itself staged would keep resolving locally\nafter the commit lands, staying green here and failing in CI.\n\nThis check verifies the IN"
+    },
+    {
+      "item": 15,
+      "name": "node-modules-junction-include",
+      "status": "FAIL",
+      "detail": "code=0 out=claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: compile OK (staged index)"
+    },
+    {
+      "item": 15,
+      "name": "source-import-absolute-worktree",
+      "status": "PASS",
+      "detail": "code=1 out=claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - this commit does not compile.\n\nsrc/index.ts(1,19): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.\n\nA commit that does not build blocks every other seat and hides every other\nfailure behind it. Fix it, or commit deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message."
+    },
+    {
+      "item": 15,
+      "name": "triple-slash-absolute-worktree",
+      "status": "FAIL",
+      "detail": "code=0 out=claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: compile OK (staged index)"
+    },
+    {
+      "item": 15,
+      "name": "staged-symlink-file-pointing-out",
+      "status": "FAIL",
+      "detail": "code=0 out=claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: compile OK (staged index)"
+    },
+    {
+      "item": 15,
+      "name": "subdir-tsconfig-not-auto-picked",
+      "status": "PASS",
+      "detail": "code=1 out=claim-guard: 5 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - this commit does not compile.\n\nsrc/index.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'.\n\nA commit that does not build blocks every other seat and hides every other\nfailure behind it. Fix it, or commit deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message. (root include still typechecks staged src; subdir config must not hide it)"
+    },
+    {
+      "item": 15,
+      "name": "staged-node-modules-fail-closed",
+      "status": "PASS",
+      "detail": "code=1 out=claim-guard: REFUSING - 3 of 7 staged path(s) are not yours\n\n  dummy-nm/pkg/package.json\n      not covered by any claim of yours - claim it first, or stage explicitly rather than with `git add -A`\n  node_modules/pkg/index.js\n      not covered by any claim of yours - claim it first, or stage explicitly rather than with `git add -A`\n  node_modules_staged/pkg/index.js\n      not covered by any claim of yours - claim it first, or stage explicitly rather than with `git add -A`\n\nThree agents share this worktree. `git add -A` stages their work too, and a\nstaged file looks the same whoever wrote it. Stage your own paths by name."
+    },
+    {
+      "item": 15,
+      "name": "nocheck-lands-type-error",
+      "status": "NOTE",
+      "detail": "code=0 out=claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: NOTE - the staged tsconfig sets noCheck; tsc will not type-check.\n             The compile below proves only that the config loads.\nclaim-guard: compile OK (staged index) (declared consequence if green+logged)"
+    },
+    {
+      "item": 15,
+      "name": "tsBuildInfoFile-outside",
+      "status": "FAIL",
+      "detail": "code=0 leakedTsbuildinfo=true out=claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: compile OK (staged index)"
+    },
+    {
+      "item": 2,
+      "name": "invalidate-restores-episodes",
+      "status": "PASS",
+      "detail": "absorbed=3 live=step-0,step-1,step-2"
+    },
+    {
+      "item": 2,
+      "name": "two-summaries-over-time",
+      "status": "PASS",
+      "detail": "afterS2=b-0,b-1,b-2,consolidated: work #42 afterS1=a-0,a-1,a-2,b-0,b-1,b-2"
+    },
+    {
+      "item": 2,
+      "name": "already-superseded-before-absorption",
+      "status": "PASS",
+      "detail": "absorbedA1=false a1.supersededBy=8bdfbb95-adfc-413e-84c6-6a154eff067c live=fact,other,third"
+    },
+    {
+      "item": 2,
+      "name": "restore-keeps-own-trust-and-does-not-launder",
+      "status": "PASS",
+      "detail": "summary.trust=untrusted v.trust=verified u.trust=untrusted"
+    },
+    {
+      "item": 2,
+      "name": "reinvalidate-old-summary-does-not-steal",
+      "status": "PASS",
+      "detail": "live=consolidated: work #1:e0f124ab stolen=false"
+    },
+    {
+      "item": 2,
+      "name": "dead-owner-lock-recovers",
+      "status": "PASS",
+      "detail": "elapsedMs=4 pidWas=28644 id=e596f906-1b53-47fa-8143-5997f169971c"
+    },
+    {
+      "item": 2,
+      "name": "empty-lock-file-recovery",
+      "status": "FAIL",
+      "detail": "elapsedMs=10012 error=Timed out waiting for the evidence lock: C:\\Users\\hymlo\\AppData\\Local\\Temp\\pab-r4-i2empty-hOAJBb\\.ai-bus\\runtime\\mailbox\\evidence.json.lock (empty lock has no owner; treating it as live waits the full timeout)"
+    },
+    {
+      "item": 2,
+      "name": "closeRecovery-compacts",
+      "status": "PASS",
+      "detail": "summary=7700fa68-c2b2-465d-8527-f862784feeac stillOpen=false"
+    },
+    {
+      "item": 2,
+      "name": "closeRecovery-survives-consolidate-throw",
+      "status": "PASS",
+      "detail": "closed=closed stillOpen=false"
+    },
+    {
+      "item": 2,
+      "name": "operatorClose-does-not-consolidate",
+      "status": "FAIL",
+      "detail": "summaries=0 live=3 (assignment ended via operator close; item 2 said compact on CLOSE)"
+    },
+    {
+      "item": 2,
+      "name": "four-process-concurrent-record",
+      "status": "PASS",
+      "detail": "childOk=true,true,true,true n=4 eventIds=1,2,3,4 subjects=p-claude,p-codex,p-grok,p-worker"
+    },
+    {
+      "item": 2,
+      "name": "four-process-concurrent-consolidate",
+      "status": "PASS",
+      "detail": "crashed=false absorbed=0,0,0,300 summaries=1 live=1 NOTE: last-write-wins without a lock also yields 1 summary of 300; this gate cannot go red on a silent lost update."
+    },
+    {
+      "item": 2,
+      "name": "author-consolidate-gate-cannot-see-lost-update",
+      "status": "NOTE",
+      "detail": "tests/audit-round2.test.js four-process consolidate asserts: no crash, exactly 1 summary, 300 absorbed, 1 live. Last writer winning on unlocked code produces the same shape. The EPERM crash is the only red it can show. Concurrent RECORD (above) is the lost-update instrument."
+    },
+    {
+      "item": 20,
+      "name": "seat-cannot-close-anothers",
+      "status": "PASS",
+      "detail": "stolen=undefined still=open"
+    },
+    {
+      "item": 20,
+      "name": "operator-closes-stranded",
+      "status": "PASS",
+      "detail": "status=closed reason=operator-closed: item 9 certified hours ago still=false recall=no"
+    },
+    {
+      "item": 20,
+      "name": "operator-empty-reason-refused",
+      "status": "PASS",
+      "detail": "refused=true still=open"
+    },
+    {
+      "item": 20,
+      "name": "operator-close-already-closed-is-noop",
+      "status": "PASS",
+      "detail": "again=undefined"
+    },
+    {
+      "item": 20,
+      "name": "ordinary-runner-close-unchanged",
+      "status": "PASS",
+      "detail": "stillOpen=false"
+    },
+    {
+      "item": 20,
+      "name": "cli-close-recovery-reaches-operator-path",
+      "status": "PASS",
+      "detail": "code=0 still=false out=closed 1: operator-closed: operator from CLI"
+    }
+  ]
+}

@@ -1,0 +1,57 @@
+{
+  "pass": 9,
+  "fail": 1,
+  "note": 0,
+  "results": [
+    {
+      "name": "src-vendor-junction-staged",
+      "status": "FAIL",
+      "detail": "compile OK through staged junction\nstaged:\nsrc/index.ts\nsrc/vendor/leak.ts\n\nlisted:\nC:/Users/hymlo/Downloads/Projects/Portable-AI-Bus/node_modules/typescript/lib/lib.d.ts\r\nC:/Users/hymlo/Downloads/Projects/Portable-AI-Bus/node_modules/typescript/lib/lib.es5.d.ts\r\nC:/Users/hymlo/Downloads/Projects/Portable-AI-Bus/node_modules/typescript/lib/lib.dom.d.ts\r\nC:/Users/hymlo/Downloads/Projects/Portable-AI-Bus/node_modules/typescript/lib/lib.webworker.importscripts.d.ts\r\nC:/Users/hymlo/Downloads/Projects/Portable-AI-Bus/node_modules/typescript/lib/lib.scripthost.d.ts\r\nC:/Users/hymlo/Downloads/Projects/Portable-AI-Bus/node_modules/typescript/lib/lib.decorators.d.ts\r\nC:/Users/hymlo/Downloads/Projects/Portable-AI-Bus/node_modules/typescript/lib/lib.decorators.legacy.d.ts\r\nC:/Users/hymlo/AppData/Local/Temp/pab-r16b-W4UMuj/repo/src/vendor/leak.ts\r\nC:/Users/hymlo/AppData/Local/Temp/pab-r16b-W4UMuj/repo/src/index.ts\r\n\nguard:\nclaim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: compile OK (staged index)\n"
+    },
+    {
+      "name": "export-star-abs-nosuffix",
+      "status": "PASS",
+      "detail": "claim-guard: 2 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - import C:/Users/hymlo/AppData/Local/Temp/pab-r16b-TDmsUz/hidden/mod in src/index.ts\n\ntsc may see the materialised index and node_modules, and nothing else. A config that\nnames the working tree means the guard would be checking files this commit does not\ncontain - and an `extends` that is not itself staged would keep resolving locally\nafter the commit lands, staying green here and failing in CI.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "name": "item2-pid-float",
+      "status": "PASS",
+      "detail": "recovered in 5ms"
+    },
+    {
+      "name": "item2-pid-true",
+      "status": "PASS",
+      "detail": "recovered in 3ms"
+    },
+    {
+      "name": "item2-pid-object",
+      "status": "PASS",
+      "detail": "recovered in 3ms"
+    },
+    {
+      "name": "item2-pid-negative",
+      "status": "PASS",
+      "detail": "recovered in 3ms"
+    },
+    {
+      "name": "item2-pid-string",
+      "status": "PASS",
+      "detail": "recovered in 3ms"
+    },
+    {
+      "name": "item2-bom-missing-pid",
+      "status": "PASS",
+      "detail": "recovered in 3ms"
+    },
+    {
+      "name": "item2-json-trailing-junk",
+      "status": "PASS",
+      "detail": "recovered in 3ms"
+    },
+    {
+      "name": "item2-utf16be",
+      "status": "PASS",
+      "detail": "recovered in 3ms"
+    }
+  ]
+}

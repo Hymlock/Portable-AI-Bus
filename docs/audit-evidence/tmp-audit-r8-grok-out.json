@@ -1,0 +1,44 @@
+{
+  "against": "tmp-audit-r6-patches/claim-guard-cli.js",
+  "notHead": true,
+  "pass": 6,
+  "fail": 0,
+  "skipOrNote": 1,
+  "results": [
+    {
+      "name": "dir-symlink-hides-type-error",
+      "status": "PASS",
+      "detail": "code=1 claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - this commit does not compile.\n\nsrc/index.ts(1,22): error TS2304: Cannot find name 'HiddenFix'.\n\nA commit that does not build blocks every other seat and hides every other\nfailure behind it. Fix it, or commit deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "name": "triple-slash-attr-order",
+      "status": "PASS",
+      "detail": "code=1 claim-guard: 3 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - this commit does not compile.\n\nsrc/index.ts(2,22): error TS2304: Cannot find name 'HiddenFix'.\n\nA commit that does not build blocks every other seat and hides every other\nfailure behind it. Fix it, or commit deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "name": "relative-import-escape",
+      "status": "PASS",
+      "detail": "code=1 import=../../hidden-mod.ts claim-guard: 3 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - this commit does not compile.\n\nsrc/index.ts(1,19): error TS2307: Cannot find module '../../hidden-mod.ts' or its corresponding type declarations.\n\nA commit that does not build blocks every other seat and hides every other\nfailure behind it. Fix it, or commit deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "name": "absolute-import-control",
+      "status": "PASS",
+      "detail": "code=1 claim-guard: 3 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - this commit does not compile.\n\nsrc/index.ts(1,19): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.\n\nA commit that does not build blocks every other seat and hides every other\nfailure behind it. Fix it, or commit deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "name": "triple-slash-types-package",
+      "status": "NOTE",
+      "detail": "code=1 claim-guard: 3 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - this commit does not compile.\n\nsrc/index.ts(1,23): error TS2688: Cannot find type definition file for 'node'.\n\nA commit that does not build blocks every other seat and hides every other\nfailure behind it. Fix it, or commit deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "name": "junction-files-worktree",
+      "status": "PASS",
+      "detail": "code=1 claim-guard: 3 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - files: node_modules/leak-src/index.ts\n\ntsc may see the materialised index and node_modules, and nothing else. A config that\nnames the working tree means the guard would be checking files this commit does not\ncontain - and an `extends` that is not itself staged would keep resolving locally\nafter the commit lands, staying green here and failing in CI.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "name": "nocheck-via-bare-extends",
+      "status": "PASS",
+      "detail": "code=1 claim-guard: 3 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig sets compilerOptions.noCheck, so tsc will not type-check this commit\n\nA green plus a NOTE is not a verified index. Remove noCheck, or use BUS_ALLOW_BROKEN_BUILD=1.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    }
+  ]
+}

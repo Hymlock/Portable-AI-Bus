@@ -1,0 +1,181 @@
+{
+  "pass": 18,
+  "fail": 2,
+  "note": 9,
+  "results": [
+    {
+      "item": 15,
+      "name": "configDir-sibling/tsc",
+      "status": "NOTE",
+      "detail": "error TS6053: File 'C:/Users/hymlo/AppData/Local/Temp/pab-r13-e0nYtC/pab-r13-6056-hidden-fix.d.ts' not found.\r\n  The file is in the program because:\r\n    Part of 'files' list in tsconfig.json\r\nCommand failed: C:\\WINDOWS\\system32\\cmd.exe /c C:\\Users\\hymlo\\AppData\\Local\\Temp\\pab-r13-e0nYtC\\repo\\node_modules\\.bin\\tsc.cmd -p C:\\Users\\hymlo\\AppData\\Local\\Temp\\pab-r13-e0nYtC\\repo --noEmit"
+    },
+    {
+      "item": 15,
+      "name": "configDir-sibling/list",
+      "status": "PASS",
+      "detail": "listFilesOnly named error TS6053: File 'C:/Users/hymlo/AppData/Local/Temp/pab-r13-e0nYtC/pab-r13-6056-hidden-fix.d.ts' not found."
+    },
+    {
+      "item": 15,
+      "name": "configDir-sibling/guard",
+      "status": "PASS",
+      "detail": "code=1\nclaim-guard: 3 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - tsc compiled files outside the staged tree, so nothing here verifies this commit:\n  - C:/Users/hymlo/AppData/Local/Temp/pab-r13-6056-hidden-fix.d.ts\n\ntsc may see the materialised index and node_modules, and nothing else. listFilesOnly\nis what the compiler actually loaded. A package.json types/exports field, a\njsxImportSource package, or an allowJs import that resolves outside is the same leak\nas a triple-slash path — the walker is not the authority, tsc is.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "item": 15,
+      "name": "configDir-honest/tsc",
+      "status": "PASS",
+      "detail": "honest ${configDir}/src compiles"
+    },
+    {
+      "item": 15,
+      "name": "configDir-honest/guard",
+      "status": "PASS",
+      "detail": "code=0\nclaim-guard: 3 staged path(s), all covered by claude's claims\nclaim-guard: compile OK (staged index)\n"
+    },
+    {
+      "item": 15,
+      "name": "ts-nocheck-sole/tsc",
+      "status": "PASS",
+      "detail": "tsc succeeds on @ts-nocheck type error"
+    },
+    {
+      "item": 15,
+      "name": "ts-nocheck-sole/guard",
+      "status": "FAIL",
+      "detail": "code=0\nclaim-guard: 3 staged path(s), all covered by claude's claims\nclaim-guard: compile OK (staged index)\n"
+    },
+    {
+      "item": 15,
+      "name": "ts-expect-error/tsc",
+      "status": "PASS",
+      "detail": "tsc succeeds on @ts-expect-error"
+    },
+    {
+      "item": 15,
+      "name": "ts-expect-error/guard",
+      "status": "NOTE",
+      "detail": "code=0\nclaim-guard: 3 staged path(s), all covered by claude's claims\nclaim-guard: compile OK (staged index)\n"
+    },
+    {
+      "item": 15,
+      "name": "pkg-imports-hash/tsc",
+      "status": "NOTE",
+      "detail": "src/index.ts(1,19): error TS2307: Cannot find module '#hidden' or its corresponding type declarations.\r\nCommand failed: C:\\WINDOWS\\system32\\cmd.exe /c C:\\Users\\hymlo\\AppData\\Local\\Temp\\pab-r13-vZVZgo\\repo\\node_modules\\.bin\\tsc.cmd -p C:\\Users\\hymlo\\AppData\\Local\\Temp\\pab-r13-vZVZgo\\repo --noEmit"
+    },
+    {
+      "item": 15,
+      "name": "pkg-imports-hash/list",
+      "status": "NOTE",
+      "detail": "C:/Users/hymlo/Downloads/Projects/Portable-AI-Bus/node_modules/typescript/lib/lib.es5.d.ts\r\nC:/Users/hymlo/Downloads/Projects/Portable-AI-Bus/node_modules/typescript/lib/lib.es2015.d.ts\r\nC:/Users/hymlo/Downloads/Projects/Portable-AI-Bus/node_modules/typescript/lib/lib.es2016.d.ts\r\nC:/Users/hymlo/Downloads/Projects/Portable-AI-Bus/node_modules/typescript/lib/lib.es2017.d.ts\r\nC:/Users/hymlo/Download"
+    },
+    {
+      "item": 15,
+      "name": "pkg-imports-hash/guard",
+      "status": "NOTE",
+      "detail": "code=1\nclaim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - this commit does not compile.\n\nsrc/index.ts(1,19): error TS2307: Cannot find module '#hidden' or its corresponding type declarations.\n\nA commit that does not build blocks every other seat and hides every other\nfailure behind it. Fix it, or commit deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "item": 15,
+      "name": "libReplacement/tsc",
+      "status": "NOTE",
+      "detail": "error TS2318: Cannot find global type 'Array'.\r\nerror TS2552: Cannot find name 'Boolean'. Did you mean 'GLboolean'?\r\nerror TS2318: Cannot find global type 'CallableFunction'.\r\nerror TS2318: Cannot find global type 'Function'.\r\nerror TS2318: Cannot find global type 'IArguments'.\r\nerror TS2318: Cannot find global type 'NewableFunction'.\r\nerror TS2318: Cannot find global type 'Number'.\r\nerror TS2318: Cannot find global type 'Object'.\r\nerror TS2318: Cannot find global type 'RegExp'.\r\nerror TS2318: Cannot find global type 'String'.\r\nCommand failed: C:\\WINDOWS\\system32\\cmd.exe /c C:\\Users\\hymlo\\AppData\\Local\\Temp\\pab-r13-ARRbbI\\repo\\node_modules\\.bin\\tsc.cmd -p C:\\Users\\hymlo\\AppData\\Local\\Temp\\pab-r13-ARRbbI\\repo --noEmit"
+    },
+    {
+      "item": 15,
+      "name": "libReplacement/list",
+      "status": "PASS",
+      "detail": "listed C:/Users/hymlo/AppData/Local/Temp/pab-r13-hidden-1Vyx83/lib-es5/index.d.ts"
+    },
+    {
+      "item": 15,
+      "name": "libReplacement/guard",
+      "status": "NOTE",
+      "detail": "code=1\nclaim-guard: 3 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - this commit does not compile.\n\nerror TS2318: Cannot find global type 'Array'.\r\nerror TS2552: Cannot find name 'Boolean'. Did you mean 'GLboolean'?\r\nerror TS2318: Cannot find global type 'CallableFunction'.\r\nerror TS2318: Cannot find global type 'Function'.\r\nerror TS2318: Cannot find global type 'IArguments'.\r\nerror TS2318: Cannot find global type 'NewableFunction'.\r\n\nA commit that does not build blocks every other seat and hides every other\nfailure behind it. Fix it, or commit deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "item": 15,
+      "name": "jsdoc-import/tsc",
+      "status": "PASS",
+      "detail": "JSDoc import compiled"
+    },
+    {
+      "item": 15,
+      "name": "jsdoc-import/list",
+      "status": "NOTE",
+      "detail": "C:/Users/hymlo/Downloads/Projects/Portable-AI-Bus/node_modules/typescript/lib/lib.d.ts\r\nC:/Users/hymlo/Downloads/Projects/Portable-AI-Bus/node_modules/typescript/lib/lib.es5.d.ts\r\nC:/Users/hymlo/Downloads/Projects/Portable-AI-Bus/node_modules/typescript/lib/lib.dom.d.ts\r\nC:/Users/hymlo/Downloads/Projects/Portable-AI-Bus/node_modules/typescript/lib/lib.webworker.importscripts.d.ts\r\nC:/Users/hymlo/D"
+    },
+    {
+      "item": 15,
+      "name": "jsdoc-import/guard",
+      "status": "NOTE",
+      "detail": "code=1\nclaim-guard: 3 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - import C:/Users/hymlo/AppData/Local/Temp/pab-r13-hidden-1Vyx83/hidden-fix.d.ts in src/index.ts\n\ntsc may see the materialised index and node_modules, and nothing else. A config that\nnames the working tree means the guard would be checking files this commit does not\ncontain - and an `extends` that is not itself staged would keep resolving locally\nafter the commit lands, staying green here and failing in CI.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "item": 15,
+      "name": "moduleSuffixes/tsc",
+      "status": "PASS",
+      "detail": "moduleSuffixes compiled via outside pkg"
+    },
+    {
+      "item": 15,
+      "name": "moduleSuffixes/list",
+      "status": "PASS",
+      "detail": "listed C:/Users/hymlo/AppData/Local/Temp/pab-r13-hidden-1Vyx83/ios-pkg/index.d.ts"
+    },
+    {
+      "item": 15,
+      "name": "moduleSuffixes/guard",
+      "status": "PASS",
+      "detail": "code=1\nclaim-guard: 3 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - import leak-ios in src/index.ts\n\ntsc may see the materialised index and node_modules, and nothing else. A config that\nnames the working tree means the guard would be checking files this commit does not\ncontain - and an `extends` that is not itself staged would keep resolving locally\nafter the commit lands, staying green here and failing in CI.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "item": 15,
+      "name": "allowArbitraryExtensions/tsc",
+      "status": "PASS",
+      "detail": "allowArbitraryExtensions compiled outside css.d.ts"
+    },
+    {
+      "item": 15,
+      "name": "allowArbitraryExtensions/list",
+      "status": "PASS",
+      "detail": "listed C:/Users/hymlo/AppData/Local/Temp/pab-r13-hidden-1Vyx83/theme.css.d.ts"
+    },
+    {
+      "item": 15,
+      "name": "allowArbitraryExtensions/guard",
+      "status": "PASS",
+      "detail": "code=1\nclaim-guard: 3 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - import C:/Users/hymlo/AppData/Local/Temp/pab-r13-hidden-1Vyx83/theme.css in src/index.ts\n\ntsc may see the materialised index and node_modules, and nothing else. A config that\nnames the working tree means the guard would be checking files this commit does not\ncontain - and an `extends` that is not itself staged would keep resolving locally\nafter the commit lands, staying green here and failing in CI.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "item": 15,
+      "name": "honest-green/guard",
+      "status": "PASS",
+      "detail": "code=0\nclaim-guard: 3 staged path(s), all covered by claude's claims\nclaim-guard: compile OK (staged index)\n"
+    },
+    {
+      "item": 2,
+      "name": "lock-path-is-directory",
+      "status": "PASS",
+      "detail": "recovered in 5ms"
+    },
+    {
+      "item": 2,
+      "name": "bom-live-pid-not-debris",
+      "status": "FAIL",
+      "detail": "stole a live-pid lock in 3ms (BOM made it debris)"
+    },
+    {
+      "item": 2,
+      "name": "string-pid-is-debris",
+      "status": "PASS",
+      "detail": "recovered in 3ms"
+    },
+    {
+      "item": 2,
+      "name": "operatorClose-survives-consolidate-throw",
+      "status": "PASS",
+      "detail": "closed=true status=closed leftover=1"
+    }
+  ]
+}

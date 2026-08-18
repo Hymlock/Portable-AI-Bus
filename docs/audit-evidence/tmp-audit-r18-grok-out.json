@@ -1,0 +1,77 @@
+{
+  "pass": 8,
+  "fail": 0,
+  "note": 6,
+  "results": [
+    {
+      "name": "type-position-import",
+      "status": "PASS",
+      "detail": "claim-guard: 2 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - import C:/Users/hymlo/AppData/Local/Temp/pab-r18-WveMrp/hidden/mod.ts in src/index.ts\n\ntsc may see the materialised index and node_modules, and nothing else. A config that\nnames the working tree means the guard would be checking files this commit does not\ncontain - and an `extends` that is not itself staged would keep resolving locally\nafter the commit lands, staying green here and failing in CI.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "name": "jsdoc-import-type",
+      "status": "PASS",
+      "detail": "claim-guard: 2 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - import C:/Users/hymlo/AppData/Local/Temp/pab-r18-UO2l8X/hidden/mod.ts in src/index.js\n\ntsc may see the materialised index and node_modules, and nothing else. A config that\nnames the working tree means the guard would be checking files this commit does not\ncontain - and an `extends` that is not itself staged would keep resolving locally\nafter the commit lands, staying green here and failing in CI.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "name": "file-url-import",
+      "status": "NOTE",
+      "detail": "worktree tsc failed; not red-capable\nsrc/index.ts(1,32): error TS2307: Cannot find module 'file:///C:/Users/hymlo/AppData/Local/Temp/pab-r18-yY7Vjt/hidden/mod.ts' or its corresponding type declarations.\r\nCommand failed: C:\\WINDOWS\\system32\\cmd.exe /c C:\\Users\\hymlo\\AppData\\Local\\Temp\\pab-r18-yY7Vjt\\repo\\node_modules\\.bin\\tsc.cmd -p . --noEmit"
+    },
+    {
+      "name": "unc-import",
+      "status": "PASS",
+      "detail": "claim-guard: 2 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - import //localhost/C$/Users/hymlo/AppData/Local/Temp/pab-r18-sM8q64/hidden/mod.ts in src/index.ts\n\ntsc may see the materialised index and node_modules, and nothing else. A config that\nnames the working tree means the guard would be checking files this commit does not\ncontain - and an `extends` that is not itself staged would keep resolving locally\nafter the commit lands, staying green here and failing in CI.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "name": "amd-dependency-path",
+      "status": "NOTE",
+      "detail": "tsc compiled but did not list the outside path\nC:/Users/hymlo/Downloads/Projects/Portable-AI-Bus/node_modules/typescript/lib/lib.d.ts\r\nC:/Users/hymlo/Downloads/Projects/Portable-AI-Bus/node_modules/typescript/lib/lib.es5.d.ts\r\nC:/Users/hymlo/Downloads/Projects/Portable-AI-Bus/node_modules/typescript/lib/lib.dom.d.ts\r\nC:/Users/hymlo/Downloads/Projects/Portable-AI-Bus/node_modules/typescript/lib/lib.webworker.importscripts.d.ts\r\nC:/Users/hymlo/Downloads/Projects/Portable-AI-Bus/node_modules/typescript/lib/lib.scripthost.d.ts\r\nC:/Users/hymlo/Downloads/Projects/Portable-AI-Bus/node_modules/typescript/lib/lib.decorators.d.ts\r\nC:/Users/hymlo/Downloads/Projects/Portable-AI-Bus/node_modules/typescript/lib/lib.decorators.legacy.d.ts\r\nC:/Users/hymlo/AppData/Local/Temp/pab-r18-2Sd5nH/repo/src/index.ts\r\n"
+    },
+    {
+      "name": "file-url-triple-slash",
+      "status": "NOTE",
+      "detail": "worktree tsc failed; not red-capable\nsrc/index.ts(1,22): error TS6053: File 'file:///C:/Users/hymlo/AppData/Local/Temp/pab-r18-GwZ28N/hidden/fix.d.ts' not found.\r\nsrc/index.ts(2,17): error TS2304: Cannot find name 'HiddenFix'.\r\nCommand failed: C:\\WINDOWS\\system32\\cmd.exe /c C:\\Users\\hymlo\\AppData\\Local\\Temp\\pab-r18-GwZ28N\\repo\\node_modules\\.bin\\tsc.cmd -p . --noEmit"
+    },
+    {
+      "name": "compilerOptions.out-outside",
+      "status": "NOTE",
+      "detail": "worktree tsc failed; not red-capable\ntsconfig.json(7,5): error TS5102: Option 'out' has been removed. Please remove it from your configuration.\r\n  Use 'outFile' instead.\r\nCommand failed: C:\\WINDOWS\\system32\\cmd.exe /c C:\\Users\\hymlo\\AppData\\Local\\Temp\\pab-r18-StJPsV\\repo\\node_modules\\.bin\\tsc.cmd -p . --noEmit"
+    },
+    {
+      "name": "compilerOptions.outFile-outside",
+      "status": "NOTE",
+      "detail": "worktree tsc failed; not red-capable\nsrc/index.ts(1,1): error TS6131: Cannot compile modules using option 'outFile' unless the '--module' flag is 'amd' or 'system'.\r\nCommand failed: C:\\WINDOWS\\system32\\cmd.exe /c C:\\Users\\hymlo\\AppData\\Local\\Temp\\pab-r18-2kyYtL\\repo\\node_modules\\.bin\\tsc.cmd -p . --noEmit"
+    },
+    {
+      "name": "mapRoot-sourceRoot-outside",
+      "status": "PASS",
+      "detail": "claim-guard: 2 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - compilerOptions.mapRoot: ../hidden/maps\n  - compilerOptions.sourceRoot: ../hidden/src\n\ntsc may see the materialised index and node_modules, and nothing else. A config that\nnames the working tree means the guard would be checking files this commit does not\ncontain - and an `extends` that is not itself staged would keep resolving locally\nafter the commit lands, staying green here and failing in CI.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "name": "include-file-url",
+      "status": "NOTE",
+      "detail": "worktree tsc failed; not red-capable\nerror TS18003: No inputs were found in config file 'C:/Users/hymlo/AppData/Local/Temp/pab-r18-tWGr5d/repo/tsconfig.json'. Specified 'include' paths were '[\"file:///C:/Users/hymlo/AppData/Local/Temp/pab-r18-tWGr5d/hidden/x.ts\"]' and 'exclude' paths were '[]'.\r\nCommand failed: C:\\WINDOWS\\system32\\cmd.exe /c C:\\Users\\hymlo\\AppData\\Local\\Temp\\pab-r18-tWGr5d\\repo\\node_modules\\.bin\\tsc.cmd -p . --noEmit"
+    },
+    {
+      "name": "honest-green",
+      "status": "PASS",
+      "detail": "claim-guard: 2 staged path(s), all covered by claude's claims\nclaim-guard: compile OK (staged index)\n"
+    },
+    {
+      "name": "item2-bom-live-pid",
+      "status": "PASS",
+      "detail": "waited 411ms; live BOM lock kept (timeout-waiting)"
+    },
+    {
+      "name": "item2-bom-missing-pid",
+      "status": "PASS",
+      "detail": "recovered in 5ms"
+    },
+    {
+      "name": "item2-pid-2147483647",
+      "status": "PASS",
+      "detail": "recovered in 5ms"
+    }
+  ]
+}

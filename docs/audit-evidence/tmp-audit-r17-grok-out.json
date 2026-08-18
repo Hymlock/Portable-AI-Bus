@@ -1,0 +1,82 @@
+{
+  "pass": 9,
+  "fail": 1,
+  "note": 5,
+  "results": [
+    {
+      "name": "bom-nocheck",
+      "status": "FAIL",
+      "detail": "BOM+noCheck compiled a type error\nclaim-guard: 2 staged path(s), all covered by claude's claims\nclaim-guard: compile OK (staged index)\n"
+    },
+    {
+      "name": "bom-files-hidden",
+      "status": "PASS",
+      "detail": "claim-guard: 2 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - tsc compiled files outside the staged tree, so nothing here verifies this commit:\n  - C:/Users/hymlo/AppData/Local/Temp/pab-r17-DUIT2j/hidden/x.ts\n\ntsc may see the materialised index and node_modules, and nothing else. listFilesOnly\nis what the compiler actually loaded. A package.json types/exports field, a\njsxImportSource package, or an allowJs import that resolves outside is the same leak\nas a triple-slash path — the walker is not the authority, tsc is.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "name": "configDir-baseUrl-junction",
+      "status": "PASS",
+      "detail": "claim-guard: 2 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - tsc compiled files outside the staged tree, so nothing here verifies this commit:\n  - C:/Users/hymlo/AppData/Local/Temp/pab-r17-Yzrq55/hidden/mod.ts\n\ntsc may see the materialised index and node_modules, and nothing else. listFilesOnly\nis what the compiler actually loaded. A package.json types/exports field, a\njsxImportSource package, or an allowJs import that resolves outside is the same leak\nas a triple-slash path — the walker is not the authority, tsc is.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "name": "pkg-tsconfig-absolute",
+      "status": "PASS",
+      "detail": "claim-guard: 2 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - extends: leak-via-field\n\ntsc may see the materialised index and node_modules, and nothing else. A config that\nnames the working tree means the guard would be checking files this commit does not\ncontain - and an `extends` that is not itself staged would keep resolving locally\nafter the commit lands, staying green here and failing in CI.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "name": "extends-array-pkg-nocheck",
+      "status": "PASS",
+      "detail": "claim-guard: 3 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig sets compilerOptions.noCheck, so tsc will not type-check this commit\n\nA green plus a NOTE is not a verified index. Remove noCheck, or use BUS_ALLOW_BROKEN_BUILD=1.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "name": "generateCpuProfile-outside",
+      "status": "NOTE",
+      "detail": "compile OK; no outside profile written\nclaim-guard: 2 staged path(s), all covered by claude's claims\nclaim-guard: compile OK (staged index)\n"
+    },
+    {
+      "name": "generateTrace-outside",
+      "status": "PASS",
+      "detail": "claim-guard: 2 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - tsc reported success but the compiled program could not be listed, so nothing verified this commit\n\nCommand failed: C:\\WINDOWS\\system32\\cmd.exe /c C:\\Users\\hymlo\\AppData\\Local\\Temp\\pab-r17-01PhSC\\repo\\node_modules\\.bin\\tsc.cmd -p C:\\Users\\hymlo\\AppData\\Local\\Temp\\claim-guard-index-QMWAyM --listFilesOnly\nC:\\Users\\hymlo\\Downloads\\Projects\\Portable-AI-Bus\\node_modules\\typescript\\lib\\_tsc.js:1284\r\n    throw e;\r\n    ^\r\n\r\nError: Debug Failure. False expression.\r\n    at Object.stopTracing (C:\\Users\\hymlo\\Downloads\\Projects\\Portable-AI-Bus\\node_modules\\\u001b[4mtypescript\u001b[24m\\lib\\_tsc.js:2711:11)\r\n    at reportStatistics (C:\\Users\\hymlo\\Downloads\\Projects\\Portable-AI-Bus\\node_modules\\\u001b[4mtypescript\u001b[24m\\lib\\_tsc.js:132439:42)\r\n    at performCompilation (C:\\Users\\hymlo\\Downloads\\Projects\\Portable-AI-Bus\\node_modules\\\u001b[4mtypescript\u001b[24m\\lib\\_tsc.js:132244:3)\r\n    at executeCommandLineWorker (C:\\Users\\hymlo\\Downloads\\Projects\\Portable-AI-Bus\\node_modules\\\u001b[4mtypescript\u001b[24m\\lib\\_tsc.js:132044:7)\r\n    at executeCommandLine (C:\\Users\\hymlo\\Downloads\\Projects\\Portable-AI-Bus\\node_modules\\\u001b[4mtypescript\u001b[24m\\lib\\_tsc.js:132126:12)\r\n    at Object.<anonymous> (C:\\Users\\hymlo\\Downloads\\Projects\\Portable-AI-Bus\\node_modules\\\u001b[4mtypescript\u001b[24m\\lib\\_tsc.js:133817:1)\r\n\u001b[90m    at Module._compile (node:internal/modules/cjs/loader:1761:14)\u001b[39m\r\n\u001b[90m    at Object..js (node:internal/modules/cjs/loader:1893:10)\u001b[39m\r\n\u001b[90m    at Module.load (node:internal/modules/cjs/loader:1481:32)\u001b[39m\r\n\u001b[90m    at Module._load (node:internal/modules/cjs/loader:1300:12)\u001b[39m\r\n\r\nNode.js v24.12.0\r\n\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "name": "erasableSyntaxOnly-type-error",
+      "status": "NOTE",
+      "detail": "tsc still type-checks under erasableSyntaxOnly (not red-capable)\nsrc/index.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'.\r\nCommand failed: C:\\WINDOWS\\system32\\cmd.exe /c C:\\Users\\hymlo\\AppData\\Local\\Temp\\pab-r17-oPwsej\\repo\\node_modules\\.bin\\tsc.cmd -p . --noEmit"
+    },
+    {
+      "name": "allowImportingTsExtensions-abs",
+      "status": "PASS",
+      "detail": "claim-guard: 2 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - import C:/Users/hymlo/AppData/Local/Temp/pab-r17-fDFWrN/hidden/mod.ts in src/index.ts\n\ntsc may see the materialised index and node_modules, and nothing else. A config that\nnames the working tree means the guard would be checking files this commit does not\ncontain - and an `extends` that is not itself staged would keep resolving locally\nafter the commit lands, staying green here and failing in CI.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "name": "paths-empty-alias",
+      "status": "NOTE",
+      "detail": "worktree tsc failed; not red-capable\nsrc/index.ts(1,19): error TS2307: Cannot find module 'mod' or its corresponding type declarations.\r\nCommand failed: C:\\WINDOWS\\system32\\cmd.exe /c C:\\Users\\hymlo\\AppData\\Local\\Temp\\pab-r17-dZi7On\\repo\\node_modules\\.bin\\tsc.cmd -p . --noEmit"
+    },
+    {
+      "name": "disableSourceOfProjectReferenceRedirect",
+      "status": "NOTE",
+      "detail": "tsc -p compiled via .d.ts mask; listed:\nC:/Users/hymlo/Downloads/Projects/Portable-AI-Bus/node_modules/typescript/lib/lib.d.ts\nC:/Users/hymlo/Downloads/Projects/Portable-AI-Bus/node_modules/typescript/lib/lib.es5.d.ts\nC:/Users/hymlo/Downloads/Projects/Portable-AI-Bus/node_modules/typescript/lib/lib.dom.d.ts\nC:/Users/hymlo/Downloads/Projects/Portable-AI-Bus/node_modules/typescript/lib/lib.webworker.importscripts.d.ts\nC:/Users/hymlo/Downloads/Projects/Portable-AI-Bus/node_modules/typescript/lib/lib.scripthost.d.ts\nC:/Users/hymlo/Downloads/Projects/Portable-AI-Bus/node_modules/typescript/lib/lib.decorators.d.ts\nC:/Users/hymlo/Downloads/Projects/Portable-AI-Bus/node_modules/typescript/lib/lib.decorators.legacy.d.ts\nC:/Users/hymlo/AppData/Local/Temp/pab-r17-orydzl/repo/packages/lib/dist/index.d.ts\nC:/Users/hymlo/AppData/Local/Temp/pab-r17-orydzl/repo/src/index.ts\n\nclaim-guard: 5 staged path(s), all covered by claude's claims\nclaim-guard: compile OK (staged index)\n"
+    },
+    {
+      "name": "hardlink-outside-into-src",
+      "status": "NOTE",
+      "detail": "compile OK; git stores the bytes (not a leak)\nlisted=C:/Users/hymlo/Downloads/Projects/Portable-AI-Bus/node_modules/typescript/lib/lib.d.ts\r\nC:/Users/hymlo/Downloads/Projects/Portable-AI-Bus/node_modules/typescript/lib/lib.es5.d.ts\r\nC:/Users/hymlo/Downloads/Projects/Portable-AI-Bus/node_modules/typescript/lib/lib.dom.d.ts\r\nC:/Users/hymlo/Downloads/Projects/Portable-AI-Bus/node_modules/typescript/lib/lib.webworker.importscripts.d.ts\r\nC:/Users/hymlo/Downloads/Projects/Portable-AI-Bus/node_modules/typescript/lib/lib.scripthost.d.ts\r\nC:/Users/hymlo/Downloads/Projects/Portable-AI-Bus/node_modules/typescript/lib/lib.decorators.d.ts\r\nC:/Users/hymlo/Downloads/Projects/Portable-AI-Bus/node_modules/typescript/lib/lib.decorators.legacy.d.ts\r\nC:/Users/hymlo/AppData/Local/Temp/pab-r17-u65rXS/repo/src/index.ts\r\n"
+    },
+    {
+      "name": "honest-green",
+      "status": "PASS",
+      "detail": "claim-guard: 2 staged path(s), all covered by claude's claims\nclaim-guard: compile OK (staged index)\n"
+    },
+    {
+      "name": "item2-pid-1e308",
+      "status": "PASS",
+      "detail": "recovered in 5ms"
+    },
+    {
+      "name": "item2-readonly-debris",
+      "status": "PASS",
+      "detail": "recovered in 3ms"
+    }
+  ]
+}

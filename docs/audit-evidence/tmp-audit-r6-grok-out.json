@@ -1,0 +1,115 @@
+{
+  "pass": 18,
+  "fail": 0,
+  "skip": 0,
+  "results": [
+    {
+      "item": 15,
+      "name": "honest-green",
+      "status": "PASS",
+      "detail": "code=0 claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: compile OK (staged index)\n"
+    },
+    {
+      "item": 15,
+      "name": "bare-extends-subpath",
+      "status": "PASS",
+      "detail": "code=1 claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - include: C:/Users/hymlo/AppData/Local/Temp/pab-r6-JYtBnz/repo/src\n\ntsc may see the materialised index and node_modules, and nothing else. A config that\nnames the working tree means the guard would be checking files this commit does not\ncontain - and an `extends` that is not itself staged would keep resolving locally\nafter the commit lands, staying green here and failing in CI.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "item": 15,
+      "name": "bare-extends-array",
+      "status": "PASS",
+      "detail": "code=1 claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - include: C:/Users/hymlo/AppData/Local/Temp/pab-r6-z0dXV0/repo/src\n\ntsc may see the materialised index and node_modules, and nothing else. A config that\nnames the working tree means the guard would be checking files this commit does not\ncontain - and an `extends` that is not itself staged would keep resolving locally\nafter the commit lands, staying green here and failing in CI.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "item": 15,
+      "name": "bare-extends-package",
+      "status": "PASS",
+      "detail": "code=1 claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - include: C:/Users/hymlo/AppData/Local/Temp/pab-r6-Lvmpfd/repo/src\n\ntsc may see the materialised index and node_modules, and nothing else. A config that\nnames the working tree means the guard would be checking files this commit does not\ncontain - and an `extends` that is not itself staged would keep resolving locally\nafter the commit lands, staying green here and failing in CI.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "item": 15,
+      "name": "relative-extends-still-refused",
+      "status": "PASS",
+      "detail": "code=1 claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - include: C:/Users/hymlo/AppData/Local/Temp/pab-r6-sV3Ztd/repo/src\n\ntsc may see the materialised index and node_modules, and nothing else. A config that\nnames the working tree means the guard would be checking files this commit does not\ncontain - and an `extends` that is not itself staged would keep resolving locally\nafter the commit lands, staying green here and failing in CI.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "item": 15,
+      "name": "junction-include-worktree",
+      "status": "PASS",
+      "detail": "code=1 claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - include: node_modules/leak-src\n\ntsc may see the materialised index and node_modules, and nothing else. A config that\nnames the working tree means the guard would be checking files this commit does not\ncontain - and an `extends` that is not itself staged would keep resolving locally\nafter the commit lands, staying green here and failing in CI.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "item": 15,
+      "name": "triple-slash-outside",
+      "status": "PASS",
+      "detail": "code=1 claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - /// <reference path> in src/index.ts: C:/Users/hymlo/AppData/Local/Temp/pab-r6-Mio5j0/hidden-fix.d.ts\n\ntsc may see the materialised index and node_modules, and nothing else. A config that\nnames the working tree means the guard would be checking files this commit does not\ncontain - and an `extends` that is not itself staged would keep resolving locally\nafter the commit lands, staying green here and failing in CI.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "item": 15,
+      "name": "staged-symlink-outside",
+      "status": "PASS",
+      "detail": "code=1 claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - staged symlink: src/index.ts\n\ntsc may see the materialised index and node_modules, and nothing else. A config that\nnames the working tree means the guard would be checking files this commit does not\ncontain - and an `extends` that is not itself staged would keep resolving locally\nafter the commit lands, staying green here and failing in CI.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "item": 15,
+      "name": "empty-compile-not-verified",
+      "status": "PASS",
+      "detail": "code=1 claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - this commit does not compile.\n\ntsconfig.json(4,5): error TS6053: File 'C:/Users/hymlo/AppData/Local/Temp/claim-guard-index-khTepq/packages/lib' not found.\n\nA commit that does not build blocks every other seat and hides every other\nfailure behind it. Fix it, or commit deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "item": 15,
+      "name": "nocheck-refused",
+      "status": "PASS",
+      "detail": "code=1 claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig sets compilerOptions.noCheck, so tsc will not type-check this commit\n\nA green plus a NOTE is not a verified index. Remove noCheck, or use BUS_ALLOW_BROKEN_BUILD=1.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "item": 15,
+      "name": "exclude-note-still-green",
+      "status": "PASS",
+      "detail": "code=0 claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: NOTE - the staged tsconfig excludes 1 pattern(s); excluded files are not checked.\nclaim-guard: compile OK (staged index)\n"
+    },
+    {
+      "item": 15,
+      "name": "absolute-include-still-refused",
+      "status": "PASS",
+      "detail": "code=1 claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - include: C:/Users/hymlo/AppData/Local/Temp/pab-r6-BOHHUX/repo/src\n\ntsc may see the materialised index and node_modules, and nothing else. A config that\nnames the working tree means the guard would be checking files this commit does not\ncontain - and an `extends` that is not itself staged would keep resolving locally\nafter the commit lands, staying green here and failing in CI.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "item": 15,
+      "name": "type-error-still-red",
+      "status": "PASS",
+      "detail": "code=1 claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - this commit does not compile.\n\nsrc/index.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'.\n\nA commit that does not build blocks every other seat and hides every other\nfailure behind it. Fix it, or commit deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "item": 2,
+      "name": "empty-lock-is-debris",
+      "status": "PASS",
+      "detail": "recovered in 4ms"
+    },
+    {
+      "item": 2,
+      "name": "unparseable-lock-is-debris",
+      "status": "PASS",
+      "detail": "recovered in 3ms"
+    },
+    {
+      "item": 2,
+      "name": "missing-pid-lock-is-debris",
+      "status": "PASS",
+      "detail": "recovered in 3ms"
+    },
+    {
+      "item": 2,
+      "name": "operatorCloseRecovery-compacts",
+      "status": "PASS",
+      "detail": "closed=true summary=3 live=1"
+    },
+    {
+      "item": 2,
+      "name": "inherit-does-not-compact",
+      "status": "PASS",
+      "detail": "summary=false live=3"
+    }
+  ]
+}

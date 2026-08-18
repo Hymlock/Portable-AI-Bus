@@ -1,0 +1,45 @@
+{
+  "against": "tmp-audit-r6-patches/claim-guard-cli.js (r10-updated)",
+  "head": "373e176",
+  "notHead": true,
+  "pass": 7,
+  "fail": 0,
+  "noteOrSkip": 0,
+  "results": [
+    {
+      "name": "allowjs-clean/control",
+      "status": "PASS",
+      "detail": "tsc ok; outside listed=[\"C:/Users/hymlo/AppData/Local/Temp/pab-r10c-sv6gQJ/hidden-js-pkg/index.ts\"]"
+    },
+    {
+      "name": "allowjs-clean",
+      "status": "PASS",
+      "detail": "code=1\nclaim-guard: 3 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - import C:/Users/hymlo/AppData/Local/Temp/pab-r10c-sv6gQJ/hidden-js-pkg in src/index.js\n\ntsc may see the materialised index and node_modules, and nothing else. A config that\nnames the working tree means the guard would be checking files this commit does not\ncontain - and an `extends` that is not itself staged would keep resolving locally\nafter the commit lands, staying green here and failing in CI.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "name": "pkgjson-types/control",
+      "status": "PASS",
+      "detail": "tsc ok; outside listed=[\"C:/Users/hymlo/AppData/Local/Temp/pab-r10c-6OG4nc/hidden-fix-pkg/index.d.ts\"]"
+    },
+    {
+      "name": "pkgjson-types",
+      "status": "PASS",
+      "detail": "code=1\nclaim-guard: 3 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - tsc compiled files outside the staged tree, so nothing here verifies this commit:\n  - C:/Users/hymlo/AppData/Local/Temp/pab-r10c-6OG4nc/hidden-fix-pkg/index.d.ts\n\ntsc may see the materialised index and node_modules, and nothing else. listFilesOnly\nis what the compiler actually loaded. A package.json types/exports field, a\njsxImportSource package, or an allowJs import that resolves outside is the same leak\nas a triple-slash path — the walker is not the authority, tsc is.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "name": "jsx-junction/control",
+      "status": "PASS",
+      "detail": "tsc ok; outside listed=[\"C:/Users/hymlo/AppData/Local/Temp/pab-r10c-db7YsR/leak-jsx-real/jsx-runtime.d.ts\"]"
+    },
+    {
+      "name": "jsx-junction",
+      "status": "PASS",
+      "detail": "code=1\nclaim-guard: 3 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - compilerOptions.jsxImportSource: leak-jsx\n\ntsc may see the materialised index and node_modules, and nothing else. A config that\nnames the working tree means the guard would be checking files this commit does not\ncontain - and an `extends` that is not itself staged would keep resolving locally\nafter the commit lands, staying green here and failing in CI.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "name": "honest-green",
+      "status": "PASS",
+      "detail": "code=0\nclaim-guard: 3 staged path(s), all covered by claude's claims\nclaim-guard: compile OK (staged index)\n"
+    }
+  ]
+}

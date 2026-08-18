@@ -1,0 +1,142 @@
+{
+  "pass": 11,
+  "fail": 8,
+  "note": 8,
+  "results": [
+    {
+      "name": "nocheck-number-1",
+      "status": "NOTE",
+      "detail": "tsc did not honour noCheck:1\nsrc/index.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'.\r\ntsconfig.json(7,16): error TS5024: Compiler option 'noCheck' requires a value of type boolean.\r\nCommand failed: C:\\WINDOWS\\system32\\cmd.exe /c C:\\Users\\hymlo\\AppData\\Local\\Temp\\pab-r16-qGdgPz\\repo\\node_modules\\.bin\\tsc.cmd -p . --noEmit"
+    },
+    {
+      "name": "nocheck-string-true",
+      "status": "NOTE",
+      "detail": "tsc did not honour noCheck:\"true\"\nsrc/index.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'.\r\ntsconfig.json(7,16): error TS5024: Compiler option 'noCheck' requires a value of type boolean.\r\nCommand failed: C:\\WINDOWS\\system32\\cmd.exe /c C:\\Users\\hymlo\\AppData\\Local\\Temp\\pab-r16-sBUyLB\\repo\\node_modules\\.bin\\tsc.cmd -p . --noEmit"
+    },
+    {
+      "name": "configDir-include-escape",
+      "status": "PASS",
+      "detail": "claim-guard: 2 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - this commit does not compile.\n\nerror TS18003: No inputs were found in config file 'C:/Users/hymlo/AppData/Local/Temp/claim-guard-index-XWtDaL/tsconfig.json'. Specified 'include' paths were '[\"${configDir}/../hidden/**/*.ts\"]' and 'exclude' paths were '[]'.\n\nA commit that does not build blocks every other seat and hides every other\nfailure behind it. Fix it, or commit deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "name": "paths-alias-to-hidden",
+      "status": "PASS",
+      "detail": "claim-guard: 2 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - compilerOptions.paths[\"@h/*\"]: ../hidden/*\n\ntsc may see the materialised index and node_modules, and nothing else. A config that\nnames the working tree means the guard would be checking files this commit does not\ncontain - and an `extends` that is not itself staged would keep resolving locally\nafter the commit lands, staying green here and failing in CI.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "name": "paths-star-to-hidden",
+      "status": "PASS",
+      "detail": "claim-guard: 2 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - compilerOptions.paths[\"*\"]: ../hidden/*\n\ntsc may see the materialised index and node_modules, and nothing else. A config that\nnames the working tree means the guard would be checking files this commit does not\ncontain - and an `extends` that is not itself staged would keep resolving locally\nafter the commit lands, staying green here and failing in CI.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "name": "rootDirs-hidden",
+      "status": "PASS",
+      "detail": "claim-guard: 2 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - compilerOptions.rootDirs: ../hidden\n\ntsc may see the materialised index and node_modules, and nothing else. A config that\nnames the working tree means the guard would be checking files this commit does not\ncontain - and an `extends` that is not itself staged would keep resolving locally\nafter the commit lands, staying green here and failing in CI.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "name": "files-lists-hidden",
+      "status": "PASS",
+      "detail": "claim-guard: 2 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - files: ../hidden/x.ts\n\ntsc may see the materialised index and node_modules, and nothing else. A config that\nnames the working tree means the guard would be checking files this commit does not\ncontain - and an `extends` that is not itself staged would keep resolving locally\nafter the commit lands, staying green here and failing in CI.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "name": "nocheck-via-extends",
+      "status": "PASS",
+      "detail": "claim-guard: 3 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig sets compilerOptions.noCheck, so tsc will not type-check this commit\n\nA green plus a NOTE is not a verified index. Remove noCheck, or use BUS_ALLOW_BROKEN_BUILD=1.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "name": "ts-nocheck-every-source",
+      "status": "PASS",
+      "detail": "claim-guard: 2 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - every staged program source sets @ts-nocheck, so tsc will not type-check this commit\n\nA green plus a NOTE is not a verified index. @ts-nocheck on the whole program is\ncompilerOptions.noCheck spelled in the source. Remove it, or use BUS_ALLOW_BROKEN_BUILD=1.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "name": "disableReferencedProjectLoad-relimport",
+      "status": "NOTE",
+      "detail": "worktree tsc failed; not red-capable\nsrc/index.ts(1,19): error TS6305: Output file 'C:/Users/hymlo/AppData/Local/Temp/pab-r16-3bCg0p/repo/packages/lib/dist/index.d.ts' has not been built from source file 'C:/Users/hymlo/AppData/Local/Temp/pab-r16-3bCg0p/repo/packages/lib/index.ts'.\r\nCommand failed: C:\\WINDOWS\\system32\\cmd.exe /c C:\\Users\\hymlo\\AppData\\Local\\Temp\\pab-r16-3bCg0p\\repo\\node_modules\\.bin\\tsc.cmd -p . --noEmit"
+    },
+    {
+      "name": "import-type-absolute",
+      "status": "PASS",
+      "detail": "claim-guard: 2 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - import C:/Users/hymlo/AppData/Local/Temp/pab-r16-N2Tdgx/hidden/mod.ts in src/index.ts\n\ntsc may see the materialised index and node_modules, and nothing else. A config that\nnames the working tree means the guard would be checking files this commit does not\ncontain - and an `extends` that is not itself staged would keep resolving locally\nafter the commit lands, staying green here and failing in CI.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "name": "export-star-absolute",
+      "status": "NOTE",
+      "detail": "worktree tsc failed; not red-capable\nsrc/index.ts(1,15): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.\r\nCommand failed: C:\\WINDOWS\\system32\\cmd.exe /c C:\\Users\\hymlo\\AppData\\Local\\Temp\\pab-r16-tbss2N\\repo\\node_modules\\.bin\\tsc.cmd -p . --noEmit"
+    },
+    {
+      "name": "lib-as-path",
+      "status": "NOTE",
+      "detail": "worktree tsc failed; not red-capable\nerror TS2318: Cannot find global type 'Array'.\r\nerror TS2318: Cannot find global type 'Boolean'.\r\nerror TS2318: Cannot find global type 'CallableFunction'.\r\nerror TS2318: Cannot find global type 'Function'.\r\nerror TS2318: Cannot find global type 'IArguments'.\r\nerror TS2318: Cannot find global type 'NewableFunction'.\r\nerror TS2318: Cannot find global type 'Number'.\r\nerror TS2318: Cannot find global type 'Object'.\r\nerror TS2318: Cannot find global type 'RegExp'.\r\nerror TS2318: Cannot find global type 'String'.\r\ntsconfig.json(8,7): error TS6046: Argument for '--lib' option must be: 'es5', 'es6', 'es2015', 'es7', 'es2016', 'es2017', 'es2018', 'es2019', 'es2020', 'es2021', 'es2022', 'es2023', 'es2024', 'esnext', 'dom', 'dom.iterable', 'dom.asynciterable', 'webworker', 'webworker.importscripts', 'webworker.iterable', 'webworker.asynciterable', 'scripthost', 'es2015.core', 'es2015.collection', 'es2015.generator', 'es2015.iterable', 'es2015.promise', 'es2015.proxy', 'es2015.reflect', 'es2015.symbol', 'es2015.symbol.wellknown', 'es2016.array.include', 'es2016.intl', 'es2017.arraybuffer', 'es2017.date', 'es2017.object', 'es2017.sharedmemory', 'es2017.string', 'es2017.intl', 'es2017.typedarrays', 'es2018.asyncgenerator', 'es2018.asynciterable', 'es2018.intl', 'es2018.promise', 'es2018.regexp', 'es2019.array', 'es2019.object', 'es2019.string', 'es2019.symbol', 'es2019.intl', 'es2020.bigint', 'es2020.date', 'es2020.promise', 'es2020.sharedmemory', 'es2020.string', 'es2020.symbol.wellknown', 'es2020.intl', 'es2020.number', 'es2021.promise', 'es2021.string', 'es2021.weakref', 'es2021.intl', 'es2022.array', 'es2022.error', 'es2022.intl', 'es2022.object', 'es2022.string', 'es2022.regexp', 'es2023.array', 'es2023.collection', 'es2023.intl', 'es2024.arraybuffer', 'es2024.collection', 'es2024.object', 'es2024.promise', 'es2024.regexp', 'es2024.sharedmemory', 'es2024.string', 'esnext.array', 'esnext.collection', 'esnext.symbol', 'esnext.asynciterable', 'esnext.intl', 'esnext.disposable', 'esnext.bigint', 'esnext.string', 'esnext.promise', 'esnext.weakref', 'esnext.decorators', 'esnext.object', 'esnext.regexp', 'esnext.iterator', 'esnext.float16', 'esnext.error', 'esnext.sharedmemory', 'decorators', 'decorators.legacy'.\r\nCommand failed: C:\\WINDOWS\\system32\\cmd.exe /c C:\\Users\\hymlo\\AppData\\Local\\Temp\\pab-r16-Ge1iED\\repo\\node_modules\\.bin\\tsc.cmd -p . --noEmit"
+    },
+    {
+      "name": "tsBuildInfoFile-outside",
+      "status": "PASS",
+      "detail": "claim-guard: 2 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - compilerOptions.tsBuildInfoFile: ../hidden/.tsbuildinfo\n\ntsc may see the materialised index and node_modules, and nothing else. A config that\nnames the working tree means the guard would be checking files this commit does not\ncontain - and an `extends` that is not itself staged would keep resolving locally\nafter the commit lands, staying green here and failing in CI.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "name": "src-vendor-junction",
+      "status": "NOTE",
+      "detail": "tsc compiled but did not list the outside path\nC:/Users/hymlo/Downloads/Projects/Portable-AI-Bus/node_modules/typescript/lib/lib.d.ts\r\nC:/Users/hymlo/Downloads/Projects/Portable-AI-Bus/node_modules/typescript/lib/lib.es5.d.ts\r\nC:/Users/hymlo/Downloads/Projects/Portable-AI-Bus/node_modules/typescript/lib/lib.dom.d.ts\r\nC:/Users/hymlo/Downloads/Projects/Portable-AI-Bus/node_modules/typescript/lib/lib.webworker.importscripts.d.ts\r\nC:/Users/hymlo/Downloads/Projects/Portable-AI-Bus/node_modules/typescript/lib/lib.scripthost.d.ts\r\nC:/Users/hymlo/Downloads/Projects/Portable-AI-Bus/node_modules/typescript/lib/lib.decorators.d.ts\r\nC:/Users/hymlo/Downloads/Projects/Portable-AI-Bus/node_modules/typescript/lib/lib.decorators.legacy.d.ts\r\nC:/Users/hymlo/AppData/Local/Temp/pab-r16-0kQRfh/repo/src/vendor/leak.ts\r\nC:/Users/hymlo/AppData/Local/Temp/pab-r16-0kQRfh/repo/src/index.ts\r\n"
+    },
+    {
+      "name": "root-package-types-outside",
+      "status": "NOTE",
+      "detail": "tsc compiled but did not list outside types\nC:/Users/hymlo/Downloads/Projects/Portable-AI-Bus/node_modules/typescript/lib/lib.d.ts\r\nC:/Users/hymlo/Downloads/Projects/Portable-AI-Bus/node_modules/typescript/lib/lib.es5.d.ts\r\nC:/Users/hymlo/Downloads/Projects/Portable-AI-Bus/node_modules/typescript/lib/lib.dom.d.ts\r\nC:/Users/hymlo/Downloads/Projects/Portable-AI-Bus/node_modules/typescript/lib/lib.webworker.importscripts.d.ts\r\nC:/Users/hymlo/Downloads/Projects/Portable-AI-Bus/node_modules/typescript/lib/lib.scripthost.d.ts\r\nC:/Users/hymlo/Downloads/Projects/Portable-AI-Bus/node_modules/typescript/lib/lib.decorators.d.ts\r\nC:/Users/hymlo/Downloads/Projects/Portable-AI-Bus/node_modules/typescript/lib/lib.decorators.legacy.d.ts\r\nC:/Users/hymlo/AppData/Local/Temp/pab-r16-UEn6nj/repo/src/index.ts\r\n"
+    },
+    {
+      "name": "nocheck-in-referenced-only",
+      "status": "NOTE",
+      "detail": "tsc -p does not load referenced noCheck; classified with hole 4\nclaim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: compile OK (staged index)\n"
+    },
+    {
+      "name": "configDir-paths-escape",
+      "status": "PASS",
+      "detail": "claim-guard: 2 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - this commit does not compile.\n\nsrc/index.ts(1,19): error TS2307: Cannot find module '@h/mod' or its corresponding type declarations.\n\nA commit that does not build blocks every other seat and hides every other\nfailure behind it. Fix it, or commit deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "name": "honest-green",
+      "status": "PASS",
+      "detail": "claim-guard: 2 staged path(s), all covered by claude's claims\nclaim-guard: compile OK (staged index)\n"
+    },
+    {
+      "name": "item2-pid-float",
+      "status": "FAIL",
+      "detail": "store.claim is not a function"
+    },
+    {
+      "name": "item2-pid-true",
+      "status": "FAIL",
+      "detail": "store.claim is not a function"
+    },
+    {
+      "name": "item2-pid-object",
+      "status": "FAIL",
+      "detail": "store.claim is not a function"
+    },
+    {
+      "name": "item2-pid-negative",
+      "status": "FAIL",
+      "detail": "store.claim is not a function"
+    },
+    {
+      "name": "item2-pid-string",
+      "status": "FAIL",
+      "detail": "store.claim is not a function"
+    },
+    {
+      "name": "item2-bom-missing-pid",
+      "status": "FAIL",
+      "detail": "store.claim is not a function"
+    },
+    {
+      "name": "item2-json-trailing-junk",
+      "status": "FAIL",
+      "detail": "store.claim is not a function"
+    },
+    {
+      "name": "item2-utf16be",
+      "status": "FAIL",
+      "detail": "store.claim is not a function"
+    }
+  ]
+}

@@ -1,0 +1,39 @@
+{
+  "against": "tmp-audit-r6-patches/claim-guard-cli.js",
+  "notHead": true,
+  "pass": 4,
+  "fail": 0,
+  "noteOrSkip": 2,
+  "results": [
+    {
+      "name": "control-worktree-dir-symlink-compiles",
+      "status": "PASS",
+      "detail": "tsc in worktree sees HiddenFix through dir symlink"
+    },
+    {
+      "name": "dir-symlink-hides-type-error",
+      "status": "PASS",
+      "detail": "code=1\nINDEX:\n100644 c2658d7d1b31848c3b71960543cb0368e56cd4c7 0\t.gitignore\n120000 d2a79c90350bd795c70b12bcbc6f119ef4473690 0\tsrc/alias\n100644 d033b4d456fd02d98399efb9dc002906048be331 0\tsrc/index.ts\n100644 55c7c86579484d2710132dfa3dcb3540f9b03e2a 0\ttsconfig.json\n\nOUT:\nclaim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - staged symlink: src/alias\n\ntsc may see the materialised index and node_modules, and nothing else. A config that\nnames the working tree means the guard would be checking files this commit does not\ncontain - and an `extends` that is not itself staged would keep resolving locally\nafter the commit lands, staying green here and failing in CI.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "name": "control-attr-order-tsc",
+      "status": "NOTE",
+      "detail": "tsc does not honour this spelling (not a hole): src/index.ts(2,22): error TS2304: Cannot find name 'HiddenFix'.\r\n "
+    },
+    {
+      "name": "triple-slash-attr-order",
+      "status": "NOTE",
+      "detail": "code=1 claim-guard: 3 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - this commit does not compile.\n\nsrc/index.ts(2,22): error TS2304: Cannot find name 'HiddenFix'.\n\nA commit that does not build blocks every other seat and hides every other\nfailure behind it. Fix it, or commit deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "name": "absolute-import-noext",
+      "status": "PASS",
+      "detail": "code=1 claim-guard: 3 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - import C:/Users/hymlo/AppData/Local/Temp/pab-r8b-ByNaQY/hidden-pkg in src/index.ts\n\ntsc may see the materialised index and node_modules, and nothing else. A config that\nnames the working tree means the guard would be checking files this commit does not\ncontain - and an `extends` that is not itself staged would keep resolving locally\nafter the commit lands, staying green here and failing in CI.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "name": "control-absolute-import",
+      "status": "PASS",
+      "detail": "worktree tsc accepts absolute import"
+    }
+  ]
+}

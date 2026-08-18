@@ -1,0 +1,177 @@
+{
+  "counts": {
+    "PASS": 18,
+    "NOTE": 8,
+    "FAIL": 2
+  },
+  "results": [
+    {
+      "item": 13,
+      "name": "symlink-to-parent",
+      "status": "PASS",
+      "detail": "Claim refused: \"above\" is the whole repository. Ancestor claims below the root (for example src/) are allowed; claiming the root locks every seat out of every file with no expiry. Claim the paths you are actually editing. No claim was recorded."
+    },
+    {
+      "item": 13,
+      "name": "root-is-junction-green",
+      "status": "PASS",
+      "detail": "claimed via linked root: [\"src/bus.ts\"]"
+    },
+    {
+      "item": 13,
+      "name": "root-is-junction-dot",
+      "status": "PASS",
+      "detail": "Claim refused: \".\" is the whole repository. Ancestor claims below the root (for example src/) are allowed; claiming the root locks every seat out of every file with no expiry. Claim the paths you are actually editing. No claim was recorded."
+    },
+    {
+      "item": 13,
+      "name": "windows-case-child",
+      "status": "PASS",
+      "detail": "cased path resolved: [{\"path\":\"SRC/bus.ts\",\"root\":\"c:/users/hymlo/appdata/local/temp/pab-r3-13-wgl3ck/ws\",\"identity\":\"filesystem-v1:482355774:76842668645006777\",\"real\":\"c:/users/hymlo/appdata/local/temp/pab-r3-13-wgl3ck/ws/src/bus.ts\",\"why\":\"windows case\",\"at\":\"2026-08-18T01:37:25.959Z\"}]"
+    },
+    {
+      "item": 13,
+      "name": "parent-of-outbound-junction",
+      "status": "PASS",
+      "detail": "src claimed; README.md at root still free (walk stayed under src)"
+    },
+    {
+      "item": 13,
+      "name": "outbound-junction-itself",
+      "status": "PASS",
+      "detail": "Claim refused: \"src/all\" is the whole repository. Ancestor claims below the root (for example src/) are allowed; claiming the root locks every seat out of every file with no expiry. Claim the paths you are actually editing. No claim was recorded."
+    },
+    {
+      "item": 10,
+      "name": "inheritedFrom-predecessor",
+      "status": "PASS",
+      "detail": "predecessor denied; successor holds via inheritedFrom=grok; baton moved work #1"
+    },
+    {
+      "item": 10,
+      "name": "different-workId",
+      "status": "PASS",
+      "detail": "open checkpoint on #1 does not grant recall of #2"
+    },
+    {
+      "item": 10,
+      "name": "different-workId-after-reassign",
+      "status": "PASS",
+      "detail": "moved work stays with successor; other brief recallable only after opening its own checkpoint; afterOpen=true"
+    },
+    {
+      "item": 10,
+      "name": "reassign-twice",
+      "status": "PASS",
+      "detail": "only the second successor recalls; both prior holders denied"
+    },
+    {
+      "item": 10,
+      "name": "reassign-roundtrip",
+      "status": "PASS",
+      "detail": "round-trip returns the brief to the original holder only"
+    },
+    {
+      "item": 10,
+      "name": "reopen-while-held",
+      "status": "PASS",
+      "detail": "predecessor cannot reopen while successor holds"
+    },
+    {
+      "item": 10,
+      "name": "reopen-after-successor-close",
+      "status": "NOTE",
+      "detail": "after successor closes, the original addressee can reopen and recall — work was unheld; address still names them"
+    },
+    {
+      "item": 18,
+      "name": "schema-reaches-grok-argv",
+      "status": "PASS",
+      "detail": "grok argv contains --json-schema with supersedes={\"type\":\"number\"}"
+    },
+    {
+      "item": 18,
+      "name": "providers-forward-schema",
+      "status": "NOTE",
+      "detail": "5 ask() implementations; 1 destructure responseSchema. Only grok forwards it (by design: others ignore, parsePlan handles). Schema change reaches a REAL call only for grok."
+    },
+    {
+      "item": 18,
+      "name": "prompt-both-verbs",
+      "status": "PASS",
+      "detail": "atomic=true two-step=true"
+    },
+    {
+      "item": 18,
+      "name": "cross-recipient-agree",
+      "status": "PASS",
+      "detail": "atomic=Cannot supersede #1: it was sent to grok, not codex. A replacement must reach the seat whose instruction it retracts. Nothing was sent. | two-step=superseding message #2 is addressed to codex, not grok"
+    },
+    {
+      "item": 18,
+      "name": "consumed-target-policy",
+      "status": "PASS",
+      "detail": "neither verb marks a read target superseded (atomic threw=false superseded=false outcome=target-consumed; two-step threw=true). original.supersededBy=undefined"
+    },
+    {
+      "item": 18,
+      "name": "consumed-target-shape",
+      "status": "NOTE",
+      "detail": "SHAPE still disagrees: atomic delivers a correction (seq=4, superseded=false, reason=target-consumed); two-step throws (Cannot supersede #3: grok has already read it. Supersession retracts UNREAD mail; send a correction instead, and close the checkpoint if the work should stop.). Policy is the same; the call outcome is not."
+    },
+    {
+      "item": 18,
+      "name": "empty-reason-disagree",
+      "status": "NOTE",
+      "detail": "two-step empty reason: supersession reason must not be empty; atomic whitespace reason: {\"threw\":false,\"superseded\":true}. Two-step requires a non-empty reason; atomic defaults to \"superseded by #N\"."
+    },
+    {
+      "item": 18,
+      "name": "two-step-idempotent",
+      "status": "NOTE",
+      "detail": "two-step re-supersede with same by+reason returns success (seq=10). Atomic has no equivalent: the replacement already exists."
+    },
+    {
+      "item": 15,
+      "name": "honest-broken-refuses",
+      "status": "PASS",
+      "detail": "exit=1 out=claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - this commit does not compile.\n\nsrc/index.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'.\n\nA commit that does not build blocks ev"
+    },
+    {
+      "item": 15,
+      "name": "absolute-include-worktree",
+      "status": "FAIL",
+      "detail": "staged tsconfig include pointed at the worktree; guard exited 0. The index still has the type error. out=claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: compile OK (staged index)\n"
+    },
+    {
+      "item": 15,
+      "name": "extends-worktree-tsconfig",
+      "status": "FAIL",
+      "detail": "staged tsconfig extends a worktree-only narrow config; guard exited 0. out=claim-guard: 3 staged path(s), all covered by claude's claims\nclaim-guard: compile OK (staged index)\n"
+    },
+    {
+      "item": 15,
+      "name": "empty-include",
+      "status": "NOTE",
+      "detail": "exit=1. Empty staged include refused. out=claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - this commit does not compile.\n\ntsconfig.json(9,12): error TS18002: The 'files' list in config "
+    },
+    {
+      "item": 15,
+      "name": "nocheck",
+      "status": "NOTE",
+      "detail": "exit=0. noCheck lets a type error land because the INDEX disabled checking. Same class as empty include.. out=claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: compile OK (staged index)\n"
+    },
+    {
+      "item": 15,
+      "name": "missing-mailbox-skips-compile",
+      "status": "NOTE",
+      "detail": "exit=0 out=claim-guard: no mailbox state found; skipping (not a shared worktree)\n. No mailbox → exit 0, compile never runs. Intended for a non-shared tree; a wrong BUS_ROOT is the same skip."
+    },
+    {
+      "item": 15,
+      "name": "hatch",
+      "status": "PASS",
+      "detail": "exit=0 out=claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: BUS_ALLOW_BROKEN_BUILD=1 - compile check SKIPPED for this commit\n             deliberate WIP. Say so in t"
+    }
+  ]
+}

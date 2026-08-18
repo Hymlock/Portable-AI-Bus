@@ -1,0 +1,65 @@
+{
+  "against": "tmp-audit-r6-patches/claim-guard-cli.js (r10-updated)",
+  "head": "373e176",
+  "notHead": true,
+  "pass": 9,
+  "fail": 0,
+  "noteOrSkip": 2,
+  "results": [
+    {
+      "name": "nm-substring-types/control",
+      "status": "PASS",
+      "detail": "tsc ok; outside listed=[\"C:/Users/hymlo/AppData/Local/Temp/pab-r11-vpYQAx/smuggle/node_modules/hidden-fix/index.d.ts\"]"
+    },
+    {
+      "name": "nm-substring-types",
+      "status": "PASS",
+      "detail": "code=1\nclaim-guard: 3 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - tsc compiled files outside the staged tree, so nothing here verifies this commit:\n  - C:/Users/hymlo/AppData/Local/Temp/pab-r11-vpYQAx/smuggle/node_modules/hidden-fix/index.d.ts\n\ntsc may see the materialised index and node_modules, and nothing else. listFilesOnly\nis what the compiler actually loaded. A package.json types/exports field, a\njsxImportSource package, or an allowJs import that resolves outside is the same leak\nas a triple-slash path — the walker is not the authority, tsc is.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "name": "pkgjson-typings/control",
+      "status": "PASS",
+      "detail": "tsc ok; outside listed=[\"C:/Users/hymlo/AppData/Local/Temp/pab-r11-x6A5KZ/hidden-typings-pkg/index.d.ts\"]"
+    },
+    {
+      "name": "pkgjson-typings",
+      "status": "PASS",
+      "detail": "code=1\nclaim-guard: 3 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - tsc compiled files outside the staged tree, so nothing here verifies this commit:\n  - C:/Users/hymlo/AppData/Local/Temp/pab-r11-x6A5KZ/hidden-typings-pkg/index.d.ts\n\ntsc may see the materialised index and node_modules, and nothing else. listFilesOnly\nis what the compiler actually loaded. A package.json types/exports field, a\njsxImportSource package, or an allowJs import that resolves outside is the same leak\nas a triple-slash path — the walker is not the authority, tsc is.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "name": "empty-files/control",
+      "status": "NOTE",
+      "detail": "tsconfig.json(8,12): error TS18002: The 'files' list in config file 'C:/Users/hymlo/AppData/Local/Temp/pab-r11-kCmTZv/repo/tsconfig.json' is empty.\r\nCommand failed: C:\\WINDOWS\\system32\\cmd.exe /c C:\\Users\\hymlo\\AppData\\Local\\Temp\\pab-r11-kCmTZv\\repo\\node_modules\\.bin\\tsc.cmd -p C:\\Users\\hymlo\\AppData\\Local\\Temp\\pab-r11-kCmTZv\\repo --noEmit"
+    },
+    {
+      "name": "empty-files",
+      "status": "PASS",
+      "detail": "code=1\nclaim-guard: 3 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - this commit does not compile.\n\ntsconfig.json(8,12): error TS18002: The 'files' list in config file 'C:/Users/hymlo/AppData/Local/Temp/claim-guard-index-VxF2Z1/tsconfig.json' is empty.\n\nA commit that does not build blocks every other seat and hides every other\nfailure behind it. Fix it, or commit deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "name": "nocheck-refuse",
+      "status": "PASS",
+      "detail": "code=1\nclaim-guard: 3 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig sets compilerOptions.noCheck, so tsc will not type-check this commit\n\nA green plus a NOTE is not a verified index. Remove noCheck, or use BUS_ALLOW_BROKEN_BUILD=1.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "name": "exports-types/control",
+      "status": "NOTE",
+      "detail": "src/index.ts(1,19): error TS7016: Could not find a declaration file for module 'leak-exports'. 'C:/Users/hymlo/AppData/Local/Temp/pab-r11-6YopR4/repo/node_modules/leak-exports/index.js' implicitly has an 'any' type.\r\n  Try `npm i --save-dev @types/leak-exports` if it exists or add a new declaration (.d.ts) file containing `declare module 'leak-exports';`\r\nCommand failed: C:\\WINDOWS\\system32\\cmd.exe /c C:\\Users\\hymlo\\AppData\\Local\\Temp\\pab-r11-6YopR4\\repo\\node_modules\\.bin\\tsc.cmd -p C:\\Users\\hymlo\\AppData\\Local\\Temp\\pab-r11-6YopR4\\repo --noEmit"
+    },
+    {
+      "name": "refpath-nm-substring/control",
+      "status": "PASS",
+      "detail": "tsc ok; outside listed=[\"C:/Users/hymlo/AppData/Local/Temp/pab-r11-MbpwT7/ref-smuggle/node_modules/hidden-ref/index.d.ts\"]"
+    },
+    {
+      "name": "refpath-nm-substring",
+      "status": "PASS",
+      "detail": "code=1\nclaim-guard: 3 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - /// <reference path> in src/index.ts: C:/Users/hymlo/AppData/Local/Temp/pab-r11-MbpwT7/ref-smuggle/node_modules/hidden-ref/index.d.ts\n\ntsc may see the materialised index and node_modules, and nothing else. A config that\nnames the working tree means the guard would be checking files this commit does not\ncontain - and an `extends` that is not itself staged would keep resolving locally\nafter the commit lands, staying green here and failing in CI.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "name": "honest-green",
+      "status": "PASS",
+      "detail": "code=0\nclaim-guard: 3 staged path(s), all covered by claude's claims\nclaim-guard: compile OK (staged index)\n"
+    }
+  ]
+}

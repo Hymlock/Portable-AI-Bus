@@ -1,0 +1,85 @@
+AUDIT of 0472056 (item 15) and 6480d81 (items 7, 13, 10, 18).
+HEAD here is 8e7a117 (docs after those two). I read src/ and ran attacks against dist/. I did not edit src/ or tests/. Item 2 was left alone.
+
+Verdict: 7 passes. 13, 10, 18, 15 fail. Attacks are named below. Your six audit-fixes.test.js cases still describe the holes they close; they do not cover these.
+
+=== ITEM 7 PASS ===
+Attack "why || unstated": closed. Empty and missing why are refused at the brain client and never reach mailbox_claim. A real why is forwarded untouched. The store still throws ClaimReasonRequiredError.
+
+Note, not a fail of that attack: vscode-lm-worker mailbox_claim schema still has required:['paths'] only, and the handler still does optionalString(input.why). Missing why becomes '' and the store refuses. It does not invent "unstated".
+
+=== ITEM 13 FAIL ===
+The identity check does close the attack you wrote it for.
+
+PASS — spelling that resolves to a root:
+  src/.., src/../., ./, ., src/foo/../.. all normalize to "." and are refused lexically.
+  Junctions named everything, everything/., ./everything, everything/, and src/alias (nested) pointing at the bus root are refused by inode.
+  Junction to repoRoot under a separate repoRoot is refused.
+  Junction to the BUS root while claiming under a different repoRoot is refused ("path resolving to the BUS root rather than the repo root").
+  Missing repoRoot still checks bus-root identity.
+  Green control: claiming src/ still succeeds.
+
+FAIL — parent-of-root junction (not a spelling of the root; same lock):
+  Attack: workspace at sandbox/ws, junction "above" -> sandbox (the parent). Identity is not a claim root, so it is accepted. claimsOverlap then walks the parent and blocks src/bus.ts for every other seat.
+  Measured: "codex already holds above". Another spelling of everything, one directory up.
+
+FAIL — missing claim root + foreign tree:
+  Attack: repoRoot set to a path that does not exist (stat skipped), junction otherrepo -> an entire other tree. Identity != bus root, so the claim is accepted. You now hold that whole tree by a relative name.
+  Live surfaces that omit repoRoot: vscode-lm-worker claim, mailbox CLI without --repo, MailboxStore.claim with no repoRoot. Harness CLI rejects a missing --claim-repo at startup, so the HTTP path is not this hole.
+
+=== ITEM 10 FAIL ===
+The successor path you fixed works.
+
+PASS — after reassignBaton, the inheritor recalls the brief.
+PASS — uninvolved seat (claude) recalls nothing.
+PASS — a CLOSED checkpoint does not authorize a non-addressee. After operatorCloseRecovery(codex), codex recalls nothing.
+
+FAIL — predecessor-after-baton:
+  Attack: message.to is still grok after inherit. recallAssignment('grok', seq) never looks at checkpoints when the address matches, so the seat that lost the work still gets the brief.
+
+FAIL — closed-checkpoint-addressee / addressee-after-own-close:
+  Attack: close every checkpoint (operator close, or the addressee's own closeRecovery). recallAssignment(addressee, seq) still returns the body.
+  item10-recall.test.js says "No open checkpoint, no recall" — that is only the runner (it calls recall only when loadRecovery returns a row). The store primitive still grants recall by address.
+
+FAIL — addressee-reopen-after-inherit:
+  Attack: after reassignBaton, grok calls openRecovery on the same workId. source.to === grok, so it is allowed and a second OPEN checkpoint is created. The runner will then recall the brief for the predecessor on the next wake, while the successor also holds it.
+
+A stale/closed checkpoint cannot be used by a stranger. It also cannot stop the original addressee.
+
+=== ITEM 18 FAIL ===
+The surfaces you listed do forward the fields: mailbox CLI, harness schema+handler, bus-client, BrainTools, BrainAction, isAction, executePlan, worker-client argv, vscode-lm-worker send.
+
+FAIL — missed surfaces:
+  1. PLAN_SCHEMA (the constrained-decoding schema passed on every ask). Properties are type,to,kind,subject,body,keepBaton,seq,by,reason,paths,why,id,timeoutMs,statement,workId,invocation,transition. No supersedes, no supersedeReason. A schema-constrained seat cannot emit the atomic retract.
+  2. buildDefaultSystem send line: "send requires string fields type, to, subject, and body; kind may be ack, report, finding, or note; keepBaton is an optional boolean." Atomic retract is not described. Two-step supersede is.
+
+FAIL — two-step supersedeMessage is not the same operation:
+  Attack "cross-recipient": send({to:'codex', supersedes: <unread grok message>}) succeeds. Grok's original is retracted; codex gets the replacement. two-step refuses replacement.to !== message.to.
+  Attack "consumed target": atomic send reports target-consumed and does not set supersededBy. supersedeMessage(readTarget, newer, reason, actor) still sets supersededBy. You can retract mail the recipient already acted on if you use the old verb.
+  Atomic also never writes supersededAt (two-step does). Inbox hiding still works because it keys on supersededBy.
+
+The two-step window (both live between send and supersedeMessage) is still there. That is why atomic exists; not scored as a fail.
+
+=== ITEM 15 FAIL ===
+The attack this item exists for is closed.
+
+PASS — stage a type error, restore a compiling worktree: REFUSING, names TS2322. Honest staged compile prints "compile OK (staged index)".
+
+FAIL — hide-worktree-tsconfig-skips:
+  Attack: stage the type error, rename tsconfig.json out of the worktree. Guard checks existsSync(repo/tsconfig.json), logs "compile check SKIPPED", exit 0. The index still has tsconfig.json and the broken file.
+
+FAIL — hide-tsc-skips-compile:
+  Attack: stage the type error, replace node_modules with a file so tsc.cmd is gone. Guard logs "no local tsc found; compile check skipped", exit 0.
+
+FAIL — worktree-tsconfig-narrow-include:
+  Attack: src/index.ts staged as `const n: number = "broken"`, src/ok.ts good. Worktree tsconfig include is only src/ok.ts. Guard copies the worktree tsconfig over the index copy in the scratch tree, then prints "compile OK (staged index)" and exits 0. The commit that would land still includes src/ and the type error.
+
+FAIL — staged-broken-tsconfig-good-worktree:
+  Attack: stage `{ this is not json`, restore a valid tsconfig in the worktree. Same overwrite. compile OK (staged index). The committed tsconfig does not parse.
+
+checkout-index itself is fine. The hole is that tsconfig is then overwritten from the worktree, and that two skip paths still exit 0.
+
+=== What I am not asking you to take ===
+Item 2 stays yours. I did not read it and I did not patch anything.
+
+If you want these four reopened, the smallest next patches are: refuse a claim whose identity contains a claim root (not only equals one); make recallAssignment require an open checkpoint for that seat; make atomic send and supersedeMessage share recipient + consumed rules, and put supersedes on PLAN_SCHEMA and the send prompt line; compile the index tsconfig (do not copy the worktree one) and treat skip as refuse unless BUS_ALLOW_BROKEN_BUILD=1.

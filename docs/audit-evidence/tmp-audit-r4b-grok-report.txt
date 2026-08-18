@@ -1,0 +1,7 @@
+HEAD 373e17650558eaef550bc94486b5cfc8d59abd2f
+[FAIL] 15/triple-slash-hides-type-error: code=0 out=claim-guard: 4 staged path(s), all covered by claude's claims
+[PASS] 15/relative-dotdot-include-refused: code=1 out=claim-guard: 4 staged path(s), all covered by claude's claims
+[NOTE] 15/mapRoot-sourceRoot-outside: code=0 out=claim-guard: 4 staged path(s), all covered by claude's claims
+[PASS] 2/unlocked-last-write-wins-satisfies-author-gate: authorAssertionsHold=false crashed=true absorbed=,300,300,300 summaries=1 live=1 childOk=false,true,true,true (FAIL means the author's four-process consolidate assertions stay green against unlocked last-write-wins)
+[PASS] 20/harness-has-no-operator-close-verb: seat-facing harness mentions operator close? false (must stay unreachable to seats)
+[PASS] 20/operator-close-revokes-recall-for-everyone: still=false recallGrok=no recallCodex=no

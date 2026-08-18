@@ -1,0 +1,47 @@
+{
+  "pass": 8,
+  "fail": 0,
+  "note": 0,
+  "results": [
+    {
+      "name": "empty-lock-is-debris",
+      "status": "PASS",
+      "detail": "recovered in 5ms"
+    },
+    {
+      "name": "unparseable-lock-is-debris",
+      "status": "PASS",
+      "detail": "recovered in 3ms"
+    },
+    {
+      "name": "missing-pid-lock-is-debris",
+      "status": "PASS",
+      "detail": "recovered in 3ms"
+    },
+    {
+      "name": "lock-path-is-directory",
+      "status": "PASS",
+      "detail": "recovered in 3ms"
+    },
+    {
+      "name": "lock-path-is-nonempty-directory",
+      "status": "PASS",
+      "detail": "recovered in 3ms"
+    },
+    {
+      "name": "string-pid-is-debris",
+      "status": "PASS",
+      "detail": "recovered in 3ms"
+    },
+    {
+      "name": "live-pid-not-debris",
+      "status": "PASS",
+      "detail": "10026ms Timed out waiting for the evidence lock: C:\\Users\\hymlo\\AppData\\Local\\Temp\\pab-r14-live-4H74Ei\\.ai-bus\\runtime\\mailbox\\evidence.json.lock"
+    },
+    {
+      "name": "bom-live-pid-not-debris",
+      "status": "PASS",
+      "detail": "10024ms Timed out waiting for the evidence lock: C:\\Users\\hymlo\\AppData\\Local\\Temp\\pab-r14-bom-B7ahYv\\.ai-bus\\runtime\\mailbox\\evidence.json.lock"
+    }
+  ]
+}

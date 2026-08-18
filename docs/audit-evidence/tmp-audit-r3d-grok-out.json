@@ -1,0 +1,250 @@
+{
+  "summary": {
+    "PASS": 32,
+    "FAIL": 4,
+    "NOTE": 4,
+    "SKIP": 0
+  },
+  "results": [
+    {
+      "item": "meta",
+      "name": "head",
+      "status": "NOTE",
+      "detail": "373e176"
+    },
+    {
+      "item": "meta",
+      "name": "named-commits",
+      "status": "NOTE",
+      "detail": "brief named 8ea4c35/082ddfa; later 8b5ae78 rewrote item 15; 8312282 item 2 left alone"
+    },
+    {
+      "item": 13,
+      "name": "symlink-to-parent",
+      "status": "PASS",
+      "detail": "Claim refused: \"above\" is the whole repository. Ancestor claims below the root (for example src/) are allowed; claiming the root locks every seat out of every file with no expiry. Claim the paths you are actually editing. No claim was recorded."
+    },
+    {
+      "item": 13,
+      "name": "symlink-does-not-lock",
+      "status": "PASS",
+      "detail": "other seat still claims src/bus.ts"
+    },
+    {
+      "item": 13,
+      "name": "root-is-link-child",
+      "status": "PASS",
+      "detail": "[\"src/bus.ts\"]"
+    },
+    {
+      "item": 13,
+      "name": "root-is-link-dot",
+      "status": "PASS",
+      "detail": "Claim refused: \".\" is the whole repository. Ancestor claims below the root (for example src/) are allowed; claiming the root locks every seat out of every file with no expiry. Claim the paths you are actually editing. No claim was recorded."
+    },
+    {
+      "item": 13,
+      "name": "windows-case",
+      "status": "PASS",
+      "detail": "SRC/bus.ts against folder src"
+    },
+    {
+      "item": 13,
+      "name": "claim-src-with-outbound-junction",
+      "status": "PASS",
+      "detail": "claiming src accepted"
+    },
+    {
+      "item": 13,
+      "name": "src-claim-does-not-block-readme",
+      "status": "PASS",
+      "detail": "README still claimable"
+    },
+    {
+      "item": 13,
+      "name": "junction-equals-root",
+      "status": "PASS",
+      "detail": "Claim refused: \"src/all\" is the whole repository. Ancestor claims below the root (for example src/) are allowed; claiming the root locks every seat out of every file with no expiry. Claim the paths you are actually editing. No claim was recorded."
+    },
+    {
+      "item": 13,
+      "name": "file-symlink-outside",
+      "status": "PASS",
+      "detail": "Claim refused: \"alias.md\" is the whole repository. Ancestor claims below the root (for example src/) are allowed; claiming the root locks every seat out of every file with no expiry. Claim the paths you are actually editing. No claim was recorded."
+    },
+    {
+      "item": 10,
+      "name": "inheritedFrom-not-authority",
+      "status": "PASS",
+      "detail": "inheritedFrom written=true pred=false succ=true workId=1"
+    },
+    {
+      "item": 10,
+      "name": "other-workId-no-checkpoint",
+      "status": "PASS",
+      "detail": "open #1 does not grant #2"
+    },
+    {
+      "item": 10,
+      "name": "other-workId-after-move",
+      "status": "PASS",
+      "detail": "after move grok#1=false grok#2=false"
+    },
+    {
+      "item": 10,
+      "name": "open-other-does-not-resurrect-moved",
+      "status": "PASS",
+      "detail": "open #2 resurrected #1? #1=false #2=true"
+    },
+    {
+      "item": 10,
+      "name": "reassign-twice-forward",
+      "status": "PASS",
+      "detail": "grok->codex->claude: grok=false codex=false claude=true"
+    },
+    {
+      "item": 10,
+      "name": "reassign-twice-back",
+      "status": "PASS",
+      "detail": "grok->codex->grok: grok=true codex=false"
+    },
+    {
+      "item": 10,
+      "name": "predecessor-reopen-while-held",
+      "status": "PASS",
+      "detail": "work #1 is held by codex, not grok. It moved; ask for it back rather than re-opening it."
+    },
+    {
+      "item": 10,
+      "name": "production-cliBusClient-source",
+      "status": "FAIL",
+      "detail": "bus-client mentions recallAssignment src=false dist=false cliUsesCliBusClient=true runnerGuards=true"
+    },
+    {
+      "item": 10,
+      "name": "production-cliBusClient-instance",
+      "status": "FAIL",
+      "detail": "typeof client.recallAssignment = undefined"
+    },
+    {
+      "item": 18,
+      "name": "schema-has-supersedes",
+      "status": "PASS",
+      "detail": "supersedes={\"type\":\"number\"}"
+    },
+    {
+      "item": 18,
+      "name": "prompt-describes-atomic",
+      "status": "PASS",
+      "detail": "system prompt names atomic retract"
+    },
+    {
+      "item": 18,
+      "name": "schema-reaches-buildGrokArgs",
+      "status": "PASS",
+      "detail": "flags=--output-format,--always-approve,--json-schema schemaHasSupersedes=true"
+    },
+    {
+      "item": 18,
+      "name": "agent-ask-sites-pass-schema",
+      "status": "PASS",
+      "detail": "PLAN_SCHEMA passed at 2 ask() site(s)"
+    },
+    {
+      "item": 18,
+      "name": "atomic-cross-recipient",
+      "status": "PASS",
+      "detail": "Cannot supersede #1: it was sent to grok, not codex. A replacement must reach the seat whose instruction it retracts. Nothing was sent."
+    },
+    {
+      "item": 18,
+      "name": "twostep-cross-recipient",
+      "status": "PASS",
+      "detail": "superseding message #2 is addressed to codex, not grok"
+    },
+    {
+      "item": 18,
+      "name": "atomic-consumed-policy",
+      "status": "PASS",
+      "detail": "superseded=false outcome=target-consumed orig.supersededBy=undefined"
+    },
+    {
+      "item": 18,
+      "name": "twostep-consumed-policy",
+      "status": "PASS",
+      "detail": "Cannot supersede #1: grok has already read it. Supersession retracts UNREAD mail; send a correction instead, and close the checkpoint if the work should stop."
+    },
+    {
+      "item": 18,
+      "name": "atomic-writes-supersededAt",
+      "status": "PASS",
+      "detail": "supersededAt=2026-08-18T02:18:05.347Z"
+    },
+    {
+      "item": 18,
+      "name": "atomic-empty-reason",
+      "status": "NOTE",
+      "detail": "atomic whitespace reason still retracts (defaults). superseded=true"
+    },
+    {
+      "item": 18,
+      "name": "twostep-empty-reason",
+      "status": "NOTE",
+      "detail": "two-step refuses empty reason: supersession reason must not be empty"
+    },
+    {
+      "item": 15,
+      "name": "negative-control-staged-type-error",
+      "status": "PASS",
+      "detail": "code=1 out=claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - this commit does not compile.\n\nsrc/index.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'.\n\nA commit that does not build blocks every other seat and hides every other\nfailure behind it. Fix it, or commit deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "item": 15,
+      "name": "absolute-include-refused",
+      "status": "PASS",
+      "detail": "code=1 out=claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - include: C:/Users/hymlo/AppData/Local/Temp/pab-r3d-15-y7S9Cz/repo/src\n\ntsc may see the materialised index and node_modules, and nothing else. A config that\nnames the working tree means the guard would be che"
+    },
+    {
+      "item": 15,
+      "name": "untracked-relative-extends-refused",
+      "status": "PASS",
+      "detail": "code=1 out=claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - extends (missing from the index): ./tsconfig.worktree-only.json\n\ntsc may see the materialised index and node_modules, and nothing else. A config that\nnames the working tree means the guard would be checking "
+    },
+    {
+      "item": 15,
+      "name": "bare-extends-package-include-worktree",
+      "status": "FAIL",
+      "detail": "code=0 out=claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: compile OK (staged index)\n"
+    },
+    {
+      "item": 15,
+      "name": "bare-extends-control-worktree-also-broken",
+      "status": "PASS",
+      "detail": "code=1 out=claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - this commit does not compile.\n\n../pab-r3d-15-UmLKvV/repo/src/index.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'.\n\nA commit that does not build blocks every other seat and hides every other\nfailure behind it. Fix it, or commit deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "item": 15,
+      "name": "relative-extends-same-package-refused",
+      "status": "PASS",
+      "detail": "code=1 out=claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - include: C:/Users/hymlo/AppData/Local/Temp/pab-r3d-15-C0KeGB/repo/src\n\ntsc may see the materialised index and node_modules, and nothing else. A config that\nnames the working tree means the guard would be che"
+    },
+    {
+      "item": 15,
+      "name": "bare-extends-array-form",
+      "status": "FAIL",
+      "detail": "code=0 out=claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: compile OK (staged index)\n"
+    },
+    {
+      "item": 15,
+      "name": "hatch-is-loud",
+      "status": "PASS",
+      "detail": "code=0 out=claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: BUS_ALLOW_BROKEN_BUILD=1 - compile check SKIPPED for this commit\n             deliberate WIP. Say so in the commit message.\n"
+    },
+    {
+      "item": 15,
+      "name": "honest-commit-green",
+      "status": "PASS",
+      "detail": "code=0 out=claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: compile OK (staged index)\n"
+    }
+  ]
+}

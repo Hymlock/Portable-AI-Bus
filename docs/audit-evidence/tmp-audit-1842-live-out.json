@@ -1,0 +1,194 @@
+[
+  {
+    "item": 13,
+    "name": "everything-junction",
+    "verdict": "PASS",
+    "detail": "refused: Claim refused: \"everything\" is the whole repository. Ancestor claims below the root (for example src/) are allowed; claiming the root locks every seat out of every file with no expiry. Claim the paths you are actually editing. No claim was recorded."
+  },
+  {
+    "item": 13,
+    "name": "nested-junction-to-root",
+    "verdict": "PASS",
+    "detail": "Claim refused: \"src/alias\" is the whole repository. Ancestor claims below the root (for example src/) are allowed; claiming the root locks every seat out of every file with no expiry. Claim the paths you are actually editing. No claim was recorded."
+  },
+  {
+    "item": 13,
+    "name": "lexical:\".\"",
+    "verdict": "PASS",
+    "detail": "Claim refused: \".\" is the whole repository. Ancestor claims below the root (for example src/) are allowed; claiming the root locks every seat out of every file with no expiry. Claim the paths you are actually editing. No claim was recorded."
+  },
+  {
+    "item": 13,
+    "name": "lexical:\"src/..\"",
+    "verdict": "PASS",
+    "detail": "Claim refused: \".\" is the whole repository. Ancestor claims below the root (for example src/) are allowed; claiming the root locks every seat out of every file with no expiry. Claim the paths you are actually editing. No claim was recorded."
+  },
+  {
+    "item": 13,
+    "name": "lexical:\"src/../.\"",
+    "verdict": "PASS",
+    "detail": "Claim refused: \".\" is the whole repository. Ancestor claims below the root (for example src/) are allowed; claiming the root locks every seat out of every file with no expiry. Claim the paths you are actually editing. No claim was recorded."
+  },
+  {
+    "item": 13,
+    "name": "lexical:\"./\"",
+    "verdict": "PASS",
+    "detail": "Claim refused: \".\" is the whole repository. Ancestor claims below the root (for example src/) are allowed; claiming the root locks every seat out of every file with no expiry. Claim the paths you are actually editing. No claim was recorded."
+  },
+  {
+    "item": 13,
+    "name": "junction-to-bus-root-from-repo",
+    "verdict": "PASS",
+    "detail": "Claim refused: \"tobus\" is the whole repository. Ancestor claims below the root (for example src/) are allowed; claiming the root locks every seat out of every file with no expiry. Claim the paths you are actually editing. No claim was recorded."
+  },
+  {
+    "item": 13,
+    "name": "missing-repoRoot-src-still-works",
+    "verdict": "PASS",
+    "detail": "src resolved via bus root"
+  },
+  {
+    "item": 13,
+    "name": "missing-repoRoot-foreign-tree",
+    "verdict": "FAIL",
+    "detail": "accepted foreign tree claim: [\"otherrepo\"]"
+  },
+  {
+    "item": 13,
+    "name": "parent-of-root-accepted",
+    "verdict": "FAIL",
+    "detail": "junction to parent of root was ACCEPTED (identity is not a claim root)"
+  },
+  {
+    "item": 13,
+    "name": "parent-of-root-locks-tree",
+    "verdict": "FAIL",
+    "detail": "src/bus.ts blocked: codex already holds above since 2026-08-18T00:16:58.837Z: parent of root"
+  },
+  {
+    "item": 13,
+    "name": "green-below-root",
+    "verdict": "PASS",
+    "detail": "src claim"
+  },
+  {
+    "item": 10,
+    "name": "baton-moved",
+    "verdict": "PASS",
+    "detail": "inherited 1"
+  },
+  {
+    "item": 10,
+    "name": "successor-recalls",
+    "verdict": "PASS",
+    "detail": "codex got the brief"
+  },
+  {
+    "item": 10,
+    "name": "uninvolved-blocked",
+    "verdict": "PASS",
+    "detail": "claude got nothing"
+  },
+  {
+    "item": 10,
+    "name": "predecessor-after-baton",
+    "verdict": "FAIL",
+    "detail": "grok still recalls after losing the baton (address short-circuit)"
+  },
+  {
+    "item": 10,
+    "name": "closed-checkpoint-non-addressee",
+    "verdict": "PASS",
+    "detail": "closed checkpoint grants nothing to successor"
+  },
+  {
+    "item": 10,
+    "name": "closed-checkpoint-addressee",
+    "verdict": "FAIL",
+    "detail": "addressee recalls with no open checkpoint"
+  },
+  {
+    "item": 10,
+    "name": "addressee-reopen-after-inherit",
+    "verdict": "FAIL",
+    "detail": "grok reopen allowed; grokRecall=true codexRecall=true"
+  },
+  {
+    "item": 18,
+    "name": "cross-recipient-atomic",
+    "verdict": "FAIL",
+    "detail": "superseded=true grokStillHasOriginal=false recall=false replacementTo=codex"
+  },
+  {
+    "item": 18,
+    "name": "atomic-consumed-does-not-retract",
+    "verdict": "PASS",
+    "detail": "outcome=target-consumed superseded=false"
+  },
+  {
+    "item": 18,
+    "name": "two-step-retracts-consumed",
+    "verdict": "FAIL",
+    "detail": "two-step set supersededBy=4 (atomic would not)"
+  },
+  {
+    "item": 18,
+    "name": "two-step-rejects-cross-recipient",
+    "verdict": "PASS",
+    "detail": "superseding message #7 is addressed to codex, not grok"
+  },
+  {
+    "item": 18,
+    "name": "atomic-sets-superseded",
+    "verdict": "PASS",
+    "detail": "superseded=true"
+  },
+  {
+    "item": 18,
+    "name": "PLAN_SCHEMA-has-supersedes",
+    "verdict": "FAIL",
+    "detail": "PLAN_SCHEMA properties omit supersedes/supersedeReason; keys seen:           type:,          to:,          kind:,          subject:,          body:,          keepBaton:,          seq:,          by:,          reason:,          paths:,          why:,          id:,          timeoutMs:,          statement:,          workId:,          invocation:,          transition:"
+  },
+  {
+    "item": 18,
+    "name": "system-prompt-describes-atomic",
+    "verdict": "FAIL",
+    "detail": "send requires string fields type, to, subject, and body; kind may be ack, report, finding, or note; keepBaton is an optional boolean."
+  },
+  {
+    "item": 18,
+    "name": "extension-mailboxSend-drops-supersedes",
+    "verdict": "FAIL",
+    "detail": "VS Code mailboxSend calls store.send without supersedes"
+  },
+  {
+    "item": 15,
+    "name": "staged-error-good-worktree",
+    "verdict": "PASS",
+    "detail": "exit=1 claim-guard: 1 staged path(s), all covered by grok's claims | claim-guard: REFUSING - this commit does not compile. |  | src/index.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'."
+  },
+  {
+    "item": 15,
+    "name": "hide-worktree-tsconfig-skips",
+    "verdict": "FAIL",
+    "detail": "exit=0 claim-guard: 1 staged path(s), all covered by grok's claims | claim-guard: no tsconfig.json; compile check SKIPPED"
+  },
+  {
+    "item": 15,
+    "name": "worktree-tsconfig-narrow-include",
+    "verdict": "FAIL",
+    "detail": "exit=0 claim-guard: 1 staged path(s), all covered by grok's claims | claim-guard: compile OK (staged index)"
+  },
+  {
+    "item": 15,
+    "name": "staged-broken-tsconfig-good-worktree",
+    "verdict": "FAIL",
+    "detail": "exit=0 claim-guard: 1 staged path(s), all covered by grok's claims | claim-guard: compile OK (staged index)"
+  },
+  {
+    "item": 15,
+    "name": "honest-staged-compiles",
+    "verdict": "FAIL",
+    "detail": "exit=1 claim-guard: 1 staged path(s), all covered by grok's claims | claim-guard: REFUSING - this commit does not compile. | "
+  }
+]

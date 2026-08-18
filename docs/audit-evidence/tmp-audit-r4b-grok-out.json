@@ -1,0 +1,41 @@
+{
+  "head": "373e17650558eaef550bc94486b5cfc8d59abd2f",
+  "results": [
+    {
+      "item": 15,
+      "name": "triple-slash-hides-type-error",
+      "status": "FAIL",
+      "detail": "code=0 out=claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: compile OK (staged index) (staged file does not typecheck unless tsc reads the OUTSIDE .d.ts)"
+    },
+    {
+      "item": 15,
+      "name": "relative-dotdot-include-refused",
+      "status": "PASS",
+      "detail": "code=1 out=claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - include: ../repo/src\n\ntsc may see the materialised index and node_modules, and nothing else. A config that\nnames the working tree means the guard would be checking files this commit does not\ncontain - and an `extends` that is not itself staged would keep resolving locally\nafter the commit lands, staying green here and failing in CI.\n\nThis check verifies the INDEX - what this commit would actually contain"
+    },
+    {
+      "item": 15,
+      "name": "mapRoot-sourceRoot-outside",
+      "status": "NOTE",
+      "detail": "code=0 out=claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: compile OK (staged index) (mapRoot/sourceRoot omitted from walker; write-side, does not hide a type error)"
+    },
+    {
+      "item": 2,
+      "name": "unlocked-last-write-wins-satisfies-author-gate",
+      "status": "PASS",
+      "detail": "authorAssertionsHold=false crashed=true absorbed=,300,300,300 summaries=1 live=1 childOk=false,true,true,true (FAIL means the author's four-process consolidate assertions stay green against unlocked last-write-wins)"
+    },
+    {
+      "item": 20,
+      "name": "harness-has-no-operator-close-verb",
+      "status": "PASS",
+      "detail": "seat-facing harness mentions operator close? false (must stay unreachable to seats)"
+    },
+    {
+      "item": 20,
+      "name": "operator-close-revokes-recall-for-everyone",
+      "status": "PASS",
+      "detail": "still=false recallGrok=no recallCodex=no"
+    }
+  ]
+}

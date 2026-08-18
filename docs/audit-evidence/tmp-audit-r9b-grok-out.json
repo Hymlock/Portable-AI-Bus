@@ -1,0 +1,75 @@
+{
+  "against": "tmp-audit-r6-patches/claim-guard-cli.js (r9-updated)",
+  "head": "373e176",
+  "notHead": true,
+  "pass": 13,
+  "fail": 0,
+  "noteOrSkip": 0,
+  "results": [
+    {
+      "name": "implicit-atypes-junction/control",
+      "status": "PASS",
+      "detail": "worktree tsc compiles via the leak"
+    },
+    {
+      "name": "implicit-atypes-junction",
+      "status": "PASS",
+      "detail": "code=1\nclaim-guard: 3 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - typeRoots (default @types): hidden-fix\n\ntsc may see the materialised index and node_modules, and nothing else. A config that\nnames the working tree means the guard would be checking files this commit does not\ncontain - and an `extends` that is not itself staged would keep resolving locally\nafter the commit lands, staying green here and failing in CI.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "name": "compilerOptions-types-junction/control",
+      "status": "PASS",
+      "detail": "worktree tsc compiles via the leak"
+    },
+    {
+      "name": "compilerOptions-types-junction",
+      "status": "PASS",
+      "detail": "code=1\nclaim-guard: 3 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - compilerOptions.types: hidden-fix\n  - typeRoots (default @types): hidden-fix\n\ntsc may see the materialised index and node_modules, and nothing else. A config that\nnames the working tree means the guard would be checking files this commit does not\ncontain - and an `extends` that is not itself staged would keep resolving locally\nafter the commit lands, staying green here and failing in CI.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "name": "triple-slash-types/control",
+      "status": "PASS",
+      "detail": "worktree tsc compiles via the leak"
+    },
+    {
+      "name": "triple-slash-types",
+      "status": "PASS",
+      "detail": "code=1\nclaim-guard: 3 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - /// <reference types> in src/index.ts: hidden-fix\n  - typeRoots (default @types): hidden-fix\n\ntsc may see the materialised index and node_modules, and nothing else. A config that\nnames the working tree means the guard would be checking files this commit does not\ncontain - and an `extends` that is not itself staged would keep resolving locally\nafter the commit lands, staying green here and failing in CI.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "name": "bare-package-junction-to-worktree/control",
+      "status": "PASS",
+      "detail": "worktree tsc compiles via the leak"
+    },
+    {
+      "name": "bare-package-junction-to-worktree",
+      "status": "PASS",
+      "detail": "code=1\nclaim-guard: 5 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - import leak-pkg in src/index.ts\n\ntsc may see the materialised index and node_modules, and nothing else. A config that\nnames the working tree means the guard would be checking files this commit does not\ncontain - and an `extends` that is not itself staged would keep resolving locally\nafter the commit lands, staying green here and failing in CI.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "name": "dynamic-import-absolute/control",
+      "status": "PASS",
+      "detail": "worktree tsc compiles via the leak"
+    },
+    {
+      "name": "dynamic-import-absolute",
+      "status": "PASS",
+      "detail": "code=1\nclaim-guard: 3 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - import C:/Users/hymlo/AppData/Local/Temp/pab-r9b-ob3IOw/hidden-pkg in src/index.ts\n\ntsc may see the materialised index and node_modules, and nothing else. A config that\nnames the working tree means the guard would be checking files this commit does not\ncontain - and an `extends` that is not itself staged would keep resolving locally\nafter the commit lands, staying green here and failing in CI.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "name": "import-equals-require-absolute/control",
+      "status": "PASS",
+      "detail": "worktree tsc compiles via the leak"
+    },
+    {
+      "name": "import-equals-require-absolute",
+      "status": "PASS",
+      "detail": "code=1\nclaim-guard: 3 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - import C:/Users/hymlo/AppData/Local/Temp/pab-r9b-srnJ9m/hidden-pkg in src/index.ts\n\ntsc may see the materialised index and node_modules, and nothing else. A config that\nnames the working tree means the guard would be checking files this commit does not\ncontain - and an `extends` that is not itself staged would keep resolving locally\nafter the commit lands, staying green here and failing in CI.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "name": "honest-green",
+      "status": "PASS",
+      "detail": "code=0\nclaim-guard: 3 staged path(s), all covered by claude's claims\nclaim-guard: compile OK (staged index)\n"
+    }
+  ]
+}

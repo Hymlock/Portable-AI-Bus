@@ -1,0 +1,105 @@
+{
+  "against": "tmp-audit-r6-patches/claim-guard-cli.js (r9-updated)",
+  "head": "373e176",
+  "notHead": true,
+  "pass": 7,
+  "fail": 2,
+  "noteOrSkip": 10,
+  "results": [
+    {
+      "name": "pkgjson-types-absolute/control",
+      "status": "NOTE",
+      "detail": "worktree tsc does not compile this spelling: src/index.ts(2,22): error TS2304: Cannot find name 'HiddenFix'.\r\nCommand failed: C:\\WINDOWS\\system32\\cmd.exe /c C:\\Users\\hymlo\\AppData\\Local\\Temp\\pab-r10-UXya6T\\repo\\node_modules\\.bin\\tsc.cmd -p C:\\Users\\hymlo\\AppData\\Local\\Temp\\pab-r10-UXya6T\\repo --noEmit"
+    },
+    {
+      "name": "pkgjson-types-absolute",
+      "status": "NOTE",
+      "detail": "no red-capable control; guard code=1 claim-guard: 3 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - this commit does not compile.\n\nsrc/index.ts(2,22): error TS2304: Cannot find name 'HiddenFix'.\n\nA commit that does not build blocks every other seat and hides every other\nfailure behind it. Fix it, or commit deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "name": "pkgjson-exports-types-absolute/control",
+      "status": "NOTE",
+      "detail": "worktree tsc does not compile this spelling: src/index.ts(1,19): error TS2307: Cannot find module 'leak-exports' or its corresponding type declarations.\r\nCommand failed: C:\\WINDOWS\\system32\\cmd.exe /c C:\\Users\\hymlo\\AppData\\Local\\Temp\\pab-r10-XowmPl\\repo\\node_modules\\.bin\\tsc.cmd -p C:\\Users\\hymlo\\AppData\\Local\\Temp\\pab-r10-XowmPl\\repo --noEmit"
+    },
+    {
+      "name": "pkgjson-exports-types-absolute",
+      "status": "NOTE",
+      "detail": "no red-capable control; guard code=1 claim-guard: 3 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - this commit does not compile.\n\nsrc/index.ts(1,19): error TS2307: Cannot find module 'leak-exports' or its corresponding type declarations.\n\nA commit that does not build blocks every other seat and hides every other\nfailure behind it. Fix it, or commit deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "name": "pkgjson-imports-hash/control",
+      "status": "NOTE",
+      "detail": "worktree tsc does not compile this spelling: src/index.ts(1,19): error TS2307: Cannot find module '#hidden' or its corresponding type declarations.\r\nCommand failed: C:\\WINDOWS\\system32\\cmd.exe /c C:\\Users\\hymlo\\AppData\\Local\\Temp\\pab-r10-wcU5se\\repo\\node_modules\\.bin\\tsc.cmd -p C:\\Users\\hymlo\\AppData\\Local\\Temp\\pab-r10-wcU5se\\repo --noEmit"
+    },
+    {
+      "name": "pkgjson-imports-hash",
+      "status": "NOTE",
+      "detail": "no red-capable control; guard code=1 claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - this commit does not compile.\n\nsrc/index.ts(1,19): error TS2307: Cannot find module '#hidden' or its corresponding type declarations.\n\nA commit that does not build blocks every other seat and hides every other\nfailure behind it. Fix it, or commit deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "name": "jsx-import-source/control",
+      "status": "PASS",
+      "detail": "worktree tsc compiles via the leak; list has 9 files"
+    },
+    {
+      "name": "jsx-import-source",
+      "status": "FAIL",
+      "detail": "code=0\nclaim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: compile OK (staged index)\n"
+    },
+    {
+      "name": "allowjs-absolute-import/control",
+      "status": "PASS",
+      "detail": "worktree tsc compiles via the leak; list has 8 files"
+    },
+    {
+      "name": "allowjs-absolute-import",
+      "status": "FAIL",
+      "detail": "code=0\nclaim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: compile OK (staged index)\n"
+    },
+    {
+      "name": "amd-dependency/control",
+      "status": "NOTE",
+      "detail": "worktree tsc does not compile this spelling: src/index.ts(2,22): error TS2304: Cannot find name 'HiddenFix'.\r\nCommand failed: C:\\WINDOWS\\system32\\cmd.exe /c C:\\Users\\hymlo\\AppData\\Local\\Temp\\pab-r10-ZMlj96\\repo\\node_modules\\.bin\\tsc.cmd -p C:\\Users\\hymlo\\AppData\\Local\\Temp\\pab-r10-ZMlj96\\repo --noEmit"
+    },
+    {
+      "name": "amd-dependency",
+      "status": "NOTE",
+      "detail": "no red-capable control; guard code=1 claim-guard: 3 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - this commit does not compile.\n\nsrc/index.ts(2,22): error TS2304: Cannot find name 'HiddenFix'.\n\nA commit that does not build blocks every other seat and hides every other\nfailure behind it. Fix it, or commit deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "name": "export-star-absolute/control",
+      "status": "PASS",
+      "detail": "worktree tsc compiles via the leak; list has 9 files"
+    },
+    {
+      "name": "export-star-absolute",
+      "status": "PASS",
+      "detail": "code=1\nclaim-guard: 3 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - import C:/Users/hymlo/AppData/Local/Temp/pab-r10-vxdG0I/hidden-star in src/index.ts\n\ntsc may see the materialised index and node_modules, and nothing else. A config that\nnames the working tree means the guard would be checking files this commit does not\ncontain - and an `extends` that is not itself staged would keep resolving locally\nafter the commit lands, staying green here and failing in CI.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "name": "paths-alias-outside/control",
+      "status": "PASS",
+      "detail": "worktree tsc compiles via the leak; list has 9 files"
+    },
+    {
+      "name": "paths-alias-outside",
+      "status": "PASS",
+      "detail": "code=1\nclaim-guard: 3 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - compilerOptions.paths[\"@hidden\"]: C:/Users/hymlo/AppData/Local/Temp/pab-r10-vxTg2Q/hidden-paths\n\ntsc may see the materialised index and node_modules, and nothing else. A config that\nnames the working tree means the guard would be checking files this commit does not\ncontain - and an `extends` that is not itself staged would keep resolving locally\nafter the commit lands, staying green here and failing in CI.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "name": "baseUrl-outside/control",
+      "status": "NOTE",
+      "detail": "worktree tsc does not compile this spelling: src/index.ts(1,22): error TS2304: Cannot find name 'HiddenFix'.\r\nCommand failed: C:\\WINDOWS\\system32\\cmd.exe /c C:\\Users\\hymlo\\AppData\\Local\\Temp\\pab-r10-wrL3W0\\repo\\node_modules\\.bin\\tsc.cmd -p C:\\Users\\hymlo\\AppData\\Local\\Temp\\pab-r10-wrL3W0\\repo --noEmit"
+    },
+    {
+      "name": "baseUrl-outside",
+      "status": "NOTE",
+      "detail": "no red-capable control; guard code=1 claim-guard: 3 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - compilerOptions.baseUrl: C:/Users/hymlo/AppData/Local/Temp/pab-r10-wrL3W0/hidden-base\n\ntsc may see the materialised index and node_modules, and nothing else. A config that\nnames the working tree means the guard would be checking files this commit does not\ncontain - and an `extends` that is not itself staged would keep resolving locally\nafter the commit lands, staying green here and failing in CI.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "name": "honest-green",
+      "status": "PASS",
+      "detail": "code=0\nclaim-guard: 3 staged path(s), all covered by claude's claims\nclaim-guard: compile OK (staged index)\n"
+    }
+  ]
+}

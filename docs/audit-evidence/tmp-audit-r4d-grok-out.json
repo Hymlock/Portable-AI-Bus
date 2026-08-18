@@ -1,0 +1,320 @@
+{
+  "HEAD": "373e17650558eaef550bc94486b5cfc8d59abd2f",
+  "at": "2026-08-18T03:44:13.274Z",
+  "counts": {
+    "2": {
+      "PASS": 11,
+      "FAIL": 4,
+      "NOTE": 2,
+      "SKIP": 0
+    },
+    "15": {
+      "PASS": 10,
+      "FAIL": 10,
+      "NOTE": 4,
+      "SKIP": 0
+    },
+    "20": {
+      "PASS": 8,
+      "FAIL": 0,
+      "NOTE": 0,
+      "SKIP": 0
+    }
+  },
+  "results": [
+    {
+      "item": 15,
+      "name": "staged-type-error-red",
+      "status": "PASS",
+      "detail": "code=1 out=claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - this commit does not compile.\n\nsrc/index.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'.\n\nA commit that does not build blocks every other seat and hides every other\nfailure behind it. Fix it, or commit deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message."
+    },
+    {
+      "item": 15,
+      "name": "honest-green",
+      "status": "PASS",
+      "detail": "code=0 out=claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: compile OK (staged index)"
+    },
+    {
+      "item": 15,
+      "name": "absolute-include-refused",
+      "status": "PASS",
+      "detail": "code=1 out=claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - include: C:/Users/hymlo/AppData/Local/Temp/pab-r4d-uZAS9Y/repo/src\n\ntsc may see the materialised index and node_modules, and nothing else. A config that\nnames the working tree means the guard would be checking files this commit does not\ncontain - and an `extends` that is not itself staged would keep resolv"
+    },
+    {
+      "item": 15,
+      "name": "relative-dotdot-include-refused",
+      "status": "PASS",
+      "detail": "code=1 out=claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - include: ../repo/src\n\ntsc may see the materialised index and node_modules, and nothing else. A config that\nnames the working tree means the guard would be checking files this commit does not\ncontain - and an"
+    },
+    {
+      "item": 15,
+      "name": "untracked-extends-refused",
+      "status": "PASS",
+      "detail": "code=1 out=claim-guard: 3 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - extends (missing from the index): ./tsconfig.base.json\n\ntsc may see the materialised index and node_modules, and nothing else. A config that\nnames the working tree means the guard would be checking files thi"
+    },
+    {
+      "item": 15,
+      "name": "hatch-loud",
+      "status": "PASS",
+      "detail": "code=0 out=claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: BUS_ALLOW_BROKEN_BUILD=1 - compile check SKIPPED for this commit\n             deliberate WIP. Say so in the commit message."
+    },
+    {
+      "item": 15,
+      "name": "missing-mailbox-still-compiles",
+      "status": "PASS",
+      "detail": "code=1 out=claim-guard: no mailbox state found; claim check skipped (not a shared worktree)\nclaim-guard: REFUSING - this commit does not compile.\n\nsrc/index.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'.\n\nA commit that does not build blocks every other seat and hides every other\nfailure behind it. Fix it, or commit deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message."
+    },
+    {
+      "item": 15,
+      "name": "relative-nm-extends-refused",
+      "status": "PASS",
+      "detail": "code=1 out=claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - include: C:/Users/hymlo/AppData/Local/Temp/pab-r4d-7h2tk5/repo/src\n\ntsc may see the materialised index and node_modules, and nothing else. A config that\nnames the working tree means the guard would be checking files this commit does not\ncontain - and an `extends` that is not itself staged would keep resolv"
+    },
+    {
+      "item": 15,
+      "name": "bare-extends-subpath",
+      "status": "FAIL",
+      "detail": "code=0 compileOk=true tscNamedWorktree=false out=claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: compile OK (staged index)"
+    },
+    {
+      "item": 15,
+      "name": "bare-extends-array",
+      "status": "FAIL",
+      "detail": "code=0 compileOk=true tscNamedWorktree=false out=claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: compile OK (staged index)"
+    },
+    {
+      "item": 15,
+      "name": "bare-extends-package",
+      "status": "FAIL",
+      "detail": "code=0 compileOk=true tscNamedWorktree=false out=claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: compile OK (staged index)"
+    },
+    {
+      "item": 15,
+      "name": "bare-extends-control-worktree-broken",
+      "status": "FAIL",
+      "detail": "code=1 namesWorktree=false out=claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - this commit does not compile.\n\n../pab-r4d-xYqZQa/repo/src/index.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'.\n\nA commit that does not build blocks every other seat and hides every other\nfailure behind it. Fix it, or commit deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message."
+    },
+    {
+      "item": 15,
+      "name": "include-nm-junction-to-worktree",
+      "status": "FAIL",
+      "detail": "code=0 compileOk=true out=claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: compile OK (staged index)"
+    },
+    {
+      "item": 15,
+      "name": "files-nm-junction-to-worktree",
+      "status": "FAIL",
+      "detail": "code=0 compileOk=true out=claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: compile OK (staged index)"
+    },
+    {
+      "item": 15,
+      "name": "triple-slash-outside-d.ts",
+      "status": "FAIL",
+      "detail": "code=0 compileOk=true out=claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: compile OK (staged index)"
+    },
+    {
+      "item": 15,
+      "name": "staged-symlink-to-outside",
+      "status": "FAIL",
+      "detail": "code=0 compileOk=true out=claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: compile OK (staged index)"
+    },
+    {
+      "item": 15,
+      "name": "nocheck-hides-type-error",
+      "status": "NOTE",
+      "detail": "code=0 compileOk=true out=claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: NOTE - the staged tsconfig sets noCheck; tsc will not type-check.\n             The compile below proves only that the config loads.\nclaim-guard: compile OK (staged index)"
+    },
+    {
+      "item": 15,
+      "name": "tsBuildInfoFile-outside",
+      "status": "NOTE",
+      "detail": "code=0 compileOk=true out=claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: compile OK (staged index)"
+    },
+    {
+      "item": 15,
+      "name": "outFile-outside",
+      "status": "NOTE",
+      "detail": "code=0 compileOk=true out=claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: compile OK (staged index)"
+    },
+    {
+      "item": 15,
+      "name": "mapRoot-outside",
+      "status": "NOTE",
+      "detail": "code=0 compileOk=true out=claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: compile OK (staged index)"
+    },
+    {
+      "item": 15,
+      "name": "subdir-tsconfig-not-autopicked",
+      "status": "PASS",
+      "detail": "code=0 out=claim-guard: 6 staged path(s), all covered by claude's claims\nclaim-guard: compile OK (staged index)"
+    },
+    {
+      "item": 15,
+      "name": "project-references-not-followed-by-tsc-p",
+      "status": "FAIL",
+      "detail": "code=1 out=claim-guard: 5 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - this commit does not compile.\n\ntsconfig.json(13,5): error TS6310: Referenced project 'C:/Users/hymlo/AppData/Local/Temp/claim-guard-index-voVIfB/packages/lib' may not disable emit.\n\nA commit that does not build blocks every other seat and hides every other\nfailure behind it. Fix it, or commit deliberately with BU"
+    },
+    {
+      "item": 15,
+      "name": "typeroots-nm-junction",
+      "status": "FAIL",
+      "detail": "code=0 compileOk=true out=claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: compile OK (staged index)"
+    },
+    {
+      "item": 15,
+      "name": "staged-node-modules-fail-closed",
+      "status": "PASS",
+      "detail": "code=1 out=claim-guard: REFUSING - 1 of 5 staged path(s) are not yours\n\n  node_modules/x/index.js\n      not covered by any claim of yours - claim it first, or stage explicitly rather than with `git add -A`\n\nThree agents share this worktree. `git add -A` stages their work too, and a\nstaged file looks the same whoever wrote it. Stage your own paths by name."
+    },
+    {
+      "item": 2,
+      "name": "invalidate-restores-absorbed",
+      "status": "PASS",
+      "detail": "absorbed=3 live=a,b,c summaryInvalid=true"
+    },
+    {
+      "item": 2,
+      "name": "two-summaries-over-time",
+      "status": "PASS",
+      "detail": "afterS2=consolidated: work #2,b1,b2,b3 afterS1=a1,a2,a3,b1,b2,b3"
+    },
+    {
+      "item": 2,
+      "name": "superseded-before-absorption-untouched",
+      "status": "PASS",
+      "detail": "supersededBy=883e3bb3-2d97-459e-a9d9-a337f2ae9173 expected=883e3bb3-2d97-459e-a9d9-a337f2ae9173"
+    },
+    {
+      "item": 2,
+      "name": "restore-keeps-own-trust",
+      "status": "PASS",
+      "detail": "a=verified b=untrusted summaryWas=untrusted"
+    },
+    {
+      "item": 2,
+      "name": "old-summary-invalidate-does-not-steal",
+      "status": "PASS",
+      "detail": "live=consolidated: work #5:s2"
+    },
+    {
+      "item": 2,
+      "name": "dead-owner-lock-recovers",
+      "status": "PASS",
+      "detail": "dtMs=5 id=b605dce5-f5d3-4d85-9ae6-8b452d08f0ad"
+    },
+    {
+      "item": 2,
+      "name": "empty-lock-is-debris",
+      "status": "FAIL",
+      "detail": "dtMs=10018 error=Timed out waiting for the evidence lock: C:\\Users\\hymlo\\AppData\\Local\\Temp\\pab-r4d-e-7yzL4I\\.ai-bus\\runtime\\mailbox\\evidence.json.lock"
+    },
+    {
+      "item": 2,
+      "name": "malformed-lock-is-debris",
+      "status": "FAIL",
+      "detail": "dtMs=10023 error=Timed out waiting for the evidence lock: C:\\Users\\hymlo\\AppData\\Local\\Temp\\pab-r4d-e-JARGMk\\.ai-bus\\runtime\\mailbox\\evidence.json.lock"
+    },
+    {
+      "item": 2,
+      "name": "missing-pid-lock-is-debris",
+      "status": "FAIL",
+      "detail": "dtMs=10017 error=Timed out waiting for the evidence lock: C:\\Users\\hymlo\\AppData\\Local\\Temp\\pab-r4d-e-kPEof6\\.ai-bus\\runtime\\mailbox\\evidence.json.lock"
+    },
+    {
+      "item": 2,
+      "name": "closeRecovery-survives-consolidate-throw",
+      "status": "PASS",
+      "detail": "closed=closed reason=done"
+    },
+    {
+      "item": 2,
+      "name": "closeRecovery-compacts",
+      "status": "PASS",
+      "detail": "summaries=1 absorbed=3 live=1"
+    },
+    {
+      "item": 2,
+      "name": "operatorCloseRecovery-compacts",
+      "status": "FAIL",
+      "detail": "closed=closed summaries=0 live=3 reason=operator-closed: stranded"
+    },
+    {
+      "item": 2,
+      "name": "inherit-must-not-compact",
+      "status": "PASS",
+      "detail": "summaries=0 live=3"
+    },
+    {
+      "item": 2,
+      "name": "four-process-record-unique-event-ids",
+      "status": "PASS",
+      "detail": "parsed=[{\"ok\":true,\"id\":1,\"subject\":\"r0\"},{\"ok\":true,\"id\":3,\"subject\":\"r1\"},{\"ok\":true,\"id\":2,\"subject\":\"r2\"},{\"ok\":true,\"id\":4,\"subject\":\"r3\"}]"
+    },
+    {
+      "item": 2,
+      "name": "four-process-consolidate-locked",
+      "status": "PASS",
+      "detail": "children=[{\"ok\":true,\"absorbed\":0},{\"ok\":true,\"absorbed\":0},{\"ok\":true,\"absorbed\":300},{\"ok\":true,\"absorbed\":0}] summaries=1 live=1 absorbed=300"
+    },
+    {
+      "item": 2,
+      "name": "unlocked-four-process-can-go-red",
+      "status": "NOTE",
+      "detail": "crashHalf=false children=[{\"ok\":true,\"absorbed\":300},{\"ok\":true,\"absorbed\":300},{\"ok\":true,\"absorbed\":300},{\"ok\":true,\"absorbed\":300}] leftover={\"summaries\":1,\"live\":1,\"absorbed\":300}"
+    },
+    {
+      "item": 2,
+      "name": "unlocked-leftover-is-lww-shape",
+      "status": "NOTE",
+      "detail": "leftover={\"summaries\":1,\"live\":1,\"absorbed\":300} — if this is 1/1/300, author's lost-update assertions are the LWW shape and cannot go red"
+    },
+    {
+      "item": 20,
+      "name": "seat-cannot-close-foreign-row",
+      "status": "PASS",
+      "detail": "stolen=undefined stillOpen=true"
+    },
+    {
+      "item": 20,
+      "name": "operator-close-logs-reason",
+      "status": "PASS",
+      "detail": "reason=operator-closed: node-pty vanished"
+    },
+    {
+      "item": 20,
+      "name": "empty-reason-refused",
+      "status": "PASS",
+      "detail": "error=Operator close refused: a reason is required. Nothing was closed. recallKept=string"
+    },
+    {
+      "item": 20,
+      "name": "operator-close-already-closed-noop",
+      "status": "PASS",
+      "detail": "first=operator-closed: first second=undefined"
+    },
+    {
+      "item": 20,
+      "name": "runner-closeRecovery-still-closes",
+      "status": "PASS",
+      "detail": "reason=done"
+    },
+    {
+      "item": 20,
+      "name": "recall-gone-after-operator-close",
+      "status": "PASS",
+      "detail": "recalls={}"
+    },
+    {
+      "item": 20,
+      "name": "cli-close-recovery-reaches-operator",
+      "status": "PASS",
+      "detail": "code=0 out=closed 1: operator-closed: cli-stranded second=undefined"
+    },
+    {
+      "item": 20,
+      "name": "harness-has-no-close-recovery-verb",
+      "status": "PASS",
+      "detail": "hasVerb=false"
+    }
+  ]
+}
