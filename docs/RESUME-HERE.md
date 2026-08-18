@@ -21,6 +21,61 @@ grok audited the last six bar items and failed six of seven. Five are now FIXED:
 Gates: `tests/audit-fixes.test.js`, six tests. All six were run against the reverted source
 (`git stash push -- src`, rebuild) and **all six fail there**. Each has a green control.
 
+### Second audit result (grok, 2026-08-17) — item 7 PASSES, four still FAIL
+
+grok audited `0472056` and `6480d81`. Full report: `tmp-audit-1842-report.txt` at the repo
+root, with its probe scripts (`tmp-audit-*.cjs/.mjs`) beside it — untracked, deliberately.
+**Read it before touching any of these.** Summary:
+
+**Item 7 — PASS.** Closed. One note, not a failure: `vscode-lm-worker`'s `mailbox_claim`
+schema still lists only `paths` as required and the handler still calls `optionalString`, so a
+missing `why` becomes `''` and the store refuses it. It does not invent a reason.
+
+**Item 13 — FAIL, two attacks.** The attack I fixed is closed (every spelling of the root, and
+junctions to the bus root or repo root, are refused).
+1. *parent-of-root junction*: a junction `above` → the workspace's **parent**. Its identity is
+   not a claim root, so it is accepted; `claimsOverlap` then walks the parent and blocks every
+   other seat. Another spelling of everything, one directory up.
+2. *missing claim root + foreign tree*: with `repoRoot` set to a path that does not exist, a
+   junction to an unrelated tree is accepted. Live on `vscode-lm-worker`, the CLI without
+   `--repo`, and `MailboxStore.claim` with no `repoRoot`. The HTTP path is safe — the harness
+   CLI rejects a missing `--claim-repo` at startup.
+
+**Item 10 — FAIL, three attacks.** The successor path works; the *predecessor* path does not.
+`recallAssignment` never looks at checkpoints when the address matches, so:
+1. after `reassignBaton` the seat that **lost** the work still gets the brief;
+2. after every checkpoint is closed (operator close, or the addressee's own `closeRecovery`),
+   the addressee still gets it — `item10-recall.test.js` only proves the *runner* declines to
+   ask, not that the store declines to answer;
+3. after inheritance the predecessor can call `openRecovery` again on the same workId, because
+   `source.to` still names it, producing two open checkpoints on one assignment.
+
+**Item 18 — FAIL, two classes.** All nine surfaces I wired do forward the fields. But:
+1. `PLAN_SCHEMA` — the constrained-decoding schema sent on every ask — has no `supersedes` or
+   `supersedeReason`, and `buildDefaultSystem`'s send line does not describe the atomic
+   retract. A schema-constrained seat literally cannot emit it. *Same defect as the one item 18
+   is about, one layer up.*
+2. atomic send and `supersedeMessage` disagree: atomic allows a **cross-recipient** retract
+   (two-step refuses it), two-step will retract a **consumed** target (atomic correctly
+   reports `target-consumed`), and atomic never writes `supersededAt`.
+
+**Item 15 — FAIL, four attacks.** `checkout-index` itself is sound; the holes are around it.
+1. rename `tsconfig.json` out of the worktree → `compile check SKIPPED`, exit 0, while the
+   index still holds both the tsconfig and the broken file;
+2. remove `node_modules` → `no local tsc found`, exit 0;
+3. the guard **copies the worktree tsconfig over the index copy**, so a worktree tsconfig with
+   a narrow `include` compiles a subset and prints `compile OK (staged index)`;
+4. same overwrite lets a staged **non-parsing** tsconfig land behind a good worktree one.
+
+**grok's suggested smallest patches** (its words, worth keeping): refuse a claim whose identity
+*contains* a claim root rather than only equals one; make `recallAssignment` require an open
+checkpoint for that seat, full stop; make atomic send and `supersedeMessage` share recipient
+and consumed rules, and put `supersedes` on `PLAN_SCHEMA` and the send prompt line; compile the
+**index's** tsconfig rather than copying the worktree's, and treat a skip as a refusal unless
+`BUS_ALLOW_BROKEN_BUILD=1`.
+
+Item 2 is untouched and still mine.
+
 ### The one item still open — item 2
 
 **Item 2 (evidence consolidation) is NOT fixed.** It is the next thing to do, and it is mine.

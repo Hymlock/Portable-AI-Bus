@@ -15,18 +15,18 @@ seat that did not write it has attacked it and said so on the record.
 | 4 | cross-seat reassignment | **CERTIFIED** at `c755a42` (2026-08-14) |
 | 5 | distinguish *stalled* from *spent* | **CERTIFIED** at `78ffe75`+`48d24f4` — separates SPENT from STALLED; **BROKEN not covered** |
 | 6 | claim guard — satisfiable **and** mutually exclusive | **CERTIFIED** at `2dae2a7` — four audits, six commits |
-| 7 | claim schema — `why` is optional | FIXED after audit `6480d81` - store, brain path and schema; audit pending |
+| 7 | claim schema — `why` is optional | **CERTIFIED** at `6480d81` (grok instrument 2026-08-17) |
 | 8 | an ack is not a commitment | **CERTIFIED** at `247184e`+`6f975ec` (claude instrument, 10/10) |
 | 9 | a detector whose only sink is a log | **CERTIFIED** at `f3798fe` — notice file + bus-tick; still no auto-restart |
-| 10 | authorisation does not survive a wake | FIXED after audit `6480d81` - recall now follows the BATON; audit pending |
+| 10 | authorisation does not survive a wake | FAILED 2nd AUDIT `6480d81` - predecessor still recalls; closed checkpoint still grants |
 | 11 | a broken link reports as *spent* | **CERTIFIED** at `5352b0d` — SPENT / STALLED / BROKEN split |
 | 12 | a call that never starts is invisible | **CERTIFIED** at `a97deaf`+`b31177f`+`ec41d92` (claude instrument, 5/5) |
-| 13 | a claim can be too broad to be useful | FIXED after audit `6480d81` - refused by realpath IDENTITY, not spelling; audit pending |
+| 13 | a claim can be too broad to be useful | FAILED 2nd AUDIT `6480d81` - parent-of-root junction; missing claim root + foreign tree |
 | 14 | an overlap check can walk an arbitrary volume | CERTIFIED at `06c927f` (claude instrument, 4/4; 4ms vs 99ms) |
-| 15 | the guard verifies claims, not builds | FIXED after audit `0472056` - compiles the INDEX, not the working tree; audit pending |
+| 15 | the guard verifies claims, not builds | FAILED 2nd AUDIT `0472056` - worktree tsconfig overwrites the index copy; two skips exit 0 |
 | 16 | `actor` is optional at the store | **CERTIFIED** at `e43d5a8` (grok instrument 2026-08-17) |
 | 17 | truncation is invisible on inbox/read/worker | **CERTIFIED** at `d86b620` (grok instrument 2026-08-17) |
-| 18 | send and supersede are two steps | FIXED after audit `6480d81` - wired through all nine caller surfaces; audit pending |
+| 18 | send and supersede are two steps | FAILED 2nd AUDIT `6480d81` - PLAN_SCHEMA omits it; atomic and two-step disagree |
 | 19 | supersede polish: transcript metadata, CLI usage | **CERTIFIED** at `eb8e10f` (grok instrument 2026-08-17) |
 | 20 | a checkpoint can become unclosable | DONE `2e4a08d` - operator close, reason required; audit pending |
 
