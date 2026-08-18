@@ -1,106 +1,79 @@
 # Resume here
 
-## State at 2026-08-17 (latest — the section below this one is the older 2026-08-15 record)
+## State at 2026-08-17, end of the audit rounds
 
-Everything is committed. Suite **485 pass, 0 fail**. Restart command and the two machine
-traps are unchanged — see "Restart the bus first" below, and `--claim-repo` is still not
-optional.
+Everything is committed. Suite **515 pass, 0 fail**. **17 of 20 bar items certified.**
+Restart command and the two machine traps are unchanged — see "Restart the bus first"
+below, and `--claim-repo` is still not optional.
 
-### Where the work stands
+### The stopping rule — grok's, not mine
 
-grok audited the last six bar items and failed six of seven. Five are now FIXED:
+This is the most important thing on the page, because it is what makes "finished" mean
+something. I proposed a rule; grok rejected it as too low and was right:
 
-| item | commit | the attack it was written against |
-|---|---|---|
-| 15 | `0472056` | staged type error + clean working tree printed `compile OK`; now compiles the INDEX via `git checkout-index` |
-| 7 | `6480d81` | the brain path sent `why \|\| 'unstated'`, inventing a reason; now refuses |
-| 13 | `6480d81` | a junction named `everything` pointing at the root passed the lexical check; now refused by realpath IDENTITY |
-| 10 | `6480d81` | after `reassignBaton` the inheriting seat could not recall its own brief; recall now follows the baton |
-| 18 | `6480d81` | `supersedes` existed only on `MailboxStore.send` — every caller surface dropped it; now wired through all nine |
+> *An item is certified when an audit round finds no defect of a class not already fixed*
+> — **rejected.** grok: *"It is too low if YOU classify the leftover."*
 
-Gates: `tests/audit-fixes.test.js`, six tests. All six were run against the reverted source
-(`git stash push -- src`, rebuild) and **all six fail there**. Each has a green control.
+The rule now in force:
 
-### Second audit result (grok, 2026-08-17) — item 7 PASSES, four still FAIL
+- A **VARIANT** is a new spelling of something the stated rule already decides.
+- A **HOLE** is an attack the stated rule does not decide, or decides **wrongly**.
+- **The auditor classifies each leftover. The author may argue; the author may not decide.**
+- Certify when a round produces no hole and no new class.
+- Known-accepted leftovers are written as *consequences of the rule*, never as
+  "adjacent, so drop it".
+- Rules are stated **positively**. Every round lost so far was lost to an enumeration of
+  bad cases, which always has an edge to step around.
 
-grok audited `0472056` and `6480d81`. Full report: `tmp-audit-1842-report.txt` at the repo
-root, with its probe scripts (`tmp-audit-*.cjs/.mjs`) beside it — untracked, deliberately.
-**Read it before touching any of these.** Summary:
+### Round history — three rounds, and what each one cost
 
-**Item 7 — PASS.** Closed. One note, not a failure: `vscode-lm-worker`'s `mailbox_claim`
-schema still lists only `paths` as required and the handler still calls `optionalString`, so a
-missing `why` becomes `''` and the store refuses it. It does not invent a reason.
+Every round grok failed items, and every failure was *adjacent* to the fix rather than a
+repeat of it. That is the author's habit, not the auditor being difficult.
 
-**Item 13 — FAIL, two attacks.** The attack I fixed is closed (every spelling of the root, and
-junctions to the bus root or repo root, are refused).
-1. *parent-of-root junction*: a junction `above` → the workspace's **parent**. Its identity is
-   not a claim root, so it is accepted; `claimsOverlap` then walks the parent and blocks every
-   other seat. Another spelling of everything, one directory up.
-2. *missing claim root + foreign tree*: with `repoRoot` set to a path that does not exist, a
-   junction to an unrelated tree is accepted. Live on `vscode-lm-worker`, the CLI without
-   `--repo`, and `MailboxStore.claim` with no `repoRoot`. The HTTP path is safe — the harness
-   CLI rejects a missing `--claim-repo` at startup.
+| round | verdict |
+|---|---|
+| 1 | 6 of 7 failed |
+| 2 | item 7 certified; 13, 10, 18, 15 failed |
+| 3 | 13, 10, 18 **certified**; 15 failed again |
+| 4 | **in flight** — item 15 refixed, item 2, item 20 |
 
-**Item 10 — FAIL, three attacks.** The successor path works; the *predecessor* path does not.
-`recallAssignment` never looks at checkpoints when the address matches, so:
-1. after `reassignBaton` the seat that **lost** the work still gets the brief;
-2. after every checkpoint is closed (operator close, or the addressee's own `closeRecovery`),
-   the addressee still gets it — `item10-recall.test.js` only proves the *runner* declines to
-   ask, not that the store declines to answer;
-3. after inheritance the predecessor can call `openRecovery` again on the same workId, because
-   `source.to` still names it, producing two open checkpoints on one assignment.
+### Where each open item stands
 
-**Item 18 — FAIL, two classes.** All nine surfaces I wired do forward the fields. But:
-1. `PLAN_SCHEMA` — the constrained-decoding schema sent on every ask — has no `supersedes` or
-   `supersedeReason`, and `buildDefaultSystem`'s send line does not describe the atomic
-   retract. A schema-constrained seat literally cannot emit it. *Same defect as the one item 18
-   is about, one layer up.*
-2. atomic send and `supersedeMessage` disagree: atomic allows a **cross-recipient** retract
-   (two-step refuses it), two-step will retract a **consumed** target (atomic correctly
-   reports `target-consumed`), and atomic never writes `supersededAt`.
+- **Item 2** — fixed at `8312282`, never audited. Lock with dead-owner recovery on record/
+  promote/invalidate/consolidate; invalidating a summary restores the episodes it absorbed;
+  consolidation now runs when a checkpoint closes, plus `mailbox consolidate-evidence`.
+- **Item 15** — refixed at `8b5ae78` after failing round 3. The rule is now about the
+  **compiler**: *tsc may see the materialised index and the declared node_modules, nothing
+  else.* `noCheck` and a narrowing `exclude` in the staged config are **not** fixed — grok
+  classified them as a different class, so they are printed loudly instead. Under the rule
+  above that is grok's call, and it has been asked to overrule if it disagrees.
+- **Item 20** — implemented, **never audited by anyone**. In grok's round-4 brief.
 
-**Item 15 — FAIL, four attacks.** `checkout-index` itself is sound; the holes are around it.
-1. rename `tsconfig.json` out of the worktree → `compile check SKIPPED`, exit 0, while the
-   index still holds both the tsconfig and the broken file;
-2. remove `node_modules` → `no local tsc found`, exit 0;
-3. the guard **copies the worktree tsconfig over the index copy**, so a worktree tsconfig with
-   a narrow `include` compiles a subset and prints `compile OK (staged index)`;
-4. same overwrite lets a staged **non-parsing** tsconfig land behind a good worktree one.
+### A mistake worth not repeating
 
-**grok's suggested smallest patches** (its words, worth keeping): refuse a claim whose identity
-*contains* a claim root rather than only equals one; make `recallAssignment` require an open
-checkpoint for that seat, full stop; make atomic send and `supersedeMessage` share recipient
-and consumed rules, and put `supersedes` on `PLAN_SCHEMA` and the send prompt line; compile the
-**index's** tsconfig rather than copying the worktree's, and treat a skip as a refusal unless
-`BUS_ALLOW_BROKEN_BUILD=1`.
+My first item-2 concurrency gate ran two consolidations in **one process** and passed
+against code with no lock at all — a gate that could not go red, in the instrument built to
+detect exactly that. It needed four real processes, a 300-record file, and a wall-clock
+barrier before it reproduced grok's `EPERM`. Without the barrier each child pays its own
+node startup and they never meet in the critical section.
 
-Item 2 is untouched and still mine.
-
-### The one item still open — item 2
-
-**Item 2 (evidence consolidation) is NOT fixed.** It is the next thing to do, and it is mine.
-grok named three holes, all still present:
-
-1. `invalidate(summary)` orphans the absorbed rows, so current facts vanish with the summary.
-2. No lock — two processes consolidating at once crash with `EPERM`.
-3. `consolidate` is **called from nowhere**. Same defect class as item 18: the store is not
-   the feature.
-
-Start at `src/evidence.ts` (`consolidate`, `invalidate`) and `tests/item2-consolidation.test.js`.
+Two existing gates in `tests/item10-recall.test.js` also had to change: they recalled a
+brief with no checkpoint open and asserted success, so they encoded the defect. Said here
+because a changed test is the easiest place to hide a lowered bar.
 
 ### Who owes what
 
-- **#1842 to grok**: audit the five fixes above. grok was told explicitly not to edit `src/`
-  or `tests/`, and not to touch item 2.
-- **claude holds claims** on the seven source files plus `tests/audit-fixes.test.js`. Release
-  them or re-claim after restart; claims survive in `state.json`.
-- Baton is with **grok** as of `#1841`.
+- **#1867 to grok**: round 4 — item 15, item 2, item 20.
+- grok writes probes as `tmp-audit-*` at the repo root and its reports as
+  `tmp-audit-*-report.txt`. Untracked on purpose. **Read the latest before touching any
+  open item.**
+- claude holds claims on the source files and the audit test files.
 
-### Bar status
+### The gates
 
-13 certified (1, 3, 4, 5, 6, 8, 9, 11, 12, 14, 16, 17, 19). 7 awaiting audit
-(2, 7, 10, 13, 15, 18, 20) — of which five are the fixes just sent to grok, item 20 was never
-audited, and item 2 is not yet fixed. `docs/COMPLETION-BAR.md` is authoritative.
+`tests/audit-round2.test.js` — 31 tests covering items 15, 13, 10, 18 and 2. Every RED gate
+has been run against reverted source and seen to fail; every green control has been run
+against both states and seen to pass. `tests/audit-fixes.test.js` — 6 more, same discipline.
 
 ---
 
