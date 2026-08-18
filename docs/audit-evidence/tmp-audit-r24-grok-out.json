@@ -1,0 +1,193 @@
+{
+  "summary": {
+    "pass": 28,
+    "fail": 0,
+    "note": 2,
+    "head": "322df62c468486d8558adcfe39e26fc64ff5177e",
+    "hookBlob": "09302e9326b80f556189a5fa6757edc8bf5e0a26",
+    "bbHook": "09302e9326b80f556189a5fa6757edc8bf5e0a26",
+    "e28Hook": "ea74c7b0f556023ee5caa41ab7cb8c29a875d71f"
+  },
+  "results": [
+    {
+      "item": 15,
+      "name": "against",
+      "status": "NOTE",
+      "detail": "HEAD=322df62c468486d8558adcfe39e26fc64ff5177e\nhook-blob=09302e9326b80f556189a5fa6757edc8bf5e0a26\nlive-hash-object=09302e9326b80f556189a5fa6757edc8bf5e0a26\nbb5478b-hook=09302e9326b80f556189a5fa6757edc8bf5e0a26\ne28c7b5-hook=ea74c7b0f556023ee5caa41ab7cb8c29a875d71f\nlive C:\\Users\\hymlo\\Downloads\\Projects\\Portable-AI-Bus\\scripts\\claim-guard-cli.js"
+    },
+    {
+      "item": 15,
+      "name": "hook-identity",
+      "status": "PASS",
+      "detail": "HEAD hook blob matches bb5478b (09302e9326b80f556189a5fa6757edc8bf5e0a26); differs from e28c7b5 (ea74c7b0f556023ee5caa41ab7cb8c29a875d71f)"
+    },
+    {
+      "item": 15,
+      "name": "tree-clean",
+      "status": "PASS",
+      "detail": "scripts/claim-guard-cli.js src/evidence.ts src/mailbox.ts tests/audit-round2.test.js clean"
+    },
+    {
+      "item": 15,
+      "name": "split-evidence-cjs-e28-red",
+      "status": "PASS",
+      "detail": "e28 whole-tree walker must refuse comment text tsc never loads; code=1\nclaim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - import C:/hidden/mod in docs/tmp-audit-r18-grok.cjs\n  - import C:/hidden/mod in docs/tmp-audit-r18-grok.cjs\n\ntsc may see the materialised index and node_modules, and nothing else. A config that\nnames the working tree means the guard would be checking files this commit does not\ncontain - and an `extends` that is not itself staged would keep resolving locally\nafter the commit lands, staying green here and failing in CI.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "item": 15,
+      "name": "split-evidence-cjs-live-green",
+      "status": "PASS",
+      "detail": "docs evidence must be committable on bb5478b; code=0\nclaim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: compile OK (staged index)\n"
+    },
+    {
+      "item": 15,
+      "name": "split-src-cjs-allowJs-off",
+      "status": "PASS",
+      "detail": "unloaded src/*.cjs must not refuse; listed=false; code=0\nclaim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: compile OK (staged index)\n"
+    },
+    {
+      "item": 15,
+      "name": "split-excluded-ts-not-loaded",
+      "status": "PASS",
+      "detail": "excluded file tsc did not load must not refuse; code=0\nclaim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: NOTE - the staged tsconfig excludes 1 pattern(s); excluded files are not checked.\nclaim-guard: compile OK (staged index)\n"
+    },
+    {
+      "item": 15,
+      "name": "split-program-absolute-real",
+      "status": "PASS",
+      "detail": "claim-guard: 3 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - import C:/Users/hymlo/AppData/Local/Temp/pab-r24-97TeGa/hidden in src/index.ts\n\ntsc may see the materialised index and node_modules, and nothing else. Source-text\ninspection runs only on files tsc actually loaded. A file tsc did not load is not\nevidence about what tsc will see.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "item": 15,
+      "name": "split-import-pulled-docs",
+      "status": "PASS",
+      "detail": "claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - import C:/Users/hymlo/AppData/Local/Temp/pab-r24-kSizFP/hidden in docs/outside.ts\n\ntsc may see the materialised index and node_modules, and nothing else. Source-text\ninspection runs only on files tsc actually loaded. A file tsc did not load is not\nevidence about what tsc will see.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "item": 15,
+      "name": "split-rootDirs-unimported",
+      "status": "PASS",
+      "detail": "rootDirs is not membership; code=0\nclaim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: compile OK (staged index)\n"
+    },
+    {
+      "item": 15,
+      "name": "split-rootDirs-imported",
+      "status": "PASS",
+      "detail": "claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - import C:/Users/hymlo/AppData/Local/Temp/pab-r24-b8cxka/hidden in docs/outside.ts\n\ntsc may see the materialised index and node_modules, and nothing else. Source-text\ninspection runs only on files tsc actually loaded. A file tsc did not load is not\nevidence about what tsc will see.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "item": 15,
+      "name": "split-jsdoc-import-types",
+      "status": "PASS",
+      "detail": "claim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - import C:/Users/hymlo/AppData/Local/Temp/pab-r24-KqWSHk/hidden in docs/secret.ts\n\ntsc may see the materialised index and node_modules, and nothing else. Source-text\ninspection runs only on files tsc actually loaded. A file tsc did not load is not\nevidence about what tsc will see.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "item": 15,
+      "name": "split-listfiles-vs-listfilesonly",
+      "status": "PASS",
+      "detail": "noEmit --listFiles and --listFilesOnly named the same 9 files"
+    },
+    {
+      "item": 15,
+      "name": "split-plugins-outside",
+      "status": "NOTE",
+      "detail": "tsc.ok=true listedPlugin=false code=0\n\nclaim-guard: 3 staged path(s), all covered by claude's claims\nclaim-guard: compile OK (staged index)\n"
+    },
+    {
+      "item": 15,
+      "name": "r8b-absolute-import",
+      "status": "PASS",
+      "detail": "claim-guard: 3 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - import C:/Users/hymlo/AppData/Local/Temp/pab-r24-B6sDuL/hidden in src/index.ts\n\ntsc may see the materialised index and node_modules, and nothing else. Source-text\ninspection runs only on files tsc actually loaded. A file tsc did not load is not\nevidence about what tsc will see.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "item": 15,
+      "name": "r8b-staged-dir-symlink",
+      "status": "PASS",
+      "detail": "code=1\nclaim-guard: 4 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - staged symlink: src/leaked\n\ntsc may see the materialised index and node_modules, and nothing else. A config that\nnames the working tree means the guard would be checking files this commit does not\ncontain - and an `extends` that is not itself staged would keep resolving locally\nafter the commit lands, staying green here and failing in CI.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "item": 15,
+      "name": "r9-implicit-atypes-junction",
+      "status": "PASS",
+      "detail": "claim-guard: 3 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - typeRoots (default @types): hidden-fix\n\ntsc may see the materialised index and node_modules, and nothing else. A config that\nnames the working tree means the guard would be checking files this commit does not\ncontain - and an `extends` that is not itself staged would keep resolving locally\nafter the commit lands, staying green here and failing in CI.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "item": 15,
+      "name": "r9-compilerOptions-types-junction",
+      "status": "PASS",
+      "detail": "code=1\nclaim-guard: 3 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - compilerOptions.types: hidden-fix\n  - typeRoots (default @types): hidden-fix\n\ntsc may see the materialised index and node_modules, and nothing else. A config that\nnames the working tree means the guard would be checking files this commit does not\ncontain - and an `extends` that is not itself staged would keep resolving locally\nafter the commit lands, staying green here and failing in CI.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "item": 15,
+      "name": "r9-triple-slash-types",
+      "status": "PASS",
+      "detail": "tsc.ok=true code=1\nclaim-guard: 3 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - typeRoots (default @types): hidden-fix\n\ntsc may see the materialised index and node_modules, and nothing else. A config that\nnames the working tree means the guard would be checking files this commit does not\ncontain - and an `extends` that is not itself staged would keep resolving locally\nafter the commit lands, staying green here and failing in CI.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "item": 15,
+      "name": "r9-bare-specifier-junction",
+      "status": "PASS",
+      "detail": "claim-guard: 3 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - import leak-pkg in src/index.ts\n\ntsc may see the materialised index and node_modules, and nothing else. Source-text\ninspection runs only on files tsc actually loaded. A file tsc did not load is not\nevidence about what tsc will see.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "item": 15,
+      "name": "r10-package-json-types",
+      "status": "PASS",
+      "detail": "claim-guard: 3 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - tsc compiled files outside the staged tree, so nothing here verifies this commit:\n  - C:/Users/hymlo/AppData/Local/Temp/pab-r24-JJ5zL5/hidden-fix-pkg/index.d.ts\n\ntsc may see the materialised index and node_modules, and nothing else. listFilesOnly\nis what the compiler actually loaded. A package.json types/exports field, a\njsxImportSource package, or an allowJs import that resolves outside is the same leak\nas a triple-slash path — the walker is not the authority, tsc is.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "item": 15,
+      "name": "r10-allowJs-absolute",
+      "status": "PASS",
+      "detail": "claim-guard: 3 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig points the compiler OUTSIDE the staged tree, so nothing here verifies this commit:\n  - import C:/Users/hymlo/AppData/Local/Temp/pab-r24-drVkUO/hidden in src/index.js\n\ntsc may see the materialised index and node_modules, and nothing else. Source-text\ninspection runs only on files tsc actually loaded. A file tsc did not load is not\nevidence about what tsc will see.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "item": 15,
+      "name": "honest-green",
+      "status": "PASS",
+      "detail": "code=0\nclaim-guard: 2 staged path(s), all covered by claude's claims\nclaim-guard: compile OK (staged index)\n"
+    },
+    {
+      "item": 15,
+      "name": "broken-compile-refused",
+      "status": "PASS",
+      "detail": "code=1\nclaim-guard: 2 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - this commit does not compile.\n\nsrc/index.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'.\n\nA commit that does not build blocks every other seat and hides every other\nfailure behind it. Fix it, or commit deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "item": 15,
+      "name": "escape-hatch-loud",
+      "status": "PASS",
+      "detail": "code=0\nclaim-guard: 2 staged path(s), all covered by claude's claims\nclaim-guard: BUS_ALLOW_BROKEN_BUILD=1 - compile check SKIPPED for this commit\n             deliberate WIP. Say so in the commit message.\n"
+    },
+    {
+      "item": 15,
+      "name": "hatch-unused-on-fix",
+      "status": "PASS",
+      "detail": "fix(item 15): source-text walker inspects only files tsc loaded\n\nfindSourceEscapes walked every staged file that looked like source. A .cjs tsc never loads is not evidence about what tsc will see, and refusing on comment text in the audit evidence was item 6 again: a guard that cannot be satisfied gets bypassed.\n\nAuthority for membership is listFilesOnly. Config escapes, staged reparse points, and implicit typeRoots stay whole-tree and still run before tsc. Leak refusals via compile-fail and listed outside files are unchanged. Hatch unused."
+    },
+    {
+      "item": 15,
+      "name": "nocheck-true",
+      "status": "PASS",
+      "detail": "code=1\nclaim-guard: 2 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - the staged tsconfig sets compilerOptions.noCheck, so tsc will not type-check this commit\n\nA green plus a NOTE is not a verified index. Remove noCheck, or use BUS_ALLOW_BROKEN_BUILD=1.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "item": 15,
+      "name": "files-empty-plus-references/control",
+      "status": "PASS",
+      "detail": "tsc -p succeeded on files:[] + references"
+    },
+    {
+      "item": 15,
+      "name": "files-empty-plus-references",
+      "status": "PASS",
+      "detail": "code=1\nclaim-guard: 5 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - tsc compiled no program source, so an empty success is not a verified index\n\nA solution-style root with files: [] (or any config that type-checks nothing) does not\nverify the staged tree. Point tsc at the staged sources, or use BUS_ALLOW_BROKEN_BUILD=1.\n\nThis check verifies the INDEX - what this commit would actually contain.\nIf you mean to commit anyway, do it deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    },
+    {
+      "item": 15,
+      "name": "referenced-project-type-error",
+      "status": "PASS",
+      "detail": "tsc -p ok=false\ntsc -b ok=false\nhook code=1\n-p:\ntsconfig.json(13,5): error TS6310: Referenced project 'C:/Users/hymlo/AppData/Local/Temp/pab-r24-atVabz/repo/packages/lib' may not disable emit.\r\nCommand failed: C:\\WINDOWS\\system32\\cmd.exe /c C:\\Users\\hymlo\\AppData\\Local\\Temp\\pab-r24-atVabz\\repo\\node_modules\\.bin\\tsc.cmd -p . --noEmit\n-b:\npackages/lib/index.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'.\r\ntsconfig.json(13,5): error TS6310: Referenced project 'C:/Users/hymlo/AppData/Local/Temp/pab-r24-atVabz/repo/packages/lib' may not disable emit.\r\nCommand failed: C:\\WINDOWS\\system32\\cmd.exe /c C:\\Users\\hymlo\\AppData\\Local\\Temp\\pab-r24-atVabz\\repo\\node_modules\\.bin\\tsc.cmd -b . --pretty false\nclaim-guard: 5 staged path(s), all covered by claude's claims\nclaim-guard: REFUSING - this commit does not compile.\n\ntsconfig.json(13,5): error TS6310: Referenced project 'C:/Users/hymlo/AppData/Local/Temp/claim-guard-index-Z8dToZ/packages/lib' may not disable emit.\n\nA commit that does not build blocks every other seat and hides every other\nfailure behind it. Fix it, or commit deliberately with BUS_ALLOW_BROKEN_BUILD=1\nand say so in the message.\n"
+    }
+  ]
+}
