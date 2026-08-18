@@ -96,6 +96,22 @@ function refuse(reason, remedy) {
 let scratch;
 try {
   scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'claim-guard-index-'));
+  /**
+   * Resolve the scratch root itself, or every containment test below compares a REALPATH
+   * against a LEXICAL path and finds nothing inside.
+   *
+   * Found by sweeping for siblings of grok's r19b finding rather than waiting to be told: the
+   * classifier realpaths each file tsc listed, but the root it compares them to was whatever
+   * `os.tmpdir()` happened to say. Where tmpdir is itself a link - `/var` -> `/private/var` on
+   * macOS, a redirected TEMP or a junction on Windows - every legitimate staged file resolves
+   * OUTSIDE its own scratch tree and the guard refuses honest commits.
+   *
+   * That direction is fail-closed, so it is not a leak. It is worse in one specific way: item
+   * 6 established that a guard which cannot be SATISFIED gets bypassed exactly as surely as
+   * one that cannot go red, and a hook that refuses every commit on a developer's machine is
+   * removed by lunchtime.
+   */
+  scratch = realpathOrSelf(scratch);
   execFileSync('git', ['checkout-index', '--all', '--prefix', `${scratch.replace(/\\/g, '/')}/`], {
     cwd: repo, encoding: 'utf8', stdio: 'pipe'
   });

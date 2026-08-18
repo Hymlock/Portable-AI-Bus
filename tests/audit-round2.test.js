@@ -311,6 +311,35 @@ test('ITEM 15 GREEN CONTROL: pinning the scratch name alone does not break an ho
   assert.match(result.out, /compile OK \(staged index\)/);
 });
 
+test('ITEM 15 RED: an honest commit passes even when the scratch root is reached through a link', async (t) => {
+  const { dir, repo, busRoot, linked } = await fixtureRepo(t);
+  if (!linked) return t.skip('could not link node_modules');
+
+  /**
+   * My own sweep for siblings of grok's r19b finding, rather than waiting to be failed for a
+   * too-narrow repair a fourth time.
+   *
+   * The classifier realpaths every file tsc listed, but the scratch ROOT was whatever
+   * os.tmpdir() said. Where tmpdir is itself a link - `/var` -> `/private/var` on macOS, a
+   * redirected TEMP or a junction on Windows - a legitimate staged file resolves outside its
+   * own scratch tree and the guard refuses an honest commit. Fail-closed, so not a leak; but
+   * item 6 proved a guard that cannot be SATISFIED gets bypassed just as surely as one that
+   * cannot go red, and this machine's tmpdir is not a link, so nothing here would have shown
+   * it. A junction reproduces macOS's behaviour on Windows.
+   */
+  const realScratch = path.join(dir, 'real-scratch-target');
+  await fsp.mkdir(realScratch, { recursive: true });
+  const linkedScratch = path.join(dir, 'claim-guard-index-VIALINK');
+  if (!junction(linkedScratch, realScratch)) return t.skip('directory junctions unavailable');
+
+  git(repo, 'add', '-A');
+  const preload = await writeScratchPinPreload(dir, linkedScratch);
+  const result = runGuard(repo, busRoot, preload);
+  assert.equal(result.code, 0,
+    `an honest commit must pass when scratch is reached through a link; got exit ${result.code}: ${result.out}`);
+  assert.match(result.out, /compile OK \(staged index\)/);
+});
+
 test('ITEM 15: a narrowing exclude is printed, not refused', async (t) => {
   const { repo, busRoot, linked } = await fixtureRepo(t);
   if (!linked) return t.skip('could not link node_modules');
