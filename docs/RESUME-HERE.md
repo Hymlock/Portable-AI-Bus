@@ -60,6 +60,29 @@ two days, every one in an *instrument* rather than in the code:
 - a pre-publication scan asked what *changed* when the question was what a push makes *public*
 - a fake `powershell` that never ran, reported as a passing timeout
 
+A sixth followed, and it is the one that names the class: the author told grok its assignment
+anchor was stale and it was re-deriving certified items. It was not. Its checkpoint was
+`#2011` — *audit 25/26/27/28* — and it was working them in order. That was diagnosed from the
+**prose of a verdict** instead of from the checkpoint, which is one command away. Retracted at
+`#2023`.
+
+**The shape underneath all six: asserting from a READABLE SURFACE instead of the DURABLE
+RECORD underneath it.**
+
+| what was read | what should have been read |
+|---|---|
+| the prose of a verdict | the open checkpoint |
+| `git diff origin/main..HEAD` | the whole tree a push publishes |
+| a passing gate | whether the build happened |
+| `git stash push` output | whether anything was stashed |
+| one process-list snapshot | two |
+| a fast `spawnSync` return | whether the fake binary ever ran |
+
+Every durable mechanism on this project — checkpoints, claims, notice files, red controls,
+loaded-code markers — exists because that failure is the expensive one. They caught all six,
+*eventually*. The remaining gap is that "eventually" has meant **after** the author had already
+said something out loud.
+
 `tests/helpers/red-control.js` now refuses to measure until a mutation is **confirmed applied**
 and refuses to return until the restore is **byte-exact**. Use it. It was written after the
 fourth instance and caught the fifth.
