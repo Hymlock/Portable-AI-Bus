@@ -80,15 +80,12 @@ jobs:
       # "It packaged" is not "it will run". The failure this guards against is silent:
       # dropping the runtime dependency still produces a valid VSIX, and the extension only
       # breaks later, on the machine that installed it.
+      # Reads the zip itself in node. The first version shelled out to `unzip`, which is
+      # not on the windows runner, and reported "has no node-pty" against an archive that
+      # contained 2340 node_modules files - a missing tool wearing the exact error message
+      # of the defect being looked for.
       - name: VSIX actually contains the native runtime dependency
-        shell: bash
-        run: |
-          vsix=$(ls -1 *.vsix | head -1)
-          unzip -l "$vsix" | grep -q 'extension/node_modules/node-pty/' \
-            || { echo "::error::$vsix has no node-pty; the extension would throw when it spawns a brain"; exit 1; }
-          unzip -l "$vsix" | grep -q 'extension/dist/extension.js' \
-            || { echo "::error::$vsix has no compiled entry point"; exit 1; }
-          echo "$vsix carries node-pty and a compiled entry point"
+        run: node scripts/check-vsix.js
 
       - uses: actions/upload-artifact@v4
         if: matrix.os == 'ubuntu-latest'
