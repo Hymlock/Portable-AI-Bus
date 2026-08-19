@@ -1066,6 +1066,37 @@ test('ITEM 2 GREEN CONTROL: too few episodes consolidates nothing, and says why'
   assert.equal(live.length, 2);
 });
 
+test('ITEM 13 RED: a claim taken through a link can be RELEASED', async (t) => {
+  /**
+   * Found by CI, not here. windows-latest failed `same relative path in two roots remains
+   * independently claimable` with `codex does not hold exact claim(s): src/mailbox.ts`, while
+   * this machine showed 569/0.
+   *
+   * Cause: claim() stores `canonicalComparablePath(await fs.realpath(root))`; release()
+   * computed the same WITHOUT realpath - the only root canonicalisation in the file that did
+   * not resolve links. Wherever realpath differs from resolve, a claim could be taken and
+   * never released: held forever, and every later claim on that path refused as a conflict.
+   *
+   * The runner's temp directory is an 8.3 short name that realpath expands. A junction has the
+   * same property, which is how it reproduces here. This machine's own tmpdir does not, which
+   * is why 28 items were certified without anyone seeing it.
+   */
+  const { dir, workspace, store } = await claimFixture(t);
+  const viaLink = path.join(dir, 'via-link');
+  if (process.platform !== 'win32' || !junction(viaLink, workspace)) {
+    return t.skip('directory junctions unavailable');
+  }
+
+  await store.claim({ agent: 'codex', paths: ['src/bus.ts'], repoRoot: viaLink, why: 'through a link' });
+  const remaining = await store.release('codex', ['src/bus.ts'], viaLink);
+  assert.equal(remaining.length, 0, 'REGRESSION: a claim taken through a link could never be released');
+
+  // GREEN CONTROL: the path is genuinely free again, not merely absent from one seat's list.
+  // `claude`, not `grok` - this fixture seats only claude and codex, and the first version of
+  // this line failed with "grok is not a seat", which is the roster guard working.
+  assert.ok(await store.claim({ agent: 'claude', paths: ['src/bus.ts'], repoRoot: workspace, why: 'after release' }));
+});
+
 test('ITEM 13 GREEN CONTROL: ordinary claims below the root still succeed', async (t) => {
   const { workspace, store } = await claimFixture(t);
   // Without this, a fix that refused everything would look identical to a correct one.

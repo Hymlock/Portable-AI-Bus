@@ -1,4 +1,4 @@
-﻿import * as fs from 'node:fs/promises';
+import * as fs from 'node:fs/promises';
 import { realpathSync, statSync } from 'node:fs';
 import * as path from 'node:path';
 import { execFile } from 'node:child_process';
@@ -1265,7 +1265,24 @@ export class MailboxStore {
       }
 
       const requested = paths.map((item) => this.normalizeClaimPath(item));
-      const requestedRoot = this.canonicalComparablePath(repoRoot ?? this.paths.root);
+      /**
+       * REALPATH, to match how claim() stored it.
+       *
+       * This was `canonicalComparablePath(repoRoot ?? this.paths.root)` - the only root
+       * canonicalisation in the file that did NOT resolve links first. claim() stores
+       * `canonicalComparablePath(await fs.realpath(root))`, so wherever realpath differs from
+       * resolve, a claim could be taken and then never released: the seat held it forever and
+       * every later claim on that path was refused as a conflict.
+       *
+       * Invisible on the author's machine, where the two are equal. Found by CI on
+       * windows-latest, whose temp directory is an 8.3 short name that realpath expands -
+       * `codex does not hold exact claim(s): src/mailbox.ts` - and reproduced locally through
+       * a junction, which has the same property.
+       *
+       * That is the whole argument for pushing: 28 items were certified on one filesystem
+       * where this asymmetry cannot show.
+       */
+      const requestedRoot = await this.canonicalRootForCompare(repoRoot ?? this.paths.root);
       const selected = requested.map((requestedPath) => {
         const matches = held.filter((claim) => claim.path === requestedPath);
         if (matches.length <= 1) {
@@ -1934,6 +1951,22 @@ export class MailboxStore {
 
   private comparablePath(value: string) {
     return process.platform === 'win32' ? value.toLocaleLowerCase('en-US') : value;
+  }
+
+  /**
+   * A claim root, canonicalised the way claim() stores it: links resolved, then compared.
+   *
+   * Falls back to the lexical form when the path cannot be resolved, because release() must
+   * still work against a root that has since been deleted - refusing there would strand the
+   * claim permanently, which is the failure this exists to prevent, arriving from the other
+   * side.
+   */
+  private async canonicalRootForCompare(value: string): Promise<string> {
+    try {
+      return this.canonicalComparablePath(await fs.realpath(value));
+    } catch {
+      return this.canonicalComparablePath(value);
+    }
   }
 
   private canonicalComparablePath(value: string) {
