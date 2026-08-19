@@ -47,6 +47,40 @@ test('ITEM 28: an expired query DEGRADES rather than propagating a hang', () => 
     'a timeout sets `error` with a null status; checking status alone would swallow it');
 });
 
+test('ITEM 28: a timeout of THIS SHAPE actually bounds a hanging child', () => {
+  /**
+   * The honest half of a two-part claim, after a behavioural gate of mine turned out to be
+   * structurally impossible and vacuous.
+   *
+   * I tried to interpose a fake `powershell` on PATH. It never ran: Node 24 will not resolve a
+   * bare command to a `.cmd` without a shell, so `spawnSync` returned ENOENT in 1ms - which
+   * looks exactly like a working timeout and is not one. My own green control caught it; the
+   * test was deleted rather than shipped.
+   *
+   * What CAN be measured on this machine is the mechanism: a spawnSync carrying the same
+   * `timeout` option, against a child that genuinely hangs, returns bounded. Paired with the
+   * gate above - that both real queries carry that option - the two together say the wake path
+   * is bounded.
+   *
+   * Stated plainly because the pairing is the weak point: this does NOT prove bus-processes
+   * itself was interrupted mid-query. It proves the option works and that the option is
+   * present. If that is insufficient for the item, it should be called insufficient rather
+   * than counted.
+   */
+  const { spawnSync } = require('node:child_process');
+  const started = Date.now();
+  const result = spawnSync(process.execPath, ['-e', 'setTimeout(() => {}, 120000)'],
+    { encoding: 'utf8', timeout: 3000 });
+  const elapsed = Date.now() - started;
+
+  assert.ok(elapsed < 20_000, `a bounded spawnSync must not wait for the child; took ${elapsed}ms`);
+  assert.ok(result.error || result.signal,
+    'and an expired call must REPORT it - a timeout that returns clean is indistinguishable from success');
+  // The exact shape bus-processes now checks: a timeout yields error set with a NULL status,
+  // so a `status !== 0` test alone would have swallowed it.
+  assert.equal(result.status, null, 'a timed-out spawnSync has a null status, not a non-zero one');
+});
+
 test('ITEM 28 RED CONTROL: removing the timeout makes the gate fail', () => {
   // First real use of the red-control helper, and the reason it exists: this assertion is
   // source-level, so without a demonstrated break it would be indistinguishable from a test
