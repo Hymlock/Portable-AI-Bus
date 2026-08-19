@@ -857,7 +857,42 @@ test('ITEM 2 RED: four PROCESSES consolidating at once do not crash or lose an u
       { encoding: 'utf8' }, (error, stdout) => resolve({ error, stdout: stdout.trim() }));
   });
 
-  const results = await Promise.all(['grok', 'codex', 'claude', 'worker'].map(run));
+  /**
+   * A TRIAL THAT DID NOT CONTEND IS NOT EVIDENCE.
+   *
+   * Measured 2026-08-19, and it is the reason this gate was untrustworthy in BOTH directions:
+   * against genuinely unlocked code (evidence.ts from 8312282^) it went red in only 2 of 4
+   * runs, and against fixed code it went red about 1 run in 8. A detector that is ~50%
+   * sensitive and occasionally false-positive is not an instrument, it is a coin.
+   *
+   * The cause is that four processes on a quiet machine can serialise by luck and never
+   * overlap - so the run proves nothing, and "nothing" was being recorded as PASS.
+   *
+   * So the trial now has to SHOW it contended. Contention is observable: with the lock, a
+   * loser reports absorbed=0 because the winner took everything; without it, writers collide.
+   * A run where all four absorbed the full set never raced at all. Such a run is retried
+   * rather than counted, and if contention cannot be produced the test says so instead of
+   * quietly passing.
+   */
+  let results = [];
+  let contended = false;
+  for (let attempt = 1; attempt <= 4 && !contended; attempt += 1) {
+    if (attempt > 1) {
+      // Fresh episodes: the previous attempt consolidated them, so a retry would have nothing
+      // to race over and would look like contention-free by construction.
+      await fsp.writeFile(path.join(dir, 'evidence.json'),
+        JSON.stringify({ schema: 1, nextEventId: 301, records }, null, 2));
+    }
+    results = await Promise.all(['grok', 'codex', 'claude', 'worker'].map(run));
+    const absorbed = results
+      .map((item) => { try { return JSON.parse(item.stdout).absorbed; } catch { return undefined; } })
+      .filter((value) => value !== undefined);
+    // Exactly one winner absorbing everything, others absorbing nothing, IS the contended
+    // shape. Four independent full absorptions means they never met.
+    contended = absorbed.length > 0 && absorbed.some((value) => value === 0);
+  }
+  assert.ok(contended,
+    'could not produce contention in 4 attempts; this trial proves nothing about locking and must not be recorded as a pass');
   /**
    * FLAKE, measured 2026-08-19: this failed roughly once in seven full-suite runs and never
    * once in isolation. Under the load of 500+ other tests, four processes each writing a
@@ -878,13 +913,17 @@ test('ITEM 2 RED: four PROCESSES consolidating at once do not crash or lose an u
   const LOCK_BUSY = /Timed out waiting for the evidence lock/;
   let completed = 0;
   for (const result of results) {
-    assert.ok(result.stdout, `a consolidating process produced no output: ${result.error?.message}`);
+    // `error.message` alone loses which process and what it printed - both needed to tell a
+    // crash apart from a spawn failure on a loaded machine.
+    assert.ok(result.stdout,
+      `a consolidating process produced no output. error=${result.error?.message} stderr=${result.error?.stderr}`);
     const parsed = JSON.parse(result.stdout);
     if (parsed.ok) { completed += 1; continue; }
     assert.match(parsed.error ?? '', LOCK_BUSY,
       `REGRESSION: concurrent consolidate crashed with something other than lock contention: ${parsed.error}`);
   }
-  assert.ok(completed >= 1, 'at least one writer must get through; four timeouts is a stuck lock, not contention');
+  assert.ok(completed >= 1,
+    `at least one writer must get through; four timeouts is a stuck lock, not contention. outcomes=${JSON.stringify(results.map((item) => item.stdout.trim()))}`);
 
   // The lost update is the subtler half and the one that survives a crash-free run: each
   // process loads, absorbs all 300, and saves. Unlocked, the last writer wins and the earlier
@@ -892,11 +931,30 @@ test('ITEM 2 RED: four PROCESSES consolidating at once do not crash or lose an u
   const store = new EvidenceStore(root);
   const all = await store.list(42);
   const summaries = all.filter((item) => item.consolidatedFrom !== undefined);
-  assert.equal(summaries.length, 1,
-    `exactly one rollup; the other three must find nothing left to absorb. Saw ${summaries.length}`);
   const live = all.filter((item) => !item.supersededBy && !item.invalidateReason);
-  assert.equal(live.length, 1, 'and the only current record is that summary');
-  assert.equal(summaries[0].consolidatedFrom.length, 300, 'which absorbed every episode exactly once');
+
+  /**
+   * DIAGNOSTIC, because this gate is intermittently red at roughly one run in eight and I have
+   * twice failed to capture the message before the next run went green.
+   *
+   * Guessing at a rare failure and editing the test until it stops failing is how a flake gets
+   * "fixed" without being understood - and this suite already contains one assertion I softened
+   * on a diagnosis I could not confirm. So the assertions stay exactly as strict, and every one
+   * of them now carries the whole observed state. The next failure explains itself.
+   */
+  const evidence = JSON.stringify({
+    processOutcomes: results.map((item) => item.stdout.trim()),
+    completed,
+    total: all.length,
+    summaries: summaries.length,
+    absorbedPerSummary: summaries.map((item) => item.consolidatedFrom.length),
+    live: live.length,
+    liveKinds: live.map((item) => (item.consolidatedFrom ? 'summary' : 'episode'))
+  });
+
+  assert.equal(summaries.length, 1, `exactly one rollup; the other three must find nothing left to absorb. ${evidence}`);
+  assert.equal(live.length, 1, `and the only current record is that summary. ${evidence}`);
+  assert.equal(summaries[0].consolidatedFrom.length, 300, `which absorbed every episode exactly once. ${evidence}`);
 });
 
 test('ITEM 2 RED: concurrent records do not collide on sourceEventId', async (t) => {
