@@ -353,7 +353,7 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
       );
       const workId = handoffLeavesInheritedWork ? recovery!.workId : (incoming?.seq ?? recovery?.workId);
       if (incoming && bus.openRecovery && !handoffLeavesInheritedWork) {
-        recovery = await bus.openRecovery(seat, incoming.seq, openWork ?? incoming.subject);
+        recovery = await openRecoverySurvivably(bus, seat, incoming.seq, openWork ?? incoming.subject, recovery, log);
       }
       const evidenceWorkIds = [...new Set([
         ...messages.map((message) => message.seq),
@@ -613,7 +613,9 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
         // A later partial step may omit its note. Retain the last useful summary rather than
         // erasing the only durable context the next model session has.
         openWork = nextOpenWork || openWork;
-        if (workId && bus.openRecovery) recovery = await bus.openRecovery(seat, workId, openWork ?? 'unfinished');
+        if (workId && bus.openRecovery) {
+          recovery = await openRecoverySurvivably(bus, seat, workId, openWork ?? 'unfinished', recovery, log);
+        }
         if (keepUnfinished && !hasOpenWork) {
           log('recovery-kept-open', { seat, workId, reason: 'courtesy-only-send', note: openWork });
         }
@@ -662,6 +664,59 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
 
   log('runner-stopped', summary);
   return summary;
+}
+
+/**
+ * ITEM 21: A REFUSAL MUST BE SURVIVABLE.
+ *
+ * `openRecovery` refuses when another seat holds the checkpoint - one assignment, one holder.
+ * That refusal is CORRECT and item 10 is not weakened by anything here; the store still throws
+ * and the predecessor is still denied.
+ *
+ * The defect was where the throw LANDED. These calls sit outside the `takeTurn` try/catch that
+ * exists precisely so a throw cannot take the process, so the refusal escaped to cli.ts as
+ * `{"event":"fatal"}` and the seat exited. Measured cost: grok's brain died on EVERY wake for
+ * hours while its provider was healthy the entire time, and a seat told "not yours" became
+ * indistinguishable from one with no credits and one with no process. Both misdiagnoses were
+ * made before the real cause was found.
+ *
+ * Two properties, and it is only half a fix with either one missing:
+ *
+ *   1. SURVIVE. Declining work is a normal outcome. The wake continues with whatever
+ *      checkpoint the seat legitimately had, which is usually none.
+ *   2. SAY SO. A seat that silently declines is as opaque as one that dies - the same
+ *      "silence means three different things" failure, arriving from the other direction. The
+ *      refusal is logged with the holder named, because "held by claude" is actionable and
+ *      "recovery unavailable" sends someone hunting.
+ *
+ * Only a REFUSAL is survivable. A genuine fault - the store unreachable, the file corrupt -
+ * still propagates, because swallowing that would hide a broken mailbox behind a routine
+ * message.
+ */
+function isHeldByAnotherSeat(error: unknown): boolean {
+  return error instanceof Error && /is held by \S+, not /.test(error.message);
+}
+
+async function openRecoverySurvivably(
+  bus: BusClient,
+  seat: string,
+  workId: number,
+  note: string,
+  current: RecoveryCheckpoint | undefined,
+  log: (event: string, data?: unknown) => void
+): Promise<RecoveryCheckpoint | undefined> {
+  try {
+    return await bus.openRecovery!(seat, workId, note);
+  } catch (error) {
+    if (!isHeldByAnotherSeat(error)) throw error;
+    log('recovery-refused', {
+      seat,
+      workId,
+      reason: (error as Error).message,
+      outcome: 'declined the work and continued; the seat is not dead'
+    });
+    return current;
+  }
 }
 
 export class BudgetExceededError extends Error {
