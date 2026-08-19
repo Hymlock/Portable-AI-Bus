@@ -59,8 +59,36 @@ jobs:
       # would reproduce the exact trap this workflow exists to prevent.
       - run: npm run check
 
+      # The suite must not write into the tree it is run from. It used to: a fixture
+      # junctioned the whole of repo/node_modules to the project's, so packages the gates
+      # created to stage a leak were created in the PROJECT's dependency tree. They survived
+      # the fixture that made them, and one left a dangling symlink that broke `vsce package`
+      # with an error naming neither tests nor the fixture. `npm ls` exits non-zero on an
+      # extraneous package, so this is the cheap check that would have caught it at once.
+      - name: Tests left no extraneous packages behind
+        run: npm ls --depth=0
+
+      # Dependencies are INCLUDED, deliberately. There is no bundler here - `compile` is
+      # plain tsc - and dist/brain/process-host.js does `require('node-pty')` at runtime.
+      # `--no-dependencies` therefore produces a VSIX that installs cleanly and then throws
+      # the moment it spawns a brain, which is worse than a failing build. It also made this
+      # step disagree with `npm run package`, so CI was proving a different artifact than the
+      # one a release would ship. vsce packages production dependencies only.
       - name: Package VSIX
-        run: npx @vscode/vsce package --allow-missing-repository --no-dependencies
+        run: npx @vscode/vsce package --allow-missing-repository
+
+      # "It packaged" is not "it will run". The failure this guards against is silent:
+      # dropping the runtime dependency still produces a valid VSIX, and the extension only
+      # breaks later, on the machine that installed it.
+      - name: VSIX actually contains the native runtime dependency
+        shell: bash
+        run: |
+          vsix=$(ls -1 *.vsix | head -1)
+          unzip -l "$vsix" | grep -q 'extension/node_modules/node-pty/' \
+            || { echo "::error::$vsix has no node-pty; the extension would throw when it spawns a brain"; exit 1; }
+          unzip -l "$vsix" | grep -q 'extension/dist/extension.js' \
+            || { echo "::error::$vsix has no compiled entry point"; exit 1; }
+          echo "$vsix carries node-pty and a compiled entry point"
 
       - uses: actions/upload-artifact@v4
         if: matrix.os == 'ubuntu-latest'

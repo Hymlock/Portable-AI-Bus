@@ -59,8 +59,19 @@ async function fixtureRepo(t) {
   await fsp.writeFile(path.join(repo, 'src', 'ok.ts'), 'export const fine: number = 1;\n');
   await fsp.writeFile(path.join(repo, 'src', 'index.ts'), 'export const good: number = 1;\n');
 
-  // The compiler is found at repo/node_modules; link the real one rather than installing.
-  const linked = junction(path.join(repo, 'node_modules'), path.join(REPO, 'node_modules'));
+  // node_modules must be a REAL directory here. Several of these gates write packages into
+  // it (leaky-types, leak-config) to stage a type-resolution leak. When the whole directory
+  // was a junction to the project's node_modules, those writes went THROUGH the junction and
+  // landed in the project's own dependency tree: three extraneous packages accumulated there,
+  // one of them a symlink left dangling once its fixture temp dir was removed. `vsce package`
+  // then failed on the dangling entry - a test polluting the tree it was run from.
+  // Link only the compiler, which is the shape the guard already documents at
+  // claim-guard-cli.js: "a fixture may junction that package in".
+  await fsp.mkdir(path.join(repo, 'node_modules'), { recursive: true });
+  const linked = junction(
+    path.join(repo, 'node_modules', 'typescript'),
+    path.join(REPO, 'node_modules', 'typescript')
+  );
 
   const busRoot = path.join(dir, 'bus');
   const mailboxDir = path.join(busRoot, '.ai-bus', 'runtime', 'mailbox');
