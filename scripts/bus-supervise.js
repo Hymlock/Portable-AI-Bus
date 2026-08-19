@@ -363,7 +363,20 @@ if (require.main === module) {
   console.log(`root ${root}`);
   console.log(`workdir ${workdir}`);
   sweep();
-  setInterval(sweep, intervalMs);
+  /**
+   * `--once` runs a single sweep and exits, mirroring bus-tick.
+   *
+   * Added because grok's r34 named a real gap in my instrument rather than my code: the item-25
+   * tests exercise the PREDICATE, and "a sweep that kept the predicate and still cleared
+   * unconditionally would pass every author gate". That is true, and it can only be closed by
+   * driving the sweep itself.
+   *
+   * Useful outside the tests too - an operator can ask "what would the supervisor do right
+   * now?" without leaving a process running.
+   */
+  if (!process.argv.includes('--once')) {
+    setInterval(sweep, intervalMs);
+  }
 }
 
 module.exports = {

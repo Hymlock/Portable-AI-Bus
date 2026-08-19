@@ -316,6 +316,50 @@ test('ITEM 27: a mixed roster reports each seat correctly', (t) => {
   assert.match(text, /STALE-NOTICE[^|]*codex/, 'codex is running, so codex is a stale flag');
 });
 
+// ---------------------------------------------------------------------------
+// grok r34 named a gap in my INSTRUMENT, not my code: "Author tests do not drive sweep(). A
+// sweep that kept the predicate and still cleared unconditionally would pass every author
+// gate." True, and only drivable by running the real sweep - so these do.
+//
+// The process list is made unreadable by emptying PATH, so `powershell` and `ps` cannot be
+// found. listNodeProcesses throws, liveBrains marks every seat assumedLive (fail closed for
+// RESTARTING, deliberately), and the durable alarm must survive that.
+// ---------------------------------------------------------------------------
+
+function runSweep(dir, { blindProcessList = false } = {}) {
+  const env = { ...process.env };
+  if (blindProcessList) { env.PATH = ''; env.Path = ''; }
+  try {
+    return execFileSync(process.execPath,
+      [path.join(__dirname, '..', 'scripts', 'bus-supervise.js'),
+        '--root', dir, '--workdir', dir, '--seats', 'grok', '--once'],
+      { encoding: 'utf8', env, timeout: 60_000 });
+  } catch (error) {
+    return `${error.stdout || ''}${error.stderr || ''}`;
+  }
+}
+
+test('ITEM 25 RED: a real SWEEP with a blind process list does not clear the alarm', (t) => {
+  const dir = root(t);
+  syncDeadSeatNotices(dir, new Map([['grok', 'no brain process']]), () => '2026-08-19T01:42:02.000Z');
+
+  runSweep(dir, { blindProcessList: true });
+
+  // The whole point of item 25, exercised through the code path that actually writes the file
+  // rather than through the predicate in isolation.
+  const after = readDeadSeatNotices(dir).seats.map((item) => item.seat);
+  assert.deepEqual(after, ['grok'],
+    'REGRESSION: a sweep that could not see the process list ERASED a real dead-seat alarm');
+});
+
+test('ITEM 25 GREEN CONTROL: the sweep is still able to write and clear at all', (t) => {
+  const dir = root(t);
+  // Without this, a sweep that crashed instantly would "preserve" the notice and pass the
+  // gate above while doing nothing whatsoever.
+  const output = runSweep(dir);
+  assert.match(output, /supervising grok/, 'the sweep must actually run, not fail to start');
+});
+
 test('ITEM 22 GREEN CONTROL: a corrupt or absent notice file reads as "nothing wrong"', (t) => {
   const dir = root(t);
   assert.deepEqual(readDeadSeatNotices(dir).seats, [], 'absent');
