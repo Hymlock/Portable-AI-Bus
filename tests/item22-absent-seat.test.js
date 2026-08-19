@@ -250,20 +250,37 @@ test('ITEM 22: both notice lines come from ONE definition, so they cannot drift 
    * callers produce the SAME line for the same state - which is directly observable now that
    * noticeLines is exported.
    */
-  const { noticeLines } = require(path.join(__dirname, '..', 'scripts', 'bus-tick.js'));
-  const dir = withMailbox(root(t));
-  syncDeadSeatNotices(dir, new Map([['grok', 'no brain process']]), () => '2026-08-19T01:42:02.000Z');
-
-  const healthy = noticeLines(dir, []).join('\n');
-  const onError = noticeLines(dir, []).join('\n');
-  assert.equal(healthy, onError, 'both tick paths must render notices identically');
-  assert.match(healthy, /DEAD-SEAT/);
-
-  // And the error path really does call it, which is item 24's whole point.
-  const out = execFileSync(process.execPath,
-    [path.join(__dirname, '..', 'scripts', 'bus-tick.js'), '--root', dir, '--seat', 'hymlock', '--once'],
+  /**
+   * THIRD attempt at this gate, and grok caught the second one too:
+   *
+   *   1. source-text matching `DEAD-SEAT ${named}` - broke when I renamed the local;
+   *   2. source-text counting a COMMENT as a construction site;
+   *   3. `noticeLines(dir, []) === noticeLines(dir, [])` - which grok named exactly:
+   *      "That is f(x) === f(x). It cannot go red unless the function is nondeterministic."
+   *
+   * I replaced a weak gate with a TAUTOLOGY and called it behavioural. The property is that
+   * the HEALTHY path and the ERROR path report the same notices for the same files - two
+   * different code paths through the real binary, not one function called twice.
+   */
+  const busTick = path.join(__dirname, '..', 'scripts', 'bus-tick.js');
+  const run = (dir) => execFileSync(process.execPath, [busTick, '--root', dir, '--seat', 'hymlock', '--once'],
     { encoding: 'utf8' });
-  assert.match(out, /DEAD-SEAT/, 'the running tick must emit what noticeLines produced');
+  const notices = (line) => (line.match(/(?:DEAD-SEAT|STALE-NOTICE|STALE-CODE)[^|]*/g) || []).join(' ').trim();
+
+  const healthyDir = withMailbox(root(t));               // mailbox present -> healthy path
+  const brokenDir = root(t);                             // no mailbox      -> error path
+  for (const dir of [healthyDir, brokenDir]) {
+    syncDeadSeatNotices(dir, new Map([['grok', 'no brain process']]), () => '2026-08-19T01:42:02.000Z');
+  }
+
+  const healthyOut = run(healthyDir);
+  const brokenOut = run(brokenDir);
+  assert.match(healthyOut, /round:/, 'the healthy path really is the healthy path');
+  assert.match(brokenOut, /MAILBOX UNREADABLE/, 'and the other really is the error path');
+
+  assert.equal(notices(healthyOut), notices(brokenOut),
+    `the two tick paths must report identical notices. healthy=${notices(healthyOut)} error=${notices(brokenOut)}`);
+  assert.match(notices(healthyOut), /DEAD-SEAT/, 'and they must actually be reporting something');
 });
 
 // ---------------------------------------------------------------------------

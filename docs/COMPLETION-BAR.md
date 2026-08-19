@@ -33,16 +33,24 @@ seat that did not write it has attacked it and said so on the record.
 | 22 | an absent seat is not noticed | **CERTIFIED** at `631287f` (grok r29, live bus) - notice file PLUS the DEAD-SEAT tick line |
 | 23 | `liveBrains()` on the tick is machine-wide, not `--root` scoped | **CERTIFIED** at `f4b2ead` (grok r34) - `processesForRoot`; temp-root NONE vs 631287f leak of `codex,grok`. Unix early-return is carving, not unfinished 23 |
 | 24 | an unreadable mailbox suppresses the DEAD-SEAT line | **CERTIFIED** at `f4b2ead` (grok r34) - notices print alongside MAILBOX UNREADABLE; 631287f hid DEAD-SEAT |
-| 25 | a dead-seat notice FAILS OPEN when the process list is unreadable | FAILED r34 (name positive, implementation still negative); repaired `cad4278` - only a real pid clears, ten fail-open shapes gated; audit pending |
+| 25 | a dead-seat notice FAILS OPEN when the process list is unreadable | **CERTIFIED** at `cad4278` (grok r36) - only a real pid clears; 12 fail-open shapes refused; sweep driven, not just the predicate |
+| 26 | a test file invoked directly can pass on stale `dist` | **CERTIFIED** at `cad4278` (grok r36) - 40/40 dist-loading tests carry it; warning asserted by name; severity accepted as correct |
 | 27 | a dead-seat notice can outlive the death it describes | IMPLEMENTED `684acce` - tick cross-checks and prints STALE-NOTICE; audit pending |
 | 28 | the operator wake path can hang forever on a process query | IMPLEMENTED `43416cf` - both platform branches bounded at 10s; found by the coordinator's own watchdog stalling; audit pending |
-| 26 | a test file invoked directly can pass on stale `dist` | FAILED r34 (vacuous gate + opt-in); repaired `cad4278` - all 41 dist-loading tests carry it, a gate fails if any new one does not, warning asserted by name; audit pending |
-
-Items 1–7 were the original bar. **Items 21 and 22 were added on 2026-08-19 after a defect the author introduced with a certified fix took a seat down for hours** — the guard was right, the place it threw was not, and nothing durable said the seat was gone.
 
 Items 1–7 were the original bar. **Items 8–11 were all added on 2026-08-14/15 from measured
 failures, not planning** — three of the four were found by the system failing in front of us
-while we worked on something else. The bar is a lower bound.
+while we worked on something else.
+
+**Items 21–28 were added on 2026-08-18/19, and every one came from the system failing in
+front of us rather than from planning.** 21 and 22 from a defect the author introduced with an
+already-certified fix, which took a seat down for hours: the guard was right, the place it
+threw was not, and nothing durable said the seat was gone. 23–26 were grok's classifications
+of the leftovers from that repair. 27 came from grok observing a stale notice contradict a
+live brain. 28 came from the coordinator's own watchdog stalling on an unbounded process
+query — found by living it, not by reading the code.
+
+The bar is a lower bound, and eight items in two days is the evidence for that.
 
 ## Item 1 — certified at `ab9807a`, after failing twice
 
