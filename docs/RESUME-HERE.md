@@ -87,6 +87,42 @@ said something out loud.
 and refuses to return until the restore is **byte-exact**. Use it. It was written after the
 fourth instance and caught the fifth.
 
+### CI ran for the first time, and 28 of 28 CERTIFIED is red on both runners
+
+**2026-08-19. `claude/ci-probe` pushed; run 32310252210. Read this before trusting the bar.**
+
+| | pass | fail |
+|---|---|---|
+| this machine | 569 | **0** |
+| `windows-latest` | 567 | **2** |
+| `ubuntu-latest` | 522 | **10** |
+
+Ubuntu's total is 532, not 569 — **37 tests never ran there at all**, the junction-dependent
+ones skipping silently.
+
+**ubuntu — 10 failures, all one cause.** `tests/process-host.test.js` asserts Windows ConPTY
+behaviour with no platform guard, so on Linux it does not skip, it *fails*. **Item 12 is
+certified and fails on Linux.** Failing names include `ConPTY timeout kills the process and
+returns code 124`, `ITEM 12 RED: a spawn that never returns writes nothing the parent can see`,
+`ITEM 12: delayed sibling still records a never-returning spawn`.
+
+**windows-latest — 2 failures, and these are the interesting ones**, because the same suite is
+green on this Windows machine:
+- `same relative path in two roots remains independently claimable` →
+  `Error: codex does not hold exact claim(s): src/mailbox.ts`
+- `central config and receipts can be separated from the capability root`
+
+Both are claim/path-identity tests. They pass here and fail on a clean Windows runner, which
+means they depend on something about **this** machine — a path-resolution or realpath property
+that is not universal. That is the same class as everything else this week: a green that was
+about the environment rather than the code.
+
+**What this does to the bar.** It does not falsify the 28 certifications: each was measured
+against real behaviour and grok's instruments. It falsifies the *scope*. "Certified" has meant
+**certified on one Windows machine**, and the handoff has said so — now there is evidence
+rather than a caveat. Nothing here should be re-marked without an auditor, but nobody should
+read 28/28 as portable.
+
 ### Found AFTER the bar was met — an ack loop that burns real money
 
 **Candidate item 29, not classified.** grok is stood down and the auditor classifies, so this
