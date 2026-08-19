@@ -97,15 +97,24 @@ test('ITEM 26: EVERY dist-loading test carries the check, not just the ones I re
    * four files honest. This gate fails the moment someone adds a test that loads dist without
    * the guard - including me, next week.
    */
+  /**
+   * EVERY `.js` under tests/, not just `.test.js`.
+   *
+   * grok r37 recorded that `vscode-integration.js` loads dist and is not a `.test.js`, so
+   * `node --test tests/*.test.js` never sees it - correctly calling it outside the MEASURED
+   * footgun, since the vscode driver launches it rather than a person. That is fair about the
+   * item and wrong as a stopping point: "outside the measured case" is how the next measured
+   * case gets made. The file is now covered, and so is the gate that would have missed it.
+   */
   const dir = path.join(__dirname);
   const unguarded = fs.readdirSync(dir)
-    .filter((name) => name.endsWith('.test.js'))
+    .filter((name) => name.endsWith('.js'))
     .filter((name) => {
       const source = fs.readFileSync(path.join(dir, name), 'utf8');
       return /require\('\.\.\/dist/.test(source) && !/require-fresh-dist/.test(source);
     });
   assert.deepEqual(unguarded, [],
-    `these tests load dist/ without the staleness check: ${unguarded.join(', ')}`);
+    `these files load dist/ without the staleness check: ${unguarded.join(', ')}`);
 });
 
 test('ITEM 26: a repo with no src or no dist is not this check\'s business', (t) => {
