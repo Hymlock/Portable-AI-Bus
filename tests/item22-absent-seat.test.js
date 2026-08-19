@@ -377,6 +377,50 @@ test('ITEM 25 GREEN CONTROL: the sweep is still able to write and clear at all',
   assert.match(output, /supervising grok/, 'the sweep must actually run, not fail to start');
 });
 
+test('ITEM 27: STALE-NOTICE through the REAL BINARY with a REAL brain-shaped process', (t) => {
+  /**
+   * grok r39, closing the gap it named in my own gates: "ITEM 27 tests inject `live` into
+   * noticeLines and never --once the binary." Same class as the item-25 finding - the
+   * predicate was exercised and the thing that USES it was not.
+   *
+   * So this plants a notice, starts a process that looks like a brain for THIS root, and
+   * drives the tick binary. Nothing is injected: liveBrains() has to find the process itself
+   * through bus-processes, which is also the item-23 coupling under test.
+   */
+  const dir = withMailbox(root(t));
+  syncDeadSeatNotices(dir, new Map([['grok', 'no brain process']]), () => '2026-08-19T01:42:02.000Z');
+
+  /**
+   * It has to be brain-SHAPED, not merely a process carrying --seat. identifyNodeProcess only
+   * classifies a node process as a brain when its command line matches `brain/cli.js`; a
+   * sleeper named anything else is invisible, and my first attempt at this test failed for
+   * exactly that reason - the tick reported brains:NONE and the gate correctly refused to
+   * conclude anything from it.
+   */
+  const sleeper = path.join(dir, 'brain', 'cli.js');
+  fs.mkdirSync(path.dirname(sleeper), { recursive: true });
+  fs.writeFileSync(sleeper, 'setTimeout(() => {}, 60_000);\n');
+  const child = require('node:child_process').spawn(
+    process.execPath, [sleeper, '--seat', 'grok', '--root', dir],
+    { stdio: 'ignore', detached: false }
+  );
+  t.after(() => { try { child.kill(); } catch { /* already gone */ } });
+
+  // The process list is queried by the tick; give the OS a moment to publish the new process.
+  const deadline = Date.now() + 15_000;
+  let out = '';
+  while (Date.now() < deadline) {
+    out = execFileSync(process.execPath,
+      [path.join(__dirname, '..', 'scripts', 'bus-tick.js'), '--root', dir, '--seat', 'hymlock', '--once'],
+      { encoding: 'utf8' });
+    if (/brains:grok/.test(out)) break;
+  }
+
+  assert.match(out, /brains:grok/, 'the tick must actually SEE the brain-shaped process, or this proves nothing');
+  assert.match(out, /STALE-NOTICE/, 'a notice contradicted by a live brain is stale, not a death');
+  assert.doesNotMatch(out, /DEAD-SEAT/, 'and it must not simultaneously assert the seat is dead');
+});
+
 test('ITEM 22 GREEN CONTROL: a corrupt or absent notice file reads as "nothing wrong"', (t) => {
   const dir = root(t);
   assert.deepEqual(readDeadSeatNotices(dir).seats, [], 'absent');
