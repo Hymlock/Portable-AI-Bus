@@ -49,7 +49,7 @@ const intervalMs = Math.max(30, Number(option('--interval-s', '240'))) * 1000;
 const once = process.argv.includes('--once');
 
 const runtime = path.join(root, '.ai-bus', 'runtime');
-const { readStaleCodeNotices } = require('./bus-supervise');
+const { readStaleCodeNotices, readDeadSeatNotices } = require('./bus-supervise');
 
 /** Courtesy kinds, matching the runner's `ackKinds` and the brain's `RECEIPT_KINDS`. */
 const RECEIPT_KINDS = new Set(['ack', 'receipt', 'ping']);
@@ -163,6 +163,32 @@ function tick() {
   const stale = readStaleCodeNotices(root);
   if (stale.seats.length > 0) {
     parts.push(`STALE-CODE ${stale.seats.map((item) => item.seat).join(',')} - running brains predate dist; bus-restart, do not treat as current`);
+  }
+
+  /**
+   * ITEM 22, the half that was missing. Caught by grok in r25, which refused to certify the
+   * item and refused to write this itself: "I will not certify a half-shape by writing the
+   * missing half myself and then blessing it."
+   *
+   * Item 9's shape is the FILE PLUS THE TICK. The supervisor writes dead-seats.json, but
+   * nothing read it, so the operator surface stayed green - which was the measured failure in
+   * the first place, not a detail of it. grok reproduced it live: dead-seats.json named grok,
+   * and this line printed the stale-code sibling and said nothing about the dead seat.
+   *
+   * `brains:...` above is NOT a substitute, and that is grok's finding too: liveBrains() is
+   * Windows-only, scans the whole machine, and is not scoped to --root. A brain belonging to
+   * some other bus on the same box makes that field look healthy while THIS root's durable
+   * notice says the seat has been gone for hours.
+   *
+   * The age is printed because "gone since 01:42" is the fact that mattered when a seat stayed
+   * dead for eight hours and every other signal read normal.
+   */
+  const dead = readDeadSeatNotices(root);
+  if (dead.seats.length > 0) {
+    const named = dead.seats
+      .map((item) => (item.at ? `${item.seat}(since ${String(item.at).slice(11, 19)})` : item.seat))
+      .join(',');
+    parts.push(`DEAD-SEAT ${named} - no brain process; restarts exhausted. bus-restart, and do not read the baton as progress`);
   }
 
   const quietMinutes = lastActivityMinutes();

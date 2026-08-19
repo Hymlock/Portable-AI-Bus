@@ -82,7 +82,11 @@ test('ITEM 21 RED: a seat refused work another seat holds STAYS ALIVE', async (t
 
   // The whole point: the runner returns rather than the throw escaping to cli.ts as fatal.
   assert.ok(result, 'REGRESSION: the refusal escaped the runner and would kill the seat');
-  assert.equal(turns >= 0, true);
+  // `turns >= 0` was here, and grok was right to name it in r25: that assertion CANNOT GO RED.
+  // A count is never negative, so it passed whether the brain ran or not - a vacuous gate in
+  // the very file written to prove gates are not vacuous. Surviving means the wake CONTINUES,
+  // so the brain must actually have been given its turn.
+  assert.equal(turns, 1, 'the seat must survive INTO its turn, not merely fail to crash');
 });
 
 test('ITEM 21 RED: the refusal is REPORTED, not swallowed into silence', async (t) => {
