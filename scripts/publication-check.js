@@ -36,7 +36,19 @@ const stagedOnly = process.argv.includes('--staged');
  * for the SHAPES that carry identity.
  */
 const PATTERNS = [
-  { name: 'windows user directory', re: /[A-Za-z]:[\\/]{1,2}Users[\\/]{1,2}([^\\/\s"'`<>]+)/gi, capture: 1 },
+  /**
+   * `{1,2}` separators was a HOLE, found by grok on the first tree this tool was pointed at.
+   * A JSON- or shell-escaped path carries more: tests/fixtures/grok-conpty-corrupted-event-99
+   * contained `\\\\\\Users\\\\\\\\hymlo\\\\\\\\Downloads` and was therefore absent from the
+   * 60-file report - a real leak, in a file the CI push would have published.
+   *
+   * `+` instead. A separator run of any length is still a separator run, and this tool is
+   * supposed to be noisy rather than clever.
+   */
+  { name: 'windows user directory', re: /[A-Za-z]:[\\/]+Users[\\/]+([^\\/\s"'`<>]+)/gi, capture: 1 },
+  // Escaped form with the drive letter stripped by an outer encoder, which is how the fixture
+  // above actually appears once a transcript has been through JSON twice.
+  { name: 'escaped users path', re: /[\\/]{2,}Users[\\/]+([^\\/\s"'`<>]+)/gi, capture: 1 },
   { name: 'unix home directory', re: /\/(?:home|Users)\/([A-Za-z0-9._-]+)/g, capture: 1 },
   { name: 'windows appdata path', re: /AppData[\\/]{1,2}(?:Local|Roaming)/gi },
   { name: 'absolute drive path', re: /\b[A-Za-z]:[\\/]{2}(?!Users\b)[A-Za-z0-9 ._-]+[\\/]/g },

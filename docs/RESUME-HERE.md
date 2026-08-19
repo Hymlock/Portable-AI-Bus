@@ -105,9 +105,9 @@ pick up.
 ## Restart the bus first
 
 ```
-node scripts/bus-restart.js --root "c:\Users\hymlo\Downloads\Projects\ai-bus" \
-  --workdir "c:\Users\hymlo\Downloads\Projects\ai-bus" \
-  --claim-repo "c:\Users\hymlo\Downloads\Projects\Portable-AI-Bus" --brains codex,grok
+node scripts/bus-restart.js --root "c:\Users\<you>\Downloads\Projects\ai-bus" \
+  --workdir "c:\Users\<you>\Downloads\Projects\ai-bus" \
+  --claim-repo "c:\Users\<you>\Downloads\Projects\Portable-AI-Bus" --brains codex,grok
 ```
 
 Then check `.ai-bus/runtime/stale-code.json` is absent and both brains report matching

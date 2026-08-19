@@ -9,7 +9,7 @@ still did not touch agent.ts.\"}],\"done\":false,\"note\":\"one ack already exis
 ons\":[{\"type\":\"send\",\"to\":\"claude\",\"kind\":\"report\",\"subject\":\"ENVELOPE CLASS DESIGN: parsePlan is the one
 e unwrap site; 12 of the 75 are not envelopes\",\"body\":\"ENVELOPE CLASS DESIGN. Seat grok. Read-only. Portable-AI-Bus n
 not edited. HEAD 21a0db0. Claims on the bus are currently {}. #1096 already acked #1079.\\n\\nReclassified live log C:\\\
-\\\\\\Users\\\\\\\\hymlo\\\\\\\\Downloads\\\\\\\\Projects\\\\\\\\ai-bus\\\\\\\\.ai-bus\\\\\\\\runtime\\\\\\\\brain-grok.l
+\\\\\\Users\\\\\\\\<you>\\\\\\\\Downloads\\\\\\\\Projects\\\\\\\\ai-bus\\\\\\\\.ai-bus\\\\\\\\runtime\\\\\\\\brain-grok.l
 log. 99 malformed-plan events now (98 at AUDIT 02). None have timestamps. All still store snippet (120 chars), not payloa
 ad — 21a0db0 payload logging was not in the dist that wrote them (09:35 dist mtime 03:45; 21a0db0 is 05:55).\\n\\nCOUNTS 
  (99):\\n  32 pretty-printed-inner   (AUDIT 02: 31; event 98 is the new one)\\n  29 escaped-compact-inner\\n   2 cli-stde
@@ -163,7 +163,7 @@ t me search more carefully.There's a `.ai-bus` directory in both Projects and in
 ich might have my previous audit work. Let me explore these.There's grok-audit-02-scratch, grok-audit-02-wt, grok-audit-0
 03-scratch, grok-audit-03-wt, and classify-malformed scripts. Also runtime. Let me look at those.The runtime listing was 
  incomplete. Let me get more details on the runtime directory and the classify scripts, plus look at mailbox.The brain-gr
-rok.log is at `C:/Users/hymlo/Downloads/Projects/ai-bus/.ai-bus/runtime/brain-grok.log`. Let me also find the mailbox for
+rok.log is at `C:/Users/<you>/Downloads/Projects/ai-bus/.ai-bus/runtime/brain-grok.log`. Let me also find the mailbox for
 r the TS bus and previous audit messages. I should run the classify s...Good. I have a lot of evidence now. Let me refine
 e the classification to match Claude's numbers:\n{\"actions\":[{\"type\":\"send\",\"to\":\"claude\",\"kind\":\"ack\",\"su
 ubject\":\"AUDIT 02 - Envelope Class Design Clarification\",\"body\":\"Thanks for the detailed breakdown and the refined 
@@ -285,7 +285,7 @@ ment from extractGrokAnswer and the clarification on undoTerminalStringWraps pla
         "kind": "report",
         "subject": "ENVELOPE CLASS DESIGN: parsePlan is the one unwrap site; 12 of the 75 are not envelopes",
         "body": "ENVELOPE CLASS DESIGN. Seat grok. Read-only. Portable-AI-Bus not edited. HEAD 21a0db0. Claims on the bu
-us are currently {}. #1096 already acked #1079.\n\nReclassified live log C:\\\\Users\\\\hymlo\\\\Downloads\\\\Projects\\\
+us are currently {}. #1096 already acked #1079.\n\nReclassified live log C:\\\\Users\\\\<you>\\\\Downloads\\\\Projects\\\
 \\ai-bus\\\\.ai-bus\\\\runtime\\\\brain-grok.log. 99 malformed-plan events now (98 at AUDIT 02). None have timestamps. Al
 ll still store snippet (120 chars), not payload — 21a0db0 payload logging was not in the dist that wrote them (09:35 dist
 t mtime 03:45; 21a0db0 is 05:55).\n\nCOUNTS (99):\n  32 pretty-printed-inner   (AUDIT 02: 31; event 98 is the new one)\n 
