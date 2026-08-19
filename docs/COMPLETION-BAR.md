@@ -29,6 +29,10 @@ seat that did not write it has attacked it and said so on the record.
 | 18 | send and supersede are two steps | **CERTIFIED** at `082ddfa` (grok round 3) - reaches a real provider call; both verbs agree |
 | 19 | supersede polish: transcript metadata, CLI usage | **CERTIFIED** at `eb8e10f` (grok instrument 2026-08-17) |
 | 20 | a checkpoint can become unclosable | **CERTIFIED** (grok 9/9) - operator close, reason required |
+| 21 | a refusal kills the seat | IMPLEMENTED `f528041` - survivable + reported; audit pending |
+| 22 | an absent seat is not noticed | IMPLEMENTED `52f613d` - durable dead-seats notice; audit pending |
+
+Items 1–7 were the original bar. **Items 21 and 22 were added on 2026-08-19 after a defect the author introduced with a certified fix took a seat down for hours** — the guard was right, the place it threw was not, and nothing durable said the seat was gone.
 
 Items 1–7 were the original bar. **Items 8–11 were all added on 2026-08-14/15 from measured
 failures, not planning** — three of the four were found by the system failing in front of us
