@@ -174,6 +174,17 @@ function writeStaleCodeNotices(coordinationRoot, seats, now = () => new Date().t
  * signal becomes noise. It clears the moment the seat is live again, because a stale alarm
  * about a recovered seat is worse than none - it teaches people to ignore the file.
  */
+/**
+ * ITEM 25: only an OBSERVATION clears a liveness alarm. An assumption never does.
+ *
+ * Stated as a predicate rather than an inline `!running.assumedLive` so the rule is nameable
+ * and testable, and so the next person adding a signal to this sweep has something to reuse
+ * instead of re-deriving it. I derived it wrong once already.
+ */
+function clearsDeadSeatAlarm(running) {
+  return Boolean(running) && running.assumedLive !== true;
+}
+
 function deadSeatNoticePath(coordinationRoot) {
   return path.join(coordinationRoot, '.ai-bus', 'runtime', 'dead-seats.json');
 }
@@ -268,7 +279,22 @@ function sweep() {
   for (const seat of seats) {
     const running = live.get(seat);
     if (running) {
-      checkedDead.set(seat, undefined);
+      /**
+       * ITEM 25. This was `checkedDead.set(seat, undefined)` unconditionally, and grok found
+       * it in r29(d): when the process list is unreadable, liveBrains() returns EVERY seat as
+       * `{ assumedLive: true }` - deliberately failing CLOSED so the supervisor does not read
+       * "I cannot see" as "everything died" and restart the world.
+       *
+       * My line then read that assumption as observation and CLEARED the durable alarm. So
+       * restarts failed closed while the notice failed OPEN, in the same tick, on the same
+       * data: a seat that really was dead had its DEAD-SEAT notice erased by a process list
+       * the supervisor could not even read.
+       *
+       * The guard immediately below already does this correctly for stale-code, and I walked
+       * straight past it. `assumedLive` means WE DO NOT KNOW, and "we do not know" must never
+       * clear an alarm - it can only decline to raise one.
+       */
+      if (clearsDeadSeatAlarm(running)) checkedDead.set(seat, undefined);
       const firstHealthyAt = healthySince.get(seat) ?? Date.now();
       healthySince.set(seat, firstHealthyAt);
       if ((restarts.get(seat) ?? 0) > 0 && Date.now() - firstHealthyAt >= DEFAULT_LEASE_STALE_MS) {
@@ -332,5 +358,6 @@ module.exports = {
   syncStaleCodeNotices,
   deadSeatNoticePath,
   readDeadSeatNotices,
-  syncDeadSeatNotices
+  syncDeadSeatNotices,
+  clearsDeadSeatAlarm
 };

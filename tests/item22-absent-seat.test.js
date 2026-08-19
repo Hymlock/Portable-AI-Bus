@@ -6,7 +6,9 @@ const { execFileSync } = require('node:child_process');
 const { test } = require('node:test');
 
 const SUPERVISOR = path.join(__dirname, '..', 'scripts', 'bus-supervise.js');
-const { deadSeatNoticePath, readDeadSeatNotices, syncDeadSeatNotices } = require(SUPERVISOR);
+const {
+  deadSeatNoticePath, readDeadSeatNotices, syncDeadSeatNotices, clearsDeadSeatAlarm
+} = require(SUPERVISOR);
 
 // ---------------------------------------------------------------------------
 // ITEM 22: AN ABSENT SEAT IS NOT NOTICED.
@@ -141,6 +143,37 @@ test('ITEM 22 GREEN CONTROL: a healthy bus prints no DEAD-SEAT noise', (t) => {
     [path.join(__dirname, '..', 'scripts', 'bus-tick.js'), '--root', dir, '--seat', 'hymlock', '--once'],
     { encoding: 'utf8' });
   assert.doesNotMatch(out, /DEAD-SEAT/, 'no notice, no noise');
+});
+
+// ---------------------------------------------------------------------------
+// ITEM 25: only an OBSERVATION clears a liveness alarm. An assumption never does.
+//
+// grok r29(d), and it is the dangerous one because it fails in the OPPOSITE direction to
+// everything around it. When the process list is unreadable, liveBrains() returns every seat
+// as { assumedLive: true } - deliberately failing CLOSED so the supervisor does not read
+// "I cannot see" as "everything died" and restart the world.
+//
+// My clear read that assumption as an observation. So in the same tick, on the same data,
+// restarts failed closed while the notice failed OPEN: a seat that really was dead had its
+// DEAD-SEAT alarm erased by a process list the supervisor could not even read.
+//
+// The guard for stale-code three lines below does this correctly and I walked past it.
+// ---------------------------------------------------------------------------
+
+test('ITEM 25 RED: an ASSUMED-live seat must not clear a dead-seat alarm', () => {
+  assert.equal(clearsDeadSeatAlarm({ seat: 'grok', assumedLive: true }), false,
+    'REGRESSION: an unreadable process list erased a real alarm');
+});
+
+test('ITEM 25 GREEN CONTROL: an OBSERVED-live seat still clears its alarm', () => {
+  // Without this, a fix that never cleared would pass the gate above and strand every alarm
+  // forever - which is the stale-notice failure the item-22 gates already forbid.
+  assert.equal(clearsDeadSeatAlarm({ seat: 'grok', pid: 1234 }), true);
+  assert.equal(clearsDeadSeatAlarm({ seat: 'grok', assumedLive: false, pid: 1234 }), true);
+});
+
+test('ITEM 25: an absent seat clears nothing', () => {
+  assert.equal(clearsDeadSeatAlarm(undefined), false, 'a seat with no process is the alarm, not the clear');
 });
 
 test('ITEM 22 GREEN CONTROL: a corrupt or absent notice file reads as "nothing wrong"', (t) => {
