@@ -31,10 +31,12 @@ seat that did not write it has attacked it and said so on the record.
 | 20 | a checkpoint can become unclosable | **CERTIFIED** (grok 9/9) - operator close, reason required |
 | 21 | a refusal kills the seat | **CERTIFIED** at `f528041` (grok r25, 10 PASS / 0 FAIL) - survivable and reported; item 10 unweakened |
 | 22 | an absent seat is not noticed | **CERTIFIED** at `631287f` (grok r29, live bus) - notice file PLUS the DEAD-SEAT tick line |
-| 23 | `liveBrains()` on the tick is machine-wide, not `--root` scoped | IMPLEMENTED `pending` - now uses `processesForRoot`, same module as the supervisor; Windows-only detection remains, owned by the portability pass |
-| 24 | an unreadable mailbox suppresses the DEAD-SEAT line | IMPLEMENTED `pending` - notices print alongside MAILBOX UNREADABLE instead of being suppressed by it |
-| 25 | a dead-seat notice FAILS OPEN when the process list is unreadable | IMPLEMENTED `0f72651` - only an OBSERVATION clears an alarm; audit pending |
-| 26 | a test file invoked directly can pass on stale `dist` | IMPLEMENTED `pending` - StaleDistWarning on direct single-file runs; a warning not a refusal, per item 6 |
+| 23 | `liveBrains()` on the tick is machine-wide, not `--root` scoped | **CERTIFIED** at `f4b2ead` (grok r34) - `processesForRoot`; temp-root NONE vs 631287f leak of `codex,grok`. Unix early-return is carving, not unfinished 23 |
+| 24 | an unreadable mailbox suppresses the DEAD-SEAT line | **CERTIFIED** at `f4b2ead` (grok r34) - notices print alongside MAILBOX UNREADABLE; 631287f hid DEAD-SEAT |
+| 25 | a dead-seat notice FAILS OPEN when the process list is unreadable | IMPLEMENTED `0f72651` - r29(d) closed (unreadable list keeps the file); predicate is still a negative (`assumedLive !== true`); **not certified** |
+| 27 | a dead-seat notice can outlive the death it describes | IMPLEMENTED `684acce` - tick cross-checks and prints STALE-NOTICE; audit pending |
+| 28 | the operator wake path can hang forever on a process query | IMPLEMENTED `pending` - both platform branches bounded at 10s; found by the coordinator's own watchdog stalling |
+| 26 | a test file invoked directly can pass on stale `dist` | IMPLEMENTED `f4b2ead` - StaleDistWarning exists; helper is opt-in (4 of 40 dist-loading tests); author gate does not assert the warning; **not certified** |
 
 Items 1–7 were the original bar. **Items 21 and 22 were added on 2026-08-19 after a defect the author introduced with a certified fix took a seat down for hours** — the guard was right, the place it threw was not, and nothing durable said the seat was gone.
 

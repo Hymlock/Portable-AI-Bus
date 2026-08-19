@@ -48,6 +48,29 @@ function identifyNodeProcess(processInfo) {
   return undefined;
 }
 
+/**
+ * ITEM 28: the process query had NO TIMEOUT, on the operator wake path.
+ *
+ * `spawnSync` without `timeout` waits forever. `bus-tick` calls this every interval to fill
+ * the `brains:` field, so a wedged `powershell` or `ps` does not degrade the heartbeat - it
+ * STOPS it. The tick is the thing that wakes a human operator, so the failure mode is: the
+ * bus goes quiet, and the silence looks exactly like a quiet bus.
+ *
+ * Measured on 2026-08-19, on the coordinator's own watchdog rather than in a test. A monitor
+ * doing this same query every two minutes stalled mid-run: the process stayed alive, the loop
+ * never advanced, and no heartbeat fired for the better part of an hour while work continued.
+ * Hymlock noticed the silence before I did, which is the whole problem with a stalled watchdog.
+ *
+ * It is also the same defect recorded upstream in the Mantella notes - a blocking
+ * `requests.get` under a comment claiming a two-second timeout. A comment is not a timeout.
+ *
+ * On expiry `spawnSync` returns with `error` set and a null status, which the existing
+ * status check already turns into a throw; every caller here treats a throw as "cannot see
+ * the process list" and degrades rather than dying. The failure was never the error path - it
+ * was that there was no error to take.
+ */
+const PROCESS_QUERY_TIMEOUT_MS = 10_000;
+
 function listNodeProcesses() {
   if (process.platform === 'win32') {
     const command = [
@@ -55,17 +78,19 @@ function listNodeProcesses() {
       "@(Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | Select-Object ProcessId,CommandLine) | ConvertTo-Json -Compress"
     ].join('; ');
     const result = spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', command], {
-      encoding: 'utf8', windowsHide: true
+      encoding: 'utf8', windowsHide: true, timeout: PROCESS_QUERY_TIMEOUT_MS
     });
-    if (result.status !== 0) {
-      throw new Error(`Cannot inspect Node processes safely: ${(result.stderr || result.stdout || 'process query failed').trim()}`);
+    if (result.error || result.status !== 0) {
+      throw new Error(`Cannot inspect Node processes safely: ${(result.error?.message || result.stderr || result.stdout || 'process query failed').toString().trim()}`);
     }
     const parsed = JSON.parse((result.stdout || '[]').trim() || '[]');
     return (Array.isArray(parsed) ? parsed : [parsed]).map(identifyNodeProcess).filter(Boolean);
   }
 
-  const result = spawnSync('ps', ['-eo', 'pid=,args='], { encoding: 'utf8' });
-  if (result.status !== 0) throw new Error(`Cannot inspect Node processes safely: ${(result.stderr || '').trim()}`);
+  const result = spawnSync('ps', ['-eo', 'pid=,args='], { encoding: 'utf8', timeout: PROCESS_QUERY_TIMEOUT_MS });
+  if (result.error || result.status !== 0) {
+    throw new Error(`Cannot inspect Node processes safely: ${(result.error?.message || result.stderr || '').toString().trim()}`);
+  }
   return (result.stdout || '').split(/\r?\n/).map((line) => {
     const match = line.trim().match(/^(\d+)\s+(.+)$/);
     return match ? identifyNodeProcess({ pid: Number(match[1]), commandLine: match[2] }) : undefined;
