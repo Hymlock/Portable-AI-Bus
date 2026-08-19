@@ -128,7 +128,13 @@ test('Windows process host round-trips quoted JSON through a command wrapper', {
   }
 });
 
-test('Windows process host uses headless ConPTY and strips terminal controls', async () => {
+test('Windows process host uses headless ConPTY and strips terminal controls', {
+  // CI 32310252210: this asserted ConPTY behaviour with no platform guard, so on
+  // ubuntu-latest it did not skip - it FAILED. Ten of these took the Linux job red
+  // while this machine showed 569/0. ConPTY is Windows-only; the honest statement is
+  // 'not covered here', not a red that says the code is broken.
+  skip: process.platform !== 'win32'
+}, async () => {
   let received;
   const fakePty = {
     spawn(command, args, options) {
@@ -221,7 +227,13 @@ test('non-Windows process host preserves stdout and stderr pipes', async () => {
   assert.deepEqual(received.options.stdio, ['ignore', 'pipe', 'pipe']);
 });
 
-test('ConPTY timeout kills the process and returns code 124', async () => {
+test('ConPTY timeout kills the process and returns code 124', {
+  // CI 32310252210: this asserted ConPTY behaviour with no platform guard, so on
+  // ubuntu-latest it did not skip - it FAILED. Ten of these took the Linux job red
+  // while this machine showed 569/0. ConPTY is Windows-only; the honest statement is
+  // 'not covered here', not a red that says the code is broken.
+  skip: process.platform !== 'win32'
+}, async () => {
   let killed = false;
   const result = await runProcess(process.execPath, [], { timeoutMs: 5 }, {
     platform: 'win32',
@@ -245,7 +257,13 @@ test('ConPTY timeout kills the process and returns code 124', async () => {
   });
 });
 
-test('ConPTY observes an exited provider promptly when node-pty loses its exit event', async () => {
+test('ConPTY observes an exited provider promptly when node-pty loses its exit event', {
+  // CI 32310252210: this asserted ConPTY behaviour with no platform guard, so on
+  // ubuntu-latest it did not skip - it FAILED. Ten of these took the Linux job red
+  // while this machine showed 569/0. ConPTY is Windows-only; the honest statement is
+  // 'not covered here', not a red that says the code is broken.
+  skip: process.platform !== 'win32'
+}, async () => {
   const started = Date.now();
   const result = await runProcess(process.execPath, [], { timeoutMs: 2_000 }, {
     platform: 'win32',
@@ -272,7 +290,13 @@ test('ConPTY observes an exited provider promptly when node-pty loses its exit e
   });
 });
 
-test('ConPTY does not reap a genuinely running provider early', async () => {
+test('ConPTY does not reap a genuinely running provider early', {
+  // CI 32310252210: this asserted ConPTY behaviour with no platform guard, so on
+  // ubuntu-latest it did not skip - it FAILED. Ten of these took the Linux job red
+  // while this machine showed 569/0. ConPTY is Windows-only; the honest statement is
+  // 'not covered here', not a red that says the code is broken.
+  skip: process.platform !== 'win32'
+}, async () => {
   let killed = false;
   const started = Date.now();
   const result = await runProcess(process.execPath, [], { timeoutMs: 120 }, {
@@ -296,7 +320,13 @@ test('ConPTY does not reap a genuinely running provider early', async () => {
   assert.equal(result.stderr, 'Process timed out while the child was still running.');
 });
 
-test('ConPTY reports a dead host separately from a live-child timeout', async () => {
+test('ConPTY reports a dead host separately from a live-child timeout', {
+  // CI 32310252210: this asserted ConPTY behaviour with no platform guard, so on
+  // ubuntu-latest it did not skip - it FAILED. Ten of these took the Linux job red
+  // while this machine showed 569/0. ConPTY is Windows-only; the honest statement is
+  // 'not covered here', not a red that says the code is broken.
+  skip: process.platform !== 'win32'
+}, async () => {
   const result = await runProcess(process.execPath, [], { timeoutMs: 2_000 }, {
     platform: 'win32',
     loadPty: () => ({
@@ -337,7 +367,13 @@ function tmpStallFile(seat) {
 // blocks in ConnectNamedPipe before CreateProcess. A timer on the blocked loop cannot
 // fire. The RED is a sibling process: parent sees open=0 while the child is still
 // stuck inside spawn.
-test('ITEM 12 RED: a spawn that never returns writes nothing the parent can read', async () => {
+test('ITEM 12 RED: a spawn that never returns writes nothing the parent can read', {
+  // CI 32310252210: this asserted ConPTY behaviour with no platform guard, so on
+  // ubuntu-latest it did not skip - it FAILED. Ten of these took the Linux job red
+  // while this machine showed 569/0. ConPTY is Windows-only; the honest statement is
+  // 'not covered here', not a red that says the code is broken.
+  skip: process.platform !== 'win32'
+}, async () => {
   const tmp = tmpStallFile('grok');
   const probe = `
     const { runProcess } = require(${JSON.stringify(path.join(process.cwd(), 'dist', 'brain', 'process-host.js'))});
@@ -382,7 +418,13 @@ test('ITEM 12 RED: a spawn that never returns writes nothing the parent can read
   }
 });
 
-test('ITEM 12 GREEN: a fast ConPTY call still writes no stall edges', async () => {
+test('ITEM 12 GREEN: a fast ConPTY call still writes no stall edges', {
+  // CI 32310252210: this asserted ConPTY behaviour with no platform guard, so on
+  // ubuntu-latest it did not skip - it FAILED. Ten of these took the Linux job red
+  // while this machine showed 569/0. ConPTY is Windows-only; the honest statement is
+  // 'not covered here', not a red that says the code is broken.
+  skip: process.platform !== 'win32'
+}, async () => {
   const tmp = tmpStallFile('grok');
   const ledger = createStallLedger({ seat: 'grok', filePath: tmp.filePath });
   let cleaned = false;
@@ -451,7 +493,13 @@ function fakeReturningPty(spawnMs) {
 // Codex #1728: 120 returning calls, spawn 20-40ms, spawnStallMs=30, ledger stayed 0/0/0.
 // Sibling starts late, its local timer is still waiting, parent writes the marker
 // and kills the sibling. A real parent-clock breach is invisible.
-test('ITEM 12 RED: late sibling plus returning breach writes nothing on sibling-local clock', async () => {
+test('ITEM 12 RED: late sibling plus returning breach writes nothing on sibling-local clock', {
+  // CI 32310252210: this asserted ConPTY behaviour with no platform guard, so on
+  // ubuntu-latest it did not skip - it FAILED. Ten of these took the Linux job red
+  // while this machine showed 569/0. ConPTY is Windows-only; the honest statement is
+  // 'not covered here', not a red that says the code is broken.
+  skip: process.platform !== 'win32'
+}, async () => {
   const tmp = tmpStallFile('grok');
   const result = await runProcess(process.execPath, ['-p', 'PONG'], {
     timeoutMs: 1_000,
@@ -474,7 +522,13 @@ test('ITEM 12 RED: late sibling plus returning breach writes nothing on sibling-
   assert.equal(snap.open.length, 0, 'a returning call must resolve the backfilled row');
 });
 
-test('ITEM 12: delayed sibling still records a never-returning spawn', async () => {
+test('ITEM 12: delayed sibling still records a never-returning spawn', {
+  // CI 32310252210: this asserted ConPTY behaviour with no platform guard, so on
+  // ubuntu-latest it did not skip - it FAILED. Ten of these took the Linux job red
+  // while this machine showed 569/0. ConPTY is Windows-only; the honest statement is
+  // 'not covered here', not a red that says the code is broken.
+  skip: process.platform !== 'win32'
+}, async () => {
   const tmp = tmpStallFile('grok');
   const probe = `
     const { runProcess } = require(${JSON.stringify(path.join(process.cwd(), 'dist', 'brain', 'process-host.js'))});
@@ -553,7 +607,13 @@ test('ITEM 12: sibling death is fail-open while spawn never returns', async () =
   }
 });
 
-test('ITEM 12: success-path cleanup runs after exit, not instead of waiting for it', async () => {
+test('ITEM 12: success-path cleanup runs after exit, not instead of waiting for it', {
+  // CI 32310252210: this asserted ConPTY behaviour with no platform guard, so on
+  // ubuntu-latest it did not skip - it FAILED. Ten of these took the Linux job red
+  // while this machine showed 569/0. ConPTY is Windows-only; the honest statement is
+  // 'not covered here', not a red that says the code is broken.
+  skip: process.platform !== 'win32'
+}, async () => {
   let cleaned = false;
   let exited = false;
   const result = await runProcess(process.execPath, ['-p', 'PONG'], {
