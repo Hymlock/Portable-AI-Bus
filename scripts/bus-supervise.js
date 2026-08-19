@@ -153,6 +153,72 @@ function writeStaleCodeNotices(coordinationRoot, seats, now = () => new Date().t
 }
 
 /**
+ * ITEM 22: AN ABSENT SEAT IS NOT NOTICED.
+ *
+ * Measured 2026-08-19. grok's brain died on every wake for hours. This supervisor was running
+ * the whole time and behaved exactly as designed: it restarted the seat, hit the restart
+ * budget, and settled into cool-down-and-retry. Its only sink for that was `console.log`.
+ *
+ * Nobody was reading the console. The seat stayed absent, and the operator-visible signals -
+ * mailbox state, baton, `status` - all looked normal, because a seat with no brain still has a
+ * mailbox and can still hold the baton. The coordinator misdiagnosed it twice, first as "out
+ * of credits" and then as "working", before running `bus-restart` by hand and being told
+ * `missing brains=grok` in one line.
+ *
+ * This is item 9 again - a detector whose only sink is a log - in a path item 9 never covered.
+ * The stale-code notice above is the shape the project already settled on for exactly this,
+ * so a dead seat gets the same durable treatment rather than a second invented mechanism.
+ *
+ * The notice is written when the restart budget is EXHAUSTED, not on the first death: a seat
+ * that dies once and comes back is the supervisor working, and crying about it is how a
+ * signal becomes noise. It clears the moment the seat is live again, because a stale alarm
+ * about a recovered seat is worse than none - it teaches people to ignore the file.
+ */
+function deadSeatNoticePath(coordinationRoot) {
+  return path.join(coordinationRoot, '.ai-bus', 'runtime', 'dead-seats.json');
+}
+
+function readDeadSeatNotices(coordinationRoot) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(deadSeatNoticePath(coordinationRoot), 'utf8'));
+    if (!parsed || parsed.version !== 1 || !Array.isArray(parsed.seats)) return { version: 1, seats: [] };
+    return {
+      version: 1,
+      updatedAt: typeof parsed.updatedAt === 'string' ? parsed.updatedAt : undefined,
+      seats: parsed.seats.filter((item) => item && typeof item.seat === 'string')
+    };
+  } catch {
+    return { version: 1, seats: [] };
+  }
+}
+
+/**
+ * `dead` is a Map of seat -> reason (or undefined to clear). Seats absent from the map keep
+ * whatever was recorded, for the same reason syncStaleCodeNotices does: inventing a clear for
+ * a seat nobody looked at hides a real condition.
+ */
+function syncDeadSeatNotices(coordinationRoot, dead, now = () => new Date().toISOString()) {
+  const current = new Map(readDeadSeatNotices(coordinationRoot).seats.map((item) => [item.seat, item]));
+  for (const [seat, reason] of dead) {
+    if (reason) current.set(seat, { seat, reason, at: current.get(seat)?.at ?? now() });
+    else current.delete(seat);
+  }
+  const file = deadSeatNoticePath(coordinationRoot);
+  if (current.size === 0) {
+    try { fs.unlinkSync(file); } catch { /* absent is the green case */ }
+    return { version: 1, seats: [] };
+  }
+  const snapshot = {
+    version: 1,
+    updatedAt: now(),
+    seats: [...current.values()].sort((left, right) => left.seat.localeCompare(right.seat))
+  };
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, `${JSON.stringify(snapshot, null, 2)}\n`, 'utf8');
+  return snapshot;
+}
+
+/**
  * Merge just-checked seats into the durable notice. Seats we did not inspect (assumedLive)
  * keep whatever was already recorded; inventing a clear would hide a real stale condition.
  */
@@ -197,9 +263,12 @@ function startBrain(seat) {
 function sweep() {
   const live = liveBrains();
   const checkedStale = new Map();
+  // Item 22: what this sweep learned about ABSENCE, written durably at the end of the tick.
+  const checkedDead = new Map();
   for (const seat of seats) {
     const running = live.get(seat);
     if (running) {
+      checkedDead.set(seat, undefined);
       const firstHealthyAt = healthySince.get(seat) ?? Date.now();
       healthySince.set(seat, firstHealthyAt);
       if ((restarts.get(seat) ?? 0) > 0 && Date.now() - firstHealthyAt >= DEFAULT_LEASE_STALE_MS) {
@@ -226,6 +295,9 @@ function sweep() {
       budgetExhaustedAt.set(seat, exhaustedAt);
       if (Date.now() - exhaustedAt < DEFAULT_LEASE_STALE_MS) {
         console.log(`tick ${stamp()} ${seat} DEAD after ${maxRestarts} restarts - cooling down, then retrying.`);
+        // Item 22: the durable sink. Until this, that console line was the ONLY record that a
+        // seat was gone, and nobody was reading it.
+        checkedDead.set(seat, `no brain process; ${maxRestarts} restarts failed, cooling down and retrying`);
         continue;
       }
       // Permanent give-up is another silent dead seat. Open a fresh bounded burst after one
@@ -240,6 +312,7 @@ function sweep() {
     console.log(`tick ${stamp()} ${seat} was dead - restarted pid ${pid} (${nextCount}/${maxRestarts})`);
   }
   syncStaleCodeNotices(root, checkedStale);
+  syncDeadSeatNotices(root, checkedDead);
 }
 
 if (require.main === module) {
@@ -256,5 +329,8 @@ module.exports = {
   staleCodeNoticePath,
   readStaleCodeNotices,
   writeStaleCodeNotices,
-  syncStaleCodeNotices
+  syncStaleCodeNotices,
+  deadSeatNoticePath,
+  readDeadSeatNotices,
+  syncDeadSeatNotices
 };
