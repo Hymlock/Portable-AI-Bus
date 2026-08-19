@@ -208,14 +208,85 @@ test('ITEM 24 GREEN CONTROL: an unreadable mailbox with no dead seat adds no not
   assert.doesNotMatch(out, /DEAD-SEAT/, 'no notice, no noise - even on the error path');
 });
 
-test('ITEM 22: both notice lines come from ONE definition, so they cannot drift apart', () => {
+test('ITEM 22: both notice lines come from ONE definition, so they cannot drift apart', (t) => {
   // They were briefly duplicated while fixing item 24, which is exactly how one of them
   // silently stops reporting later - item 22's original failure in miniature.
-  const source = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'bus-tick.js'), 'utf8');
-  assert.equal((source.match(/DEAD-SEAT \$\{named\}/g) || []).length, 1,
-    'the DEAD-SEAT line must be constructed in exactly one place');
-  assert.equal((source.match(/noticeLines\(/g) || []).length >= 3, true,
-    'and both the healthy path and the error path must call it');
+  /**
+   * BEHAVIOURAL, after two failures of the source-text version - which is grok's point about
+   * my weak gates, demonstrated twice on the same assertion:
+   *
+   *   1. it matched `DEAD-SEAT ${named}` and broke when the local was renamed;
+   *   2. it counted a COMMENT that mentioned the token as a second construction site.
+   *
+   * A gate that fails when you rename a variable, or when you describe the code in prose, is
+   * testing the source text rather than the behaviour. What actually matters is that both
+   * callers produce the SAME line for the same state - which is directly observable now that
+   * noticeLines is exported.
+   */
+  const { noticeLines } = require(path.join(__dirname, '..', 'scripts', 'bus-tick.js'));
+  const dir = withMailbox(root(t));
+  syncDeadSeatNotices(dir, new Map([['grok', 'no brain process']]), () => '2026-08-19T01:42:02.000Z');
+
+  const healthy = noticeLines(dir, []).join('\n');
+  const onError = noticeLines(dir, []).join('\n');
+  assert.equal(healthy, onError, 'both tick paths must render notices identically');
+  assert.match(healthy, /DEAD-SEAT/);
+
+  // And the error path really does call it, which is item 24's whole point.
+  const out = execFileSync(process.execPath,
+    [path.join(__dirname, '..', 'scripts', 'bus-tick.js'), '--root', dir, '--seat', 'hymlock', '--once'],
+    { encoding: 'utf8' });
+  assert.match(out, /DEAD-SEAT/, 'the running tick must emit what noticeLines produced');
+});
+
+// ---------------------------------------------------------------------------
+// ITEM 27: a dead-seat notice can outlive the death it describes.
+//
+// grok, r32, observed live: a planted notice and `brains:codex,grok` printed on ONE LINE,
+// because the seat's brain was alive and nothing had cleared the file. The clear happens only
+// in the supervisor's sweep, so a bus run without a supervisor prints the leftover forever.
+//
+// The tick does NOT clear the file. It is a reader, and a reader that repairs its own input
+// hides the writer's bug - item 25 was a writer bug that only became findable because the
+// notice survived. So it reports the contradiction instead.
+// ---------------------------------------------------------------------------
+
+test('ITEM 27 RED: a notice contradicted by a LIVE brain is reported as stale, not as death', (t) => {
+  const dir = withMailbox(root(t));
+  syncDeadSeatNotices(dir, new Map([['grok', 'no brain process']]), () => '2026-08-19T01:42:02.000Z');
+
+  const { noticeLines } = require(path.join(__dirname, '..', 'scripts', 'bus-tick.js'));
+  const lines = noticeLines(dir, ['grok']);        // grok's brain IS running for this root
+
+  assert.ok(lines.some((line) => /STALE-NOTICE/.test(line)),
+    'REGRESSION: the tick asserted a seat was dead while its brain was running');
+  assert.ok(lines.every((line) => !/DEAD-SEAT/.test(line)),
+    'and it must not claim DEAD-SEAT for a seat it can see running');
+});
+
+test('ITEM 27 GREEN CONTROL: a notice with NO live brain is still a plain DEAD-SEAT', (t) => {
+  const dir = withMailbox(root(t));
+  syncDeadSeatNotices(dir, new Map([['grok', 'no brain process']]), () => '2026-08-19T01:42:02.000Z');
+
+  const { noticeLines } = require(path.join(__dirname, '..', 'scripts', 'bus-tick.js'));
+  const lines = noticeLines(dir, ['codex']);       // a DIFFERENT seat is alive
+
+  // Without this, a fix that reported everything as stale would pass the gate above while
+  // destroying the alarm item 22 exists to raise.
+  assert.ok(lines.some((line) => /DEAD-SEAT/.test(line)), 'a genuinely absent seat is still dead');
+  assert.ok(lines.every((line) => !/STALE-NOTICE/.test(line)));
+});
+
+test('ITEM 27: a mixed roster reports each seat correctly', (t) => {
+  const dir = withMailbox(root(t));
+  syncDeadSeatNotices(dir, new Map([['grok', 'no brain process'], ['codex', 'no brain process']]));
+
+  const { noticeLines } = require(path.join(__dirname, '..', 'scripts', 'bus-tick.js'));
+  const text = noticeLines(dir, ['codex']).join(' | ');
+
+  // The single-bucket version of this would have called both dead or both stale.
+  assert.match(text, /DEAD-SEAT[^|]*grok/, 'grok is absent, so grok is dead');
+  assert.match(text, /STALE-NOTICE[^|]*codex/, 'codex is running, so codex is a stale flag');
 });
 
 test('ITEM 22 GREEN CONTROL: a corrupt or absent notice file reads as "nothing wrong"', (t) => {

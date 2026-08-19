@@ -104,18 +104,42 @@ function lastActivityMinutes() {
  * fact that actually mattered when a seat stayed dead for eight hours and every other signal
  * read normal.
  */
-function noticeLines(coordinationRoot) {
+function noticeLines(coordinationRoot, live = liveBrains()) {
   const lines = [];
   const stale = readStaleCodeNotices(coordinationRoot);
   if (stale.seats.length > 0) {
     lines.push(`STALE-CODE ${stale.seats.map((item) => item.seat).join(',')} - running brains predate dist; bus-restart, do not treat as current`);
   }
+
+  /**
+   * ITEM 27: a dead-seat notice can outlive the death it describes.
+   *
+   * The clear happens only in the supervisor's sweep. grok observed the consequence live: a
+   * planted notice and `brains:codex,grok` printed on ONE LINE, because the seat's brain was
+   * alive and nothing had cleared the file. Its other paths are just as real - a bus run
+   * without a supervisor prints the leftover forever, and brains restarted outside the
+   * supervisor stay flagged until the next sweep.
+   *
+   * The tick deliberately does NOT clear the file. It is a reader; a reader that repairs its
+   * own input hides the writer's bug, and item 25 was exactly a writer bug that only became
+   * findable because the notice survived. So it cross-checks and SAYS the two disagree.
+   *
+   * This is only meaningful because item 23 scoped liveBrains() to --root. Before that, a
+   * brain from some other bus on the same box would have "confirmed" a seat alive here.
+   */
   const dead = readDeadSeatNotices(coordinationRoot);
   if (dead.seats.length > 0) {
-    const named = dead.seats
-      .map((item) => (item.at ? `${item.seat}(since ${String(item.at).slice(11, 19)})` : item.seat))
-      .join(',');
-    lines.push(`DEAD-SEAT ${named} - no brain process; restarts exhausted. bus-restart, and do not read the baton as progress`);
+    const running = new Set(live);
+    const format = (item) => (item.at ? `${item.seat}(since ${String(item.at).slice(11, 19)})` : item.seat);
+    const absent = dead.seats.filter((item) => !running.has(item.seat));
+    const contradicted = dead.seats.filter((item) => running.has(item.seat));
+
+    if (absent.length > 0) {
+      lines.push(`DEAD-SEAT ${absent.map(format).join(',')} - no brain process; restarts exhausted. bus-restart, and do not read the baton as progress`);
+    }
+    if (contradicted.length > 0) {
+      lines.push(`STALE-NOTICE ${contradicted.map(format).join(',')} - flagged dead but a brain for THIS root is running; the supervisor has not swept. Trust the brain, not the file`);
+    }
   }
   return lines;
 }
@@ -213,7 +237,10 @@ function tick() {
   ];
   if (bus.halted) parts.push('HALTED');
 
-  parts.push(...noticeLines(root));
+  // Pass the brains ALREADY measured for this line. Re-querying would let `brains:` and
+  // STALE-NOTICE disagree inside a single tick, which is the contradiction item 27 exists to
+  // report rather than to create.
+  parts.push(...noticeLines(root, brains));
 
 
   const quietMinutes = lastActivityMinutes();
@@ -237,7 +264,20 @@ function tick() {
   console.log(parts.join('  '));
 }
 
-tick();
-if (!once) {
-  setInterval(tick, intervalMs);
+/**
+ * Only tick when RUN, not when REQUIRED.
+ *
+ * Without this guard, `require('./bus-tick')` printed a tick and installed a live interval as
+ * a side effect of being imported, which is why nothing had ever imported it - including the
+ * tests, which had to drive it through a subprocess. A module that cannot be loaded without
+ * doing its job cannot be unit-tested, and item 27's cross-check needed `live` injected
+ * rather than measured from the machine running the suite.
+ */
+if (require.main === module) {
+  tick();
+  if (!once) {
+    setInterval(tick, intervalMs);
+  }
 }
+
+module.exports = { noticeLines, liveBrains };
