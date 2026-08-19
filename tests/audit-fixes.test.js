@@ -4,6 +4,8 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { test } = require('node:test');
+// Item 26: warn if this file is about to test bytecode older than the source it covers.
+require('./helpers/require-fresh-dist')();
 const { MailboxStore } = require('../dist/mailbox.js');
 const { cliBusClient } = require('../dist/brain/bus-client.js');
 

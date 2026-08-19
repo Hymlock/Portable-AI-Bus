@@ -76,16 +76,59 @@ function lastActivityMinutes() {
   }
 }
 
-/** Seats with a live brain process, by name. Windows-only detection; empty elsewhere. */
+/**
+ * Seats with a live brain process **for THIS root**, by name.
+ *
+ * ITEM 23, grok r29: this used to scan the whole machine. A brain belonging to a DIFFERENT
+ * bus on the same box made `brains:` look healthy while this root's own dead-seat notice said
+ * the seat had been gone for hours - grok observed exactly that mixed line live,
+ * `brains:codex,grok` printed alongside `DEAD-SEAT grok`.
+ *
+ * The supervisor already had this right: it uses `processesForRoot`. The operator line, which
+ * is the surface a human actually reads, did not. Same module now, so the two cannot disagree
+ * about which machine's seats they are describing.
+ *
+ * Still Windows-only detection, and that is item 23's remaining half rather than a fix: on
+ * any other platform this returns [] and the field reads NONE. Honest, but not portable, and
+ * the portability pass owns it.
+ */
+/**
+ * The durable operator notices, as tick fields.
+ *
+ * ONE definition, used by both the healthy path and the unreadable-mailbox path. They were
+ * separate for about ten minutes while fixing item 24 and that is exactly how the two drift
+ * apart until one of them silently stops reporting - which is item 22's original failure,
+ * where the file existed and the line that should have read it did not.
+ *
+ * ITEM 22: the DEAD-SEAT line prints the first-seen time, because "gone since 01:42" was the
+ * fact that actually mattered when a seat stayed dead for eight hours and every other signal
+ * read normal.
+ */
+function noticeLines(coordinationRoot) {
+  const lines = [];
+  const stale = readStaleCodeNotices(coordinationRoot);
+  if (stale.seats.length > 0) {
+    lines.push(`STALE-CODE ${stale.seats.map((item) => item.seat).join(',')} - running brains predate dist; bus-restart, do not treat as current`);
+  }
+  const dead = readDeadSeatNotices(coordinationRoot);
+  if (dead.seats.length > 0) {
+    const named = dead.seats
+      .map((item) => (item.at ? `${item.seat}(since ${String(item.at).slice(11, 19)})` : item.seat))
+      .join(',');
+    lines.push(`DEAD-SEAT ${named} - no brain process; restarts exhausted. bus-restart, and do not read the baton as progress`);
+  }
+  return lines;
+}
+
 function liveBrains() {
   if (process.platform !== 'win32') return [];
   try {
-    const out = execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command',
-      "Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | " +
-      "Where-Object { $_.CommandLine -match 'brain[\\\\/]cli\\.js' } | " +
-      "ForEach-Object { ($_.CommandLine -split '--seat ')[1].Split(' ')[0] }"
-    ], { encoding: 'utf8', windowsHide: true });
-    return out.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+    const { listNodeProcesses, processesForRoot } = require('./bus-processes');
+    return [...new Set(
+      processesForRoot(listNodeProcesses(), root)
+        .map((process_) => ((process_.commandLine || '').match(/--seat\s+(\S+)/) || [])[1])
+        .filter(Boolean)
+    )].sort();
   } catch {
     return [];
   }
@@ -145,8 +188,18 @@ function tick() {
   const stamp = new Date().toISOString().slice(11, 19);
 
   if (bus.error) {
-    // Still a beat. A pilot woken to "the mailbox is unreadable" is exactly right.
-    console.log(`tick ${stamp} MAILBOX UNREADABLE: ${bus.error}`);
+    /**
+     * ITEM 24, grok r29: this returned before any notice line, so an unreadable mailbox
+     * SUPPRESSED the dead-seat report. A dead seat matters more when the mailbox is broken,
+     * not less - those are exactly the conditions where an operator most needs to know which
+     * seat stopped, and "MAILBOX UNREADABLE" alone does not say.
+     *
+     * The notices live on disk and do not depend on the mailbox parsing, so there is no
+     * reason for one failure to hide the other. Still a beat, and still the mailbox error
+     * first, because that is the more urgent fact.
+     */
+    const parts = [`tick ${stamp}`, `MAILBOX UNREADABLE: ${bus.error}`, ...noticeLines(root)];
+    console.log(parts.join('  '));
     return;
   }
 
@@ -160,36 +213,8 @@ function tick() {
   ];
   if (bus.halted) parts.push('HALTED');
 
-  const stale = readStaleCodeNotices(root);
-  if (stale.seats.length > 0) {
-    parts.push(`STALE-CODE ${stale.seats.map((item) => item.seat).join(',')} - running brains predate dist; bus-restart, do not treat as current`);
-  }
+  parts.push(...noticeLines(root));
 
-  /**
-   * ITEM 22, the half that was missing. Caught by grok in r25, which refused to certify the
-   * item and refused to write this itself: "I will not certify a half-shape by writing the
-   * missing half myself and then blessing it."
-   *
-   * Item 9's shape is the FILE PLUS THE TICK. The supervisor writes dead-seats.json, but
-   * nothing read it, so the operator surface stayed green - which was the measured failure in
-   * the first place, not a detail of it. grok reproduced it live: dead-seats.json named grok,
-   * and this line printed the stale-code sibling and said nothing about the dead seat.
-   *
-   * `brains:...` above is NOT a substitute, and that is grok's finding too: liveBrains() is
-   * Windows-only, scans the whole machine, and is not scoped to --root. A brain belonging to
-   * some other bus on the same box makes that field look healthy while THIS root's durable
-   * notice says the seat has been gone for hours.
-   *
-   * The age is printed because "gone since 01:42" is the fact that mattered when a seat stayed
-   * dead for eight hours and every other signal read normal.
-   */
-  const dead = readDeadSeatNotices(root);
-  if (dead.seats.length > 0) {
-    const named = dead.seats
-      .map((item) => (item.at ? `${item.seat}(since ${String(item.at).slice(11, 19)})` : item.seat))
-      .join(',');
-    parts.push(`DEAD-SEAT ${named} - no brain process; restarts exhausted. bus-restart, and do not read the baton as progress`);
-  }
 
   const quietMinutes = lastActivityMinutes();
 

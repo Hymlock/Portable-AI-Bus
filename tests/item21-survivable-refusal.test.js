@@ -3,6 +3,8 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const { test } = require('node:test');
+// Item 26: warn if this file is about to test bytecode older than the source it covers.
+require('./helpers/require-fresh-dist')();
 const { MailboxStore } = require('../dist/mailbox.js');
 const { runBrain } = require('../dist/brain/runner.js');
 

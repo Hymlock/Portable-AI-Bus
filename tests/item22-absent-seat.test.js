@@ -176,6 +176,48 @@ test('ITEM 25: an absent seat clears nothing', () => {
   assert.equal(clearsDeadSeatAlarm(undefined), false, 'a seat with no process is the alarm, not the clear');
 });
 
+// ---------------------------------------------------------------------------
+// ITEM 24: an unreadable mailbox must not SUPPRESS the dead-seat report.
+//
+// grok r29, reproduced: the tick returned on MAILBOX UNREADABLE before any notice line. A
+// dead seat matters MORE when the mailbox is broken, not less - those are precisely the
+// conditions where an operator needs to know which seat stopped, and "MAILBOX UNREADABLE"
+// alone does not say. The notices live on disk and do not depend on the mailbox parsing, so
+// there was never a reason for one failure to hide the other.
+// ---------------------------------------------------------------------------
+
+test('ITEM 24 RED: a dead seat is reported even when the mailbox is unreadable', (t) => {
+  const dir = root(t);           // deliberately NO mailbox
+  syncDeadSeatNotices(dir, new Map([['grok', 'no brain process']]), () => '2026-08-19T01:42:02.000Z');
+
+  const out = execFileSync(process.execPath,
+    [path.join(__dirname, '..', 'scripts', 'bus-tick.js'), '--root', dir, '--seat', 'hymlock', '--once'],
+    { encoding: 'utf8' });
+
+  assert.match(out, /MAILBOX UNREADABLE/, 'the mailbox failure is still reported, and reported first');
+  assert.match(out, /DEAD-SEAT/, 'REGRESSION: a broken mailbox hid the dead seat');
+  assert.match(out, /grok/, 'and it still names which seat');
+});
+
+test('ITEM 24 GREEN CONTROL: an unreadable mailbox with no dead seat adds no notice', (t) => {
+  const dir = root(t);
+  const out = execFileSync(process.execPath,
+    [path.join(__dirname, '..', 'scripts', 'bus-tick.js'), '--root', dir, '--seat', 'hymlock', '--once'],
+    { encoding: 'utf8' });
+  assert.match(out, /MAILBOX UNREADABLE/);
+  assert.doesNotMatch(out, /DEAD-SEAT/, 'no notice, no noise - even on the error path');
+});
+
+test('ITEM 22: both notice lines come from ONE definition, so they cannot drift apart', () => {
+  // They were briefly duplicated while fixing item 24, which is exactly how one of them
+  // silently stops reporting later - item 22's original failure in miniature.
+  const source = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'bus-tick.js'), 'utf8');
+  assert.equal((source.match(/DEAD-SEAT \$\{named\}/g) || []).length, 1,
+    'the DEAD-SEAT line must be constructed in exactly one place');
+  assert.equal((source.match(/noticeLines\(/g) || []).length >= 3, true,
+    'and both the healthy path and the error path must call it');
+});
+
 test('ITEM 22 GREEN CONTROL: a corrupt or absent notice file reads as "nothing wrong"', (t) => {
   const dir = root(t);
   assert.deepEqual(readDeadSeatNotices(dir).seats, [], 'absent');
