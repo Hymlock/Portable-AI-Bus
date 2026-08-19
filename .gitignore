@@ -3,3 +3,8 @@ dist/
 .vscode-test/
 *.vsix
 release/
+
+# CI probe branch only: the audit evidence is preserved on claude/portability,
+# not published. grok ruling B - excluded rather than scrubbed, because doctoring
+# an audit trail is worse than keeping a username local.
+docs/audit-evidence/

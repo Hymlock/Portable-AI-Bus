@@ -39,8 +39,12 @@ const PATTERNS = [
   /**
    * `{1,2}` separators was a HOLE, found by grok on the first tree this tool was pointed at.
    * A JSON- or shell-escaped path carries more: tests/fixtures/grok-conpty-corrupted-event-99
-   * contained `\\\\\\Users\\\\\\\\hymlo\\\\\\\\Downloads` and was therefore absent from the
+   * contained a multiply-escaped Users/<name>/Downloads path and was therefore absent from the
    * 60-file report - a real leak, in a file the CI push would have published.
+   *
+   * Described rather than quoted: quoting it put the machine path back into the very tool
+   * that exists to find machine paths. This tool caught that itself, on the tree it was
+   * about to clear for publication.
    *
    * `+` instead. A separator run of any length is still a separator run, and this tool is
    * supposed to be noisy rather than clever.
