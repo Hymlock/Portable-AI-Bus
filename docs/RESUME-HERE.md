@@ -1,23 +1,79 @@
 # Resume here
 
-## State at 2026-08-18 — 20 of 20 certified
+## State at 2026-08-19 — 27 of 28 certified
 
-HEAD was `58d507f` (docs-only on `e28c7b5`) when grok recorded this. Suite last reported
-**523 pass, 0 fail**. The ~150 untracked `tmp-audit-*` files stay untracked on purpose.
+HEAD `0032b05` on branch `claude/portability`. Suite **569 pass, 0 fail**. Fresh clone
+verified: `npm ci` + `npm run check` green, 0 vulnerabilities. Tree clean, claims empty.
+**Nothing has been pushed.**
 
-**Item 15 is CERTIFIED at `e28c7b5` / grok r21** (20 PASS / 0 FAIL / 3 NOTE; hook blob
-`ea74c7b0`, unchanged on the later docs-only HEAD). Item 2 remains CERTIFIED at `1592382`.
-The auditor classified; the author did not. The three NOTES are not leftover holes —
-`rootDir-junction-outside` and `extends-symlink-outside` were not red-capable on this
-machine.
+`docs/COMPLETION-BAR.md` is authoritative. Item **28 is the only uncertified item**, waiting
+on grok's ruling about whether its evidence is sufficient — see below, because the honest
+answer is "the author doubts it".
 
-The standing commitment below is now satisfied: grok has ruled. `src/`, `scripts/` and
-`tests/` are no longer frozen for item 15. Do not reopen 15 without a new hook blob.
+### The two things waiting on a human
 
-The recorded *bus goal* is still the 2026-08-14 wake-reliability statement (malformed wake
-must not consume input; grok envelope must parse; a dead seat is noticed; a wake whose
-only actions were acks leaves the task open). Recording item 15 in these docs is not that
-bar.
+1. **The push.** `Portable-AI-Bus` on GitHub is **PUBLIC**. Hymlock chose "scrub then push to
+   a branch" *before* it was known the repo was public and before the first personal-data scan
+   turned out to be wrong. He has not answered since. It is the only irreversible step here and
+   the only route to knowing whether any of this works on Linux — every check so far is Windows.
+2. **Ensouled**, once 28 certifies. Verified 2026-08-19: repo clean at `3cb072b`, harness
+   present, `validate_parity_exe_vs_source.py` genuinely red-capable (1 known-good, 7
+   known-bad fixtures) and **still never run against the real executable**.
+
+### Item 28 — read this before certifying it
+
+The product fix is real: `spawnSync` in `bus-processes` had no timeout, on the operator wake
+path, so a wedged `powershell` stopped the heartbeat rather than degrading it. Both branches
+are now bounded at 10s, and the condition tests `error` first because a timeout returns
+`error` set with a **null status** — the pre-existing `status !== 0` check would have
+swallowed it.
+
+The **evidence** is a pair, and its limit is written into the test: it shows the option is
+present, and that an option of that shape bounds a hanging child. It does **not** show
+`bus-processes` being interrupted mid-query.
+
+A behavioural version was attempted and was **vacuous**: Node 24 will not resolve a bare
+command to a `.cmd` without a shell, so a fake `powershell` on PATH never ran and `spawnSync`
+returned `ENOENT` in 1ms — indistinguishable from a working timeout. It was deleted rather
+than shipped. Grok has three options from the author (accept source-level; find an
+interposition he missed; assert the observable consequence instead) and the author leans on
+the third while noting his judgement about his own gates is the thing under suspicion.
+
+### The rule that made this terminate
+
+Grok's, after rejecting a weaker one the author proposed:
+
+- A **VARIANT** is a new spelling of something the stated rule already decides.
+- A **HOLE** is an attack the rule does not decide, or decides **wrongly**.
+- **The auditor classifies. The author may argue; the author may not decide.**
+- Rules are stated **positively** — every round lost was lost to enumerating bad cases, and
+  an enumeration always has an edge.
+
+### What actually kept going wrong
+
+**A check reported success without the thing under test having been exercised.** Five times in
+two days, every one in an *instrument* rather than in the code:
+
+- `git stash push -- src` stashed nothing (src was clean) — the "unfixed" run was fixed code
+- a suite ran green against a stale `dist` while `tsc` was failing
+- a regex revert silently did not match; `fail=0` was read as "cannot go red"
+- a pre-publication scan asked what *changed* when the question was what a push makes *public*
+- a fake `powershell` that never ran, reported as a passing timeout
+
+`tests/helpers/red-control.js` now refuses to measure until a mutation is **confirmed applied**
+and refuses to return until the restore is **byte-exact**. Use it. It was written after the
+fourth instance and caught the fifth.
+
+### Live machinery notes
+
+- The supervisor restarts a dead brain in ~5s; `dead-seats.json` is for *exhausted* budgets and
+  correctly stays absent for a single death. Observed live, twice, unstaged.
+- A single process-list snapshot is **not** evidence of death — the author reported a transient
+  restart as an absence. Measure twice.
+- `STALE-CODE codex` is currently accurate: codex runs a pre-commit wrapper and has no model
+  (`model unavailable; receipt only`). Do not read its acks as progress.
+
+---
 
 ## Earlier record — 19 of 20, item 15 still open
 
