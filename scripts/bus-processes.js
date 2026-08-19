@@ -4,7 +4,24 @@ const { spawnSync } = require('node:child_process');
 
 function optionFromCommandLine(commandLine, name) {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const match = String(commandLine || '').match(new RegExp(`(?:^|\\s)${escaped}\\s+(?:"([^"]*)"|(\\S+))`, 'i'));
+  /**
+   * Both `--name value` and `--name=value`.
+   *
+   * grok raised the `=` form in r34 and said `identifyNodeProcess` already handled it while
+   * the tick's local regex did not. Measured, and it was the other way round in the way that
+   * matters: NEITHER handled it. `--seat=grok` returned undefined here too.
+   *
+   * That is not cosmetic. A brain launched as `--seat=grok` is invisible to this module, so
+   * the supervisor cannot match it to a seat, treats the seat as absent, and restarts it
+   * forever - while the real process keeps running. The bus would fight itself and every
+   * signal would say the seat was dead.
+   *
+   * Fixed at the source so the tick and the supervisor cannot disagree about it, which is the
+   * whole reason item 23 put them on one module.
+   */
+  const separator = '(?:\\s+|=)';
+  const match = String(commandLine || '')
+    .match(new RegExp(`(?:^|\\s)${escaped}${separator}(?:"([^"]*)"|(\\S+))`, 'i'));
   return match ? (match[1] ?? match[2]) : undefined;
 }
 

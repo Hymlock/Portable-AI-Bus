@@ -4,6 +4,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { afterEach, test } = require('node:test');
 
+require('./helpers/require-fresh-dist')();
 const {
   directoryContainsIdentities,
   directoryContainsIdentitiesUnbounded,

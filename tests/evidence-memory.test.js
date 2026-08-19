@@ -21,6 +21,7 @@ const {
   observeLifecycle,
   observeRunnerResult
 } = require('../dist/evidence.js');
+require('./helpers/require-fresh-dist')();
 const { MailboxStore } = require('../dist/mailbox.js');
 const { buildWakePrompt, RECOVERY_LIMIT_BYTES } = require('../dist/brain/brains/agent.js');
 

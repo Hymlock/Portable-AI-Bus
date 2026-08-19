@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
 const { spawn, spawnSync } = require('node:child_process');
+require('./helpers/require-fresh-dist')();
 const { createStallLedger } = require('../dist/brain/stall-ledger');
 const { EventEmitter } = require('node:events');
 const fs = require('node:fs');

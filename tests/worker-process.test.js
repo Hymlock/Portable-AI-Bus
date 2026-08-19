@@ -4,6 +4,7 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
+require('./helpers/require-fresh-dist')();
 const { HarnessServer } = require('../dist/harness.js');
 
 test('three provider-neutral seat processes acquire, wake, and release independently', async (t) => {

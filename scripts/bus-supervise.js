@@ -182,7 +182,24 @@ function writeStaleCodeNotices(coordinationRoot, seats, now = () => new Date().t
  * instead of re-deriving it. I derived it wrong once already.
  */
 function clearsDeadSeatAlarm(running) {
-  return Boolean(running) && running.assumedLive !== true;
+  /**
+   * grok r34: the NAME was positive and the IMPLEMENTATION was still negative.
+   *
+   * `Boolean(running) && running.assumedLive !== true` clears on an empty object, on a
+   * seat-only record, on `assumedLive: undefined`, on the STRING 'true', on `1`, and on
+   * `assumedLive: false` with no pid. Fail-open, again, in the function written to stop
+   * exactly that.
+   *
+   * Today's producers never emit those shapes - the success path always carries a pid and
+   * never sets assumedLive - so this was not live. That is not a defence. grok's words: "Still
+   * the wrong quantity. The next signal on this sweep re-derives it." A negative test asks
+   * "have I been told this is fake?"; the question is "have I SEEN it alive?", and only a real
+   * pid answers that.
+   */
+  return Boolean(running)
+    && running.assumedLive !== true
+    && Number.isSafeInteger(running.pid)
+    && running.pid >= 1;
 }
 
 function deadSeatNoticePath(coordinationRoot) {

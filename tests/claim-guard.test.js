@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
+require('./helpers/require-fresh-dist')();
 const { guardStagedPaths, coveredBy, formatGuardResult } = require('../dist/claim-guard.js');
 
 const claims = {

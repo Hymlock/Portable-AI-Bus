@@ -4,6 +4,7 @@ const { spawnSync } = require('node:child_process');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
+require('./helpers/require-fresh-dist')();
 const { MailboxStore } = require('../dist/mailbox.js');
 const { createExhaustionHandler } = require('../dist/brain/cli.js');
 

@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
+require('./helpers/require-fresh-dist')();
 const { createAgentBrain } = require('../dist/brain/brains/index.js');
 
 function stubTools(sent) {

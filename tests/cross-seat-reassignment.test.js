@@ -4,6 +4,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { test } = require('node:test');
 
+require('./helpers/require-fresh-dist')();
 const { MailboxStore } = require('../dist/mailbox.js');
 const { runBrain } = require('../dist/brain/runner.js');
 

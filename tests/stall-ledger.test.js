@@ -4,6 +4,7 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 
+require('./helpers/require-fresh-dist')();
 const { runBrain } = require('../dist/brain/runner.js');
 const { createStallLedger } = require('../dist/brain/stall-ledger.js');
 const { runProcess, processOutcome } = require('../dist/brain/process-host.js');

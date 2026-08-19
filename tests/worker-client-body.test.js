@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
+require('./helpers/require-fresh-dist')();
 const { seatToolInvocation } = require('../dist/worker-client.js');
 
 // `--body` is shell-hostile and fails silently: a quoted argument containing backticks or

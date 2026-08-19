@@ -3,6 +3,7 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
+require('./helpers/require-fresh-dist')();
 const { credentialWorkspaceKey, filesystemIdentityMaterial } = require('../dist/workspace-key.js');
 
 test('credential workspace keys follow real directory identity', async (t) => {

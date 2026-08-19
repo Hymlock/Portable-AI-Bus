@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
+require('./helpers/require-fresh-dist')();
 const { chainProviders, classifyFailure, classifyGiveUp } = require('../dist/brain/chain.js');
 
 const ok = (kind, text) => ({

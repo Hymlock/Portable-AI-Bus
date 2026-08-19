@@ -7,6 +7,7 @@ const { promisify } = require('node:util');
 const { afterEach, beforeEach, test } = require('node:test');
 
 const execFileAsync = promisify(execFile);
+require('./helpers/require-fresh-dist')();
 const { BusHaltedError, ClaimConflictError, MailboxStore } = require('../dist/mailbox.js');
 const mailboxCli = path.resolve(__dirname, '..', 'dist', 'mailbox.js');
 

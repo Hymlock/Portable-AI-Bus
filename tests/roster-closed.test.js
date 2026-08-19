@@ -3,6 +3,7 @@ const test = require('node:test');
 const os = require('node:os');
 const fs = require('node:fs');
 const path = require('node:path');
+require('./helpers/require-fresh-dist')();
 const { MailboxStore } = require('../dist/mailbox.js');
 
 /**

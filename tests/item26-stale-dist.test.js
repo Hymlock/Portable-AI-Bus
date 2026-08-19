@@ -59,20 +59,53 @@ test('ITEM 26 GREEN CONTROL: dist newer than src is not flagged', (t) => {
   assert.equal(requireFreshDist({ warn: false, repo: dir }), 0, 'a fresh build must be silent');
 });
 
-test('ITEM 26: it emits a WARNING, not a refusal, and names the remedy', (t) => {
+test('ITEM 26: it emits a WARNING, not a refusal, and names the remedy', async (t) => {
   const dir = fixture(t);
   const base = Date.now() - 60_000;
   write(dir, path.join('dist', 'a.js'), base);
   write(dir, path.join('src', 'a.ts'), base + 30_000);
 
-  const warnings = [];
-  const listener = (warning) => warnings.push(warning);
-  process.on('warning', listener);
-  t.after(() => process.off('warning', listener));
+  /**
+   * grok r34: the previous version of this test collected `warnings[]` and NEVER ASSERTED ON
+   * IT. `doesNotThrow` was the only assertion, so the warning property - the entire point of
+   * the item - was untested. Vacuous, in the file written to prove the warning exists.
+   *
+   * `process.emitWarning` is asynchronous, so the listener is awaited rather than polled.
+   */
+  const seen = await new Promise((resolve) => {
+    const listener = (warning) => { process.off('warning', listener); resolve(warning); };
+    process.on('warning', listener);
+    // Must not throw: refusing would make single-file runs depend on a compile, and a guard
+    // that cannot be satisfied gets bypassed (item 6).
+    assert.doesNotThrow(() => requireFreshDist({ repo: dir }));
+    setTimeout(() => { process.off('warning', listener); resolve(undefined); }, 2000);
+  });
 
-  // Must not throw: refusing would make single-file runs depend on a compile, and a guard
-  // that cannot be satisfied gets bypassed (item 6).
-  assert.doesNotThrow(() => requireFreshDist({ repo: dir }));
+  assert.ok(seen, 'a stale dist must actually EMIT a warning, not merely fail to throw');
+  assert.equal(seen.name, 'StaleDistWarning', 'named, so it can be filtered or searched for');
+  assert.match(seen.message, /older than src/, 'and it must say what is wrong');
+  assert.match(seen.message, /npm run compile|npm test/, 'and name the remedy');
+});
+
+test('ITEM 26: EVERY dist-loading test carries the check, not just the ones I remembered', () => {
+  /**
+   * grok r34: "4 of 40 dist-loading tests import the helper - mailbox.test.js and most others
+   * can still pass on stale dist, silently. OPT-IN IS NOT THE ITEM."
+   *
+   * Correct. The measured failure was a green from a build that did not happen; a check
+   * present in the files I happened to think of does not prevent that, it just makes those
+   * four files honest. This gate fails the moment someone adds a test that loads dist without
+   * the guard - including me, next week.
+   */
+  const dir = path.join(__dirname);
+  const unguarded = fs.readdirSync(dir)
+    .filter((name) => name.endsWith('.test.js'))
+    .filter((name) => {
+      const source = fs.readFileSync(path.join(dir, name), 'utf8');
+      return /require\('\.\.\/dist/.test(source) && !/require-fresh-dist/.test(source);
+    });
+  assert.deepEqual(unguarded, [],
+    `these tests load dist/ without the staleness check: ${unguarded.join(', ')}`);
 });
 
 test('ITEM 26: a repo with no src or no dist is not this check\'s business', (t) => {

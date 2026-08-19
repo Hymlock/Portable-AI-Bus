@@ -1,8 +1,9 @@
-﻿const assert = require('node:assert/strict');
+const assert = require('node:assert/strict');
 const test = require('node:test');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+require('./helpers/require-fresh-dist')();
 const { resolveGrokCommand, resolveProvider, extractGrokAnswer, buildGrokArgs, providerFailureText } = require('../dist/brain/providers.js');
 const { parsePlan } = require('../dist/brain/brains/agent.js');
 const { chainProviders, classifyFailure } = require('../dist/brain/chain.js');

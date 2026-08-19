@@ -3,6 +3,7 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
+require('./helpers/require-fresh-dist')();
 const { cliBusClient } = require('../dist/brain/bus-client.js');
 const { HarnessServer } = require('../dist/harness.js');
 const { callSeatTool } = require('../dist/worker-client.js');

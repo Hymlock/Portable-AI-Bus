@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
+require('./helpers/require-fresh-dist')();
 const { runBrain } = require('../dist/brain/runner.js');
 
 /** A bus that delivers one task and then goes quiet forever, like a real one. */

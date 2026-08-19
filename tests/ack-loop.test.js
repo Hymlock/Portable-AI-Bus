@@ -1,5 +1,6 @@
-﻿const assert = require('node:assert/strict');
+const assert = require('node:assert/strict');
 const test = require('node:test');
+require('./helpers/require-fresh-dist')();
 const { runBrain } = require('../dist/brain/runner.js');
 
 /** A bus whose seats deliver to each other, so an ack really does wake the other side. */

@@ -5,6 +5,7 @@ const path = require('node:path');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 const test = require('node:test');
+require('./helpers/require-fresh-dist')();
 const { SkseDevkitAdapter } = require('../dist/adapters/skse-devkit.js');
 const execFileAsync = promisify(execFile);
 

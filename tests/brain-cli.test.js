@@ -4,6 +4,7 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 
+require('./helpers/require-fresh-dist')();
 const { loadBrain, latestTreeMtimeMs, recordLoadedCode } = require('../dist/brain/cli.js');
 
 test('brain factory receives coordination root and repository workdir separately', async (t) => {

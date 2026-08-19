@@ -145,15 +145,28 @@ function noticeLines(coordinationRoot, live = liveBrains()) {
 }
 
 function liveBrains() {
-  if (process.platform !== 'win32') return [];
+  /**
+   * grok r34: the `win32` early return here was CARVING, and worse than untidy.
+   *
+   * `listNodeProcesses` already has a Unix `ps` branch, and the supervisor has no platform
+   * gate at all. So on Unix this returned [] and printed `brains:NONE` while the supervisor
+   * happily enumerated the same seats - A NEW DISAGREEMENT between the two, which is the exact
+   * opposite of why item 23 moved both onto one module. I had labelled it "the portability
+   * pass owns it", which was me protecting a number rather than describing a boundary.
+   *
+   * Seat parsing goes through the same module too. The local regex missed `--seat=grok`,
+   * which `identifyNodeProcess` handles - a second way for the tick and the supervisor to
+   * describe the same machine differently.
+   */
   try {
     const { listNodeProcesses, processesForRoot } = require('./bus-processes');
     return [...new Set(
       processesForRoot(listNodeProcesses(), root)
-        .map((process_) => ((process_.commandLine || '').match(/--seat\s+(\S+)/) || [])[1])
+        .map((item) => item.seat)
         .filter(Boolean)
     )].sort();
   } catch {
+    // Cannot see the process list - including the item-28 timeout. Degrade, never hang.
     return [];
   }
 }

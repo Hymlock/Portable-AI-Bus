@@ -176,6 +176,33 @@ test('ITEM 25: an absent seat clears nothing', () => {
   assert.equal(clearsDeadSeatAlarm(undefined), false, 'a seat with no process is the alarm, not the clear');
 });
 
+test('ITEM 25 RED: the rule is POSITIVE - only a real pid clears', () => {
+  /**
+   * grok r34: the NAME was positive and the IMPLEMENTATION was still negative.
+   * `Boolean(running) && running.assumedLive !== true` cleared on every one of these.
+   *
+   * None are emitted by today's producers, which is exactly why this needs a gate rather than
+   * an argument: "no current caller does that" is a fact about today, and the next signal
+   * added to that sweep re-derives the bug. A negative test asks "have I been told this is
+   * fake?"; the question is "have I SEEN it alive?".
+   */
+  const fakes = [
+    ['empty object', {}],
+    ['seat only', { seat: 'grok' }],
+    ['assumedLive undefined', { seat: 'grok', assumedLive: undefined }],
+    ['assumedLive as a STRING', { seat: 'grok', assumedLive: 'true' }],
+    ['assumedLive as 1', { seat: 'grok', assumedLive: 1 }],
+    ['assumedLive false but NO pid', { seat: 'grok', assumedLive: false }],
+    ['pid zero', { seat: 'grok', pid: 0 }],
+    ['pid negative', { seat: 'grok', pid: -1 }],
+    ['pid as a string', { seat: 'grok', pid: '1234' }],
+    ['pid not an integer', { seat: 'grok', pid: 12.5 }]
+  ];
+  for (const [name, record] of fakes) {
+    assert.equal(clearsDeadSeatAlarm(record), false, `"${name}" must NOT clear a liveness alarm`);
+  }
+});
+
 // ---------------------------------------------------------------------------
 // ITEM 24: an unreadable mailbox must not SUPPRESS the dead-seat report.
 //
