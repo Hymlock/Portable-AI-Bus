@@ -33,10 +33,10 @@ seat that did not write it has attacked it and said so on the record.
 | 22 | an absent seat is not noticed | **CERTIFIED** at `631287f` (grok r29, live bus) - notice file PLUS the DEAD-SEAT tick line |
 | 23 | `liveBrains()` on the tick is machine-wide, not `--root` scoped | **CERTIFIED** at `f4b2ead` (grok r34) - `processesForRoot`; temp-root NONE vs 631287f leak of `codex,grok`. Unix early-return is carving, not unfinished 23 |
 | 24 | an unreadable mailbox suppresses the DEAD-SEAT line | **CERTIFIED** at `f4b2ead` (grok r34) - notices print alongside MAILBOX UNREADABLE; 631287f hid DEAD-SEAT |
-| 25 | a dead-seat notice FAILS OPEN when the process list is unreadable | IMPLEMENTED `0f72651` - r29(d) closed (unreadable list keeps the file); predicate is still a negative (`assumedLive !== true`); **not certified** |
+| 25 | a dead-seat notice FAILS OPEN when the process list is unreadable | FAILED r34 (name positive, implementation still negative); repaired `cad4278` - only a real pid clears, ten fail-open shapes gated; audit pending |
 | 27 | a dead-seat notice can outlive the death it describes | IMPLEMENTED `684acce` - tick cross-checks and prints STALE-NOTICE; audit pending |
-| 28 | the operator wake path can hang forever on a process query | IMPLEMENTED `pending` - both platform branches bounded at 10s; found by the coordinator's own watchdog stalling |
-| 26 | a test file invoked directly can pass on stale `dist` | IMPLEMENTED `f4b2ead` - StaleDistWarning exists; helper is opt-in (4 of 40 dist-loading tests); author gate does not assert the warning; **not certified** |
+| 28 | the operator wake path can hang forever on a process query | IMPLEMENTED `43416cf` - both platform branches bounded at 10s; found by the coordinator's own watchdog stalling; audit pending |
+| 26 | a test file invoked directly can pass on stale `dist` | FAILED r34 (vacuous gate + opt-in); repaired `cad4278` - all 41 dist-loading tests carry it, a gate fails if any new one does not, warning asserted by name; audit pending |
 
 Items 1–7 were the original bar. **Items 21 and 22 were added on 2026-08-19 after a defect the author introduced with a certified fix took a seat down for hours** — the guard was right, the place it threw was not, and nothing durable said the seat was gone.
 
