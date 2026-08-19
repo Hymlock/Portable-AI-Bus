@@ -87,6 +87,29 @@ said something out loud.
 and refuses to return until the restore is **byte-exact**. Use it. It was written after the
 fourth instance and caught the fifth.
 
+### Found AFTER the bar was met — an ack loop that burns real money
+
+**Candidate item 29, not classified.** grok is stood down and the auditor classifies, so this
+is recorded rather than filed.
+
+Observed 2026-08-19, after 28/28: grok acked `#2011` on **every wake without consuming it**.
+Each wake therefore saw the same unread message, acked again, re-opened the checkpoint an
+operator had just closed, and repeated — one model call per cycle, against a paid quota. Nine
+messages including the stand-down sat unread *behind* it.
+
+It is the inverse of item 8. Item 8 says **an ack is not a commitment**; this is **an ack that
+does not consume, so the wake repeats forever**.
+
+The reason it is worth an item: it is *indistinguishable from progress* on every
+operator-facing signal. The seat is alive. `brains:` is healthy. The bus sequence climbs.
+Verdict-shaped mail arrives. Only the unread list — which nothing surfaces — shows it is the
+same message every time. The coordinator closed the checkpoint **twice** before noticing the
+unread message underneath was what kept reopening it.
+
+Stopped by consuming the stale queue as operator (`mailbox read --for grok --seqs …`, one seq
+per call), then closing the checkpoint, then resting the baton. Sequence stopped climbing
+immediately, which is the confirmation.
+
 ### Live machinery notes
 
 - The supervisor restarts a dead brain in ~5s; `dead-seats.json` is for *exhausted* budgets and
