@@ -36,7 +36,7 @@ seat that did not write it has attacked it and said so on the record.
 | 25 | a dead-seat notice FAILS OPEN when the process list is unreadable | **CERTIFIED** at `cad4278` (grok r36) - only a real pid clears; 12 fail-open shapes refused; sweep driven, not just the predicate |
 | 26 | a test file invoked directly can pass on stale `dist` | **CERTIFIED** at `cad4278` (grok r36) - 40/40 dist-loading tests carry it; warning asserted by name; severity accepted as correct |
 | 27 | a dead-seat notice can outlive the death it describes | **CERTIFIED** at `684acce` (grok r39, 21 PASS / 0 FAIL) - red control DEMONSTRATED against extracted f4b2ead; reader does not clear, by design |
-| 28 | the operator wake path can hang forever on a process query | IMPLEMENTED `43416cf` - both platform branches bounded at 10s; found by the coordinator's own watchdog stalling; audit pending |
+| 28 | the operator wake path can hang forever on a process query | **CERTIFIED** at `43416cf` (grok r43, 52 PASS / 0 FAIL) - listNodeProcesses ITSELF proven bounded: hijacked query + forced 2s timeout threw in 2020ms; RED with timeout deleted ran 8063ms |
 
 Items 1–7 were the original bar. **Items 8–11 were all added on 2026-08-14/15 from measured
 failures, not planning** — three of the four were found by the system failing in front of us

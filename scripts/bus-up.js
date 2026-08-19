@@ -238,7 +238,27 @@ if (!holder) {
  * failure mode is a brain that does not start rather than an unbounded pile of them.
  */
 function brainRunning(seat) {
-  const matches = processesForRoot(listNodeProcesses(), root)
+  /**
+   * grok r43, recorded as a finding rather than an item-28 fail: "brainRunning's comment
+   * claims a catch the body does not implement. A COMMENT IS NOT A CATCH. Same lesson as a
+   * comment is not a timeout."
+   *
+   * The comment above has always promised fail-closed on an unreadable process list. There was
+   * no try/catch, so the promise was decoration - and item 28 made it matter, because
+   * listNodeProcesses now THROWS on a timed-out query instead of hanging. Without this, a slow
+   * process list turns "do not start a second brain" into a crash on startup.
+   *
+   * Only the READ fails closed. The explicit throw below is a deliberate signal about an
+   * ambiguous process tree and must still reach the operator.
+   */
+  let listed;
+  try {
+    listed = listNodeProcesses();
+  } catch (error) {
+    console.log(`brain:${seat} process list unreadable (${error.message.split('\n')[0]}); assuming already running`);
+    return true;
+  }
+  const matches = processesForRoot(listed, root)
     .filter((item) => item.type === 'brain' && item.seat === seat);
   if (matches.length === 0) return false;
   const exact = matches.filter((item) => samePath(item.workdir, workdir) && samePath(item.brain, brainFile));
