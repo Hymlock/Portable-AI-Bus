@@ -458,9 +458,45 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
           // A brain that throws must not take the process with it. The seat stays attended and
           // the next wake gets a fresh chance - an agent that dies on one bad message is the
           // stall we are removing, not a stall we should reintroduce here.
+          //
+          // BUT a retry is only safe when the turn had NO OBSERVABLE EFFECT. A turn that already
+          // sent mail and *then* threw has answered its message; retaining it makes the next wake
+          // answer again. Measured 2026-08-20: one seat answered a single question five times
+          // (rounds 2052-2056) and reported one audit four times (2081-2087) - each a paid
+          // provider call, all from this line. The replies were real work; we bought them
+          // repeatedly. On a seat that is out of providers, this is the difference between
+          // degraded and dead.
+          //
+          // `sentAnything` is already tracked for the courtesy-send check below, so the runner
+          // has always had this fact - it simply was not consulted here.
+          //
+          // "Sent something" alone is NOT enough to refuse the retry, and the durable-recovery
+          // crash boundary is why. A brain that performs an effect, records a durable receipt,
+          // and *then* crashes must come back: its checkpoint suppresses the replay of that
+          // effect, so the retry resumes work instead of repeating it. Dropping the message
+          // there would strand the task. (Caught by `tests/durable-recovery.test.js` when the
+          // first version of this fix used `!sentAnything` alone - the full suite earned its
+          // keep.)
+          //
+          // So the duplicating case is narrower than "sent": it is **sent with no checkpoint**.
+          // With a checkpoint, replay is guarded; without one, nothing stops the next wake from
+          // saying the same thing again.
+          const guardedByCheckpoint = Boolean(recovery);
+          const retryIsSafe = !sentAnything || guardedByCheckpoint;
           summary.errors += 1;
-          result = { done: true, retainMessages: true };
-          log('wake-error', { seat, error: (error as Error)?.message ?? String(error) });
+          result = { done: true, retainMessages: retryIsSafe };
+          log('wake-error', {
+            seat,
+            error: (error as Error)?.message ?? String(error),
+            sentBeforeThrow: sentAnything,
+            guardedByCheckpoint,
+            retained: retryIsSafe,
+            note: retryIsSafe
+              ? (sentAnything
+                ? 'effect sent but a recovery checkpoint guards replay; retained to resume'
+                : 'no outbound effect; retained for the next wake')
+              : 'mail already sent and no checkpoint guards replay; committing so the reply is not duplicated'
+          });
         }
       } finally {
         if (stallTimer !== undefined) clearTimeout(stallTimer);

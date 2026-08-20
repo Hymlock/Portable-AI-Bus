@@ -618,3 +618,100 @@ test('a thrown takeTurn retains mail; a returned usable turn commits it', async 
   assert.equal(usable.unread.length, 0);
   assert.equal(usable.acknowledgements, 1);
 });
+
+// ---------------------------------------------------------------------------
+// A turn that SENT mail and then threw must not be retried.
+//
+// runner.ts set `retainMessages: true` on any brain throw. Correct for a brain that dies
+// before acting; wrong for one that answers and *then* dies - the reply has left, the inbox
+// entry is retained, and the next wake answers the same message again.
+//
+// Measured on the live bus 2026-08-20: one seat answered a single question five times
+// (rounds 2052-2056) and reported one audit four times (2081-2087). Every repeat was a paid
+// provider call. On a seat with limited quota this is the difference between degraded and dead.
+// ---------------------------------------------------------------------------
+
+/** A transactional bus: peek does not consume, acknowledge does. Unacked mail comes back. */
+function makeTransactionalBus(messages) {
+  const pending = messages.slice();
+  const sent = [];
+  const peeks = [];
+  const acked = [];
+  return {
+    sent,
+    peeks,
+    acked,
+    get pendingCount() { return pending.length; },
+    bus: {
+      async listen() { return pending.length ? 'mail' : 'timeout'; },
+      async read() { const b = pending.slice(); pending.length = 0; return b; },
+      async peek() { peeks.push(pending.map((m) => m.seq)); return pending.slice(); },
+      async acknowledge(_seat, seqs) {
+        acked.push(seqs.slice());
+        for (const seq of seqs) {
+          const at = pending.findIndex((m) => m.seq === seq);
+          if (at >= 0) pending.splice(at, 1);
+        }
+        return [];
+      },
+      tools() {
+        return {
+          async send(input) { sent.push(input); return { seq: sent.length }; },
+          async status() { return { ok: true }; },
+          async claim() { return {}; },
+          async release() { return {}; },
+          async runCapability() { return {}; }
+        };
+      }
+    }
+  };
+}
+
+test('a turn that SENT mail and then threw is not re-delivered', async () => {
+  const { bus, sent, acked } = makeTransactionalBus([msg(7, 'answer me once')]);
+  let turns = 0;
+  const brain = {
+    name: 'sends-then-dies',
+    async takeTurn(ctx) {
+      turns += 1;
+      await ctx.tools.send({ to: 'grok', kind: 'note', subject: `reply ${turns}`, body: 'done' });
+      throw new Error('provider hiccup after the reply went out');
+    }
+  };
+  await runBrain({ seat: 'claude', brain, bus, maxWakes: 3, thinkWhenIdle: false });
+
+  assert.equal(turns, 1,
+    `REGRESSION: the brain woke ${turns} times for one message. A turn with an observable ` +
+    'effect must not be retried.');
+  assert.equal(sent.length, 1,
+    `REGRESSION: the seat answered ${sent.length} times. Every repeat is a paid provider call.`);
+  assert.equal(acked.flat().includes(7), true,
+    'the answered message must be committed, not left for the next wake');
+
+  // NOT asserted: "seq 7 never appears in a later peek". The first version of this test did,
+  // and failed - peeks were [[7],[7],[],[]] with turns=1. The runner peeks CONCURRENTLY while
+  // the brain thinks (`receiveWhileThinking`), so a second peek legitimately sees the message
+  // before the acknowledge lands. That is a detail of how mail is fetched, not of whether the
+  // seat answered twice. The instrument was wrong, not the behaviour.
+});
+
+test('a turn that threw WITHOUT sending is still retried', async () => {
+  // The green control, and the property the original behaviour existed to protect. Narrowing
+  // "always retain" to "retain only when nothing was sent" must not become "never retain":
+  // a brain that dies before acting has done no work, and its message must survive.
+  const { bus, sent } = makeTransactionalBus([msg(8, 'nobody answered this')]);
+  let turns = 0;
+  const brain = {
+    name: 'dies-before-acting',
+    async takeTurn() {
+      turns += 1;
+      throw new Error('died before sending anything');
+    }
+  };
+  await runBrain({ seat: 'claude', brain, bus, maxWakes: 3, thinkWhenIdle: false });
+
+  assert.equal(sent.length, 0, 'nothing should have been sent');
+  assert.ok(turns >= 2,
+    `unsent mail must come back: the brain saw ${turns} wake(s), so the message was dropped ` +
+    'after a failure that had no effect - that is the stall this retain behaviour prevents');
+});
