@@ -79,3 +79,56 @@ test('a spent chain is recorded where other seats can see it, even when not hold
   assert.equal(readSpentSeatNotices(root).seats.find((s) => s.seat === 'codex'), undefined,
     'topping a seat up must clear its notice');
 });
+
+test('an exhausted seat hands off to a seat that can work, not just the next one in the list', async (t) => {
+  // Round-robin succession assumed the next seat could think. With two of three spent it hands
+  // the baton to another seat that cannot act, and the five-minute cooldown then suppresses the
+  // correction. The baton keeps moving and nothing keeps working - a stall wearing motion.
+  const os = require('node:os');
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const { createExhaustionHandler, recordSpentSeat } = require('../dist/brain/cli.js');
+  const { MailboxStore } = require('../dist/mailbox.js');
+
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pab-succ-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const store = new MailboxStore(root);
+  await store.ensureInitialized(['claude', 'codex', 'grok']);
+  await store.reassignBaton({ to: 'claude', reason: 'setup', force: true });
+
+  // claude is spent and holds the baton; codex is ALSO spent; grok is fine.
+  // Round-robin from claude picks codex. Only grok can actually take the work.
+  recordSpentSeat(root, 'codex', 'quota exhausted');
+  const handler = createExhaustionHandler({ seat: 'claude', root });
+  await handler({ seat: 'claude', detail: 'all links spent' });
+
+  const after = await store.status();
+  assert.equal(after.baton?.holder, 'grok',
+    `baton went to ${after.baton?.holder}; codex is recorded spent and cannot act on it`);
+});
+
+test('a solo seat with nobody to hand to KEEPS the baton rather than passing it to itself', async (t) => {
+  const os = require('node:os');
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const { createExhaustionHandler } = require('../dist/brain/cli.js');
+  const { MailboxStore } = require('../dist/mailbox.js');
+
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pab-solo-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const store = new MailboxStore(root);
+  await store.ensureInitialized(['claude']);
+  await store.reassignBaton({ to: 'claude', reason: 'setup', force: true });
+
+  const events = [];
+  const handler = createExhaustionHandler({
+    seat: 'claude', root, log: (event, data) => events.push([event, data])
+  });
+  await handler({ seat: 'claude', detail: 'all links spent' });
+
+  const after = await store.status();
+  assert.equal(after.baton?.holder, 'claude', 'a solo seat must not hand the baton to itself');
+  const reported = events.find(([event]) => event === 'exhausted-no-usable-successor');
+  assert.ok(reported, 'a solo exhausted seat must SAY it is stuck; silence looks like idleness');
+  assert.equal(reported[1].otherSeats, 0);
+});

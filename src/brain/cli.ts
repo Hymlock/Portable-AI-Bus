@@ -97,13 +97,38 @@ export function createExhaustionHandler(options: ExhaustionHandlerOptions) {
       log('exhausted-not-holder', { seat, holder: state.baton?.holder ?? null, detail });
       return;
     }
+    // Hand off to a seat that can actually WORK, not merely to the next one in the list.
+    //
+    // The old selection was `ordered[(ownIndex + 1) % ordered.length]` - pure round-robin. With
+    // two seats spent out of three that hands the baton to another seat which cannot act, and
+    // the cooldown then suppresses the correction for five minutes. The baton keeps moving and
+    // nothing keeps working, which looks healthier from the outside than a stall while being
+    // exactly as stuck.
+    //
+    // spent-seats.json makes this answerable now: skip seats already recorded as spent.
     const ordered = state.agents;
     const ownIndex = ordered.indexOf(seat);
-    const successor = ordered.length > 1
-      ? ordered[(ownIndex + 1 + ordered.length) % ordered.length]
-      : undefined;
-    if (!successor || successor === seat) {
-      log('exhausted-no-successor', { seat, detail });
+    const spentNow = new Set(readSpentSeatNotices(root).seats.map((item) => item.seat));
+    const rotation = ordered
+      .map((_, offset) => ordered[(ownIndex + 1 + offset) % ordered.length])
+      .filter((candidate) => candidate !== seat);
+    const successor = rotation.find((candidate) => !spentNow.has(candidate));
+
+    if (!successor) {
+      // Every other seat is spent, or there is no other seat. Handing the baton on would be
+      // theatre. Say so once, loudly, and keep it: a held baton with a recorded reason is a
+      // state a human can act on, whereas a baton circulating among seats that cannot think
+      // is a stall wearing motion.
+      const others = rotation.length;
+      log('exhausted-no-usable-successor', {
+        seat,
+        detail,
+        otherSeats: others,
+        allSpent: others > 0,
+        note: others === 0
+          ? 'solo seat: nobody to hand to. Baton retained; top this seat up to resume.'
+          : 'every other seat is out of providers. Baton retained; see spent-seats.json.'
+      });
       return;
     }
     const result = await mailbox.reassignBaton({
