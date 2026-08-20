@@ -39,3 +39,43 @@ test('a brain records the dist timestamp it loaded for stale-code detection', as
   assert.equal(recorded.pid, process.pid);
   assert.equal(recorded.distRoot, distRoot);
 });
+
+// ---------------------------------------------------------------------------
+// Exhaustion must be SHARED state, not a private log line.
+//
+// createExhaustionHandler only announced a spent chain when the seat held the baton, and only
+// into its own log. On 2026-08-20 one seat spent an afternoon sending audit requests to a seat
+// that had been out of providers for hours - acking them, actioning none. Nobody was told: not
+// the sender, not the human. The bus looked busy and no work moved.
+// ---------------------------------------------------------------------------
+test('a spent chain is recorded where other seats can see it, even when not holding the baton', async (t) => {
+  const os = require('node:os');
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const { createExhaustionHandler, readSpentSeatNotices, recordSpentSeat } =
+    require('../dist/brain/cli.js');
+  const { MailboxStore } = require('../dist/mailbox.js');
+
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pab-spent-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const store = new MailboxStore(root);
+  await store.ensureInitialized(['claude', 'codex']);
+  // Baton deliberately with the OTHER seat: this is the case the old code could not see.
+  await store.reassignBaton({ to: 'claude', reason: 'test setup', force: true });
+
+  const handler = createExhaustionHandler({ seat: 'codex', root });
+  await handler({ seat: 'codex', detail: 'quota exhausted on every link' });
+
+  const notices = readSpentSeatNotices(root);
+  const codex = notices.seats.find((s) => s.seat === 'codex');
+  assert.ok(codex,
+    'a seat that cannot act must say so in shared state; the old handler returned silently ' +
+    'whenever it did not hold the baton, which is most of the time for a seat that cannot think');
+  assert.match(codex.detail, /quota exhausted/);
+  assert.ok(codex.since, 'the notice must carry when it started, so staleness is visible');
+
+  // And it must clear, or the notice becomes noise a reader learns to skip.
+  recordSpentSeat(root, 'codex', null);
+  assert.equal(readSpentSeatNotices(root).seats.find((s) => s.seat === 'codex'), undefined,
+    'topping a seat up must clear its notice');
+});

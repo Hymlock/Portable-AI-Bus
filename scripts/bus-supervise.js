@@ -202,6 +202,21 @@ function clearsDeadSeatAlarm(running) {
     && running.pid >= 1;
 }
 
+/**
+ * A SPENT seat is alive and cannot think - written by the brain's exhaustion handler
+ * (src/brain/cli.ts recordSpentSeat). Read here so one place owns "which seats are unusable",
+ * whether the cause is a missing process (dead) or a missing wallet (spent).
+ */
+function readSpentSeatNotices(coordinationRoot) {
+  try {
+    const file = path.join(coordinationRoot, '.ai-bus', 'runtime', 'spent-seats.json');
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+    return Array.isArray(parsed && parsed.seats) ? parsed : { seats: [] };
+  } catch {
+    return { seats: [] };
+  }
+}
+
 function deadSeatNoticePath(coordinationRoot) {
   return path.join(coordinationRoot, '.ai-bus', 'runtime', 'dead-seats.json');
 }
@@ -379,7 +394,7 @@ if (require.main === module) {
   }
 }
 
-module.exports = {
+module.exports = { readSpentSeatNotices,
   latestTreeMtimeMs,
   staleCodeWarning,
   staleCodeNoticePath,

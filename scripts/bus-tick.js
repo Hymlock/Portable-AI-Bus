@@ -49,7 +49,7 @@ const intervalMs = Math.max(30, Number(option('--interval-s', '240'))) * 1000;
 const once = process.argv.includes('--once');
 
 const runtime = path.join(root, '.ai-bus', 'runtime');
-const { readStaleCodeNotices, readDeadSeatNotices } = require('./bus-supervise');
+const { readStaleCodeNotices, readDeadSeatNotices, readSpentSeatNotices } = require('./bus-supervise');
 
 /** Courtesy kinds, matching the runner's `ackKinds` and the brain's `RECEIPT_KINDS`. */
 const RECEIPT_KINDS = new Set(['ack', 'receipt', 'ping']);
@@ -141,6 +141,24 @@ function noticeLines(coordinationRoot, live = liveBrains()) {
       lines.push(`STALE-NOTICE ${contradicted.map(format).join(',')} - flagged dead but a brain for THIS root is running; the supervisor has not swept. Trust the brain, not the file`);
     }
   }
+  /**
+   * A SPENT seat is alive and useless: the process runs, it answers listen, it acks mail, and
+   * it cannot think. That is the hardest state to see from outside, because every liveness
+   * signal reads "fine" - which is precisely why DEAD-SEAT above does not cover it.
+   *
+   * On 2026-08-20 one seat sent audit requests for an afternoon to a seat that had been out of
+   * providers for hours. Every one was acked and none actioned. Nothing here said so, because
+   * exhaustion lived only in the spent seat's own log.
+   */
+  const spent = readSpentSeatNotices(coordinationRoot);
+  if (spent.seats.length > 0) {
+    const fmt = (item) => (item.since ? `${item.seat}(since ${String(item.since).slice(11, 19)})` : item.seat);
+    lines.push(
+      `SPENT-SEAT ${spent.seats.map(fmt).join(',')} - alive but out of providers. `
+      + 'It will ACK mail and action none. Do not queue work here; top it up or reassign'
+    );
+  }
+
   return lines;
 }
 
