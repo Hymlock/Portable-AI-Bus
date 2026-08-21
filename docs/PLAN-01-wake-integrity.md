@@ -216,3 +216,39 @@ Two process notes from that attempt, both mistakes worth not repeating:
 - **`bus-up.js:127`** hardcodes `--max-rounds 550`; it only survives because `ensureInitialized`
   takes `Math.max`. A fresh bus halts at the guard in `harness.ts:653` with mutating tools failing
   closed.
+
+## Seat memory, part 2 — the fresh-assignment hole (measured 2026-08-20)
+
+Item 10 fixed the **recovery** half of "Seat memory" above: a seat resuming open work now
+recalls its source brief through `recallAssignment(seat, recovery.workId)`
+(`src/brain/runner.ts:241-250`), rendered as `ASSIGNMENT RECALL` — escaped, capped, and
+labelled — in `src/brain/brains/agent.ts:237-248`. That machinery is sound and nothing below
+asks to change it.
+
+**The other half is still open, and it reproduced today.** `mailbox assign --seat codex
+--responsibility ...` writes `goal.assignments[seat]` (`src/mailbox.ts:1409`). Nothing in
+`src/brain/` ever reads it — `grep -rn assignments src/brain/` returns two comments and no
+code. So a seat that is newly assigned but has **no** `recovery` wakes with an empty context.
+
+Measured: codex was assigned, woke, and replied *"No incoming mail or explicit gate
+definitions were included in this wake. Please identify the open verification requirements and
+relevant paths/commit."* That is the identical sentence shape Item 10 was written about — "the
+concrete goal, paths, and completion gates are missing" — from the path Item 10 does not
+cover. The brief was then re-sent by hand, which is the cost this document already records as
+three or four re-sends per brief.
+
+**The gap is one source, not a mechanism.** `assignmentRecall` is populated only inside the
+`if (recovery)` block. When there is no recovery and `goal.assignments[seat]` is non-empty,
+that string is the seat's current responsibility and should reach the same renderer.
+
+Note the design difference, because Item 10's comment argues against copying: it deliberately
+recalls a **pointer** so a retracted brief cannot return. `goal.assignments[seat]` is not a
+snapshot — it is live state that `assign` overwrites — so presenting it is presenting the
+current assignment by construction, and the staleness Item 10 guards against cannot arise. The
+two mechanisms are compatible; recovery recall should still win when both are present, since it
+carries the specific work in flight.
+
+**Not implemented here.** Two seats were mid-audit on this bus when it was found, and changing
+the wake path under them is the kind of thing that makes an auditor's report untrustworthy.
+Whoever takes it needs a RED control that a freshly-assigned seat with no recovery currently
+wakes with no assignment text, and that it wakes with one afterwards.
