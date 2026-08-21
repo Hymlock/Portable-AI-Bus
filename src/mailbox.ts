@@ -82,6 +82,16 @@ export type RecoveryCheckpoint = {
   inheritedFrom?: string;
 };
 
+/**
+ * The byte budget for `goal.assignments[seat]`.
+ *
+ * Mirrors `RECOVERY_LIMIT_BYTES` in `brain/brains/agent.ts`, which is where the wake field is
+ * actually capped. Duplicated deliberately rather than imported: `mailbox.ts` is the durable
+ * store and must not depend on the brain layer. `assignment-cap.test.js` imports both and
+ * asserts they agree, so the duplication cannot drift unnoticed.
+ */
+export const ASSIGNMENT_LIMIT_BYTES = 2 * 1024;
+
 export type MailboxState = {
   schema: number;
   createdAt: string;
@@ -1419,6 +1429,30 @@ export class MailboxStore {
   }
 
   async assignGoal(seat: string, responsibility: string): Promise<MailboxState> {
+    // Refuse at WRITE time what would truncate at READ time.
+    //
+    // 2026-08-20, both seats, same defect. The assignment is presented to a waking seat through
+    // a field capped at RECOVERY_LIMIT_BYTES. Longer text is cut off on arrival, and the reader
+    // cannot know what it did not receive: codex got a brief severed mid-claim and correctly
+    // refused to infer the rest; grok held an open checkpoint whose 2845-byte brief truncated
+    // before the gates it named, so the gates could never be met and the checkpoint could never
+    // close. A closed loop assembled entirely out of correct behaviour at both ends.
+    //
+    // The operator writing this can fix it in one edit. The seat reading it can do nothing. So
+    // the check goes here, and it REFUSES rather than truncating-with-a-warning: this field is a
+    // pointer to a brief, not the brief, and silently storing something that cannot be delivered
+    // whole is how the loop above was built.
+    //
+    // Bytes, not characters - the cap is a byte budget, and a char-count guard passes multibyte
+    // text that still arrives severed.
+    const size = Buffer.byteLength(responsibility, 'utf8');
+    if (size > ASSIGNMENT_LIMIT_BYTES) {
+      throw new Error(
+        `Assignment for ${seat} is ${size} bytes; the wake field holds ${ASSIGNMENT_LIMIT_BYTES}. ` +
+        'It would arrive truncated and the seat could not tell. Put a short pointer here - the ' +
+        'tasks in order, the permission, and "detail arrives as mail" - and send the brief as mail.'
+      );
+    }
     return this.withLock(async () => {
       const state = await this.loadStateUnsafe();
       if (!state.goal) throw new Error('No goal set. Run: mailbox goal --statement ... --done-when ...');
