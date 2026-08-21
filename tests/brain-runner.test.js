@@ -769,3 +769,52 @@ test('an open checkpoint still wins: recovery recall is the specific work in fli
   assert.equal(seen, 'the brief for the work in flight',
     'the standing assignment must not shadow the brief for work actually in progress');
 });
+
+// A checkpointed message must not SHADOW the standing assignment.
+//
+// Recovery recall wins over currentAssignment by design: the brief for work in flight beats the
+// general responsibility, and that is right. But any message can become the anchor - including
+// one whose only content is "read your assignment". Observed 2026-08-21: an 830-byte pointer
+// shadowed the complete 1241-byte assignment it pointed at, and the seat reported an incomplete
+// brief on every wake while the real task sat one field away.
+//
+// They answer different questions - "what work is in flight" and "what am I responsible for" -
+// so the wake presents BOTH when both exist. Choosing between them was the bug.
+test('a checkpointed pointer does not shadow the standing assignment', async () => {
+  const { bus } = makeBus({ script: [[{ seq: 1, kind: 'task', body: 'anything' }]] });
+  let seen;
+  bus.loadRecovery = async () => ({ seat: 'codex', workId: 42, note: 'resuming', status: 'open', actionReceipts: [] });
+  bus.recallAssignment = async () => 'read goal.assignments.codex for the task';
+  bus.currentAssignment = async () => 'C1 through C9, in full, with the acceptance gate';
+
+  await runBrain({
+    seat: 'codex',
+    bus,
+    maxWakes: 1,
+    brain: {
+      async takeTurn(context) {
+        seen = { recall: context.assignmentRecall, standing: context.standingAssignment };
+        return { done: true };
+      }
+    }
+  });
+
+  assert.equal(seen.recall, 'read goal.assignments.codex for the task',
+    'the work in flight is still presented');
+  assert.equal(seen.standing, 'C1 through C9, in full, with the acceptance gate',
+    'and the standing assignment is presented alongside it, not replaced by it');
+});
+
+test('with no recovery the standing assignment is still the recall field', async () => {
+  const { bus } = makeBus({ script: [[{ seq: 1, kind: 'task', body: 'anything' }]] });
+  let seen;
+  bus.currentAssignment = async () => 'the whole task';
+
+  await runBrain({
+    seat: 'codex', bus, maxWakes: 1,
+    brain: { async takeTurn(c) { seen = { recall: c.assignmentRecall, standing: c.standingAssignment }; return { done: true }; } }
+  });
+
+  assert.equal(seen.recall, 'the whole task', 'unchanged when there is no competing brief');
+  assert.equal(seen.standing, undefined, 'and not duplicated into both fields');
+});

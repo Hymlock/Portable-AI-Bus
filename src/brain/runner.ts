@@ -221,6 +221,7 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
   let recoveryData: string | undefined;
   /** Item 10: the assignment the open checkpoint is FOR, recalled from its source message. */
   let assignmentRecall: string | undefined;
+  let standingAssignment: string | undefined;
   if (recovery) {
     // These are two presentations of the SAME checkpoint.note, not competing sources. The first
     // restarted wake uses recoveryData so the prompt can label and tightly cap untrusted durable
@@ -267,12 +268,27 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
   // pointer and refuses a superseded source. `goal.assignments[seat]` is not a message and not a
   // snapshot: `assign` overwrites it in place, so reading it yields the current assignment by
   // construction and there is no earlier version for it to resurrect.
-  if (!assignmentRecall && bus.currentAssignment) {
+  if (bus.currentAssignment) {
     try {
-      assignmentRecall = await bus.currentAssignment(seat);
+      const standing = await bus.currentAssignment(seat);
+      if (!assignmentRecall) {
+        // No brief in flight: the standing assignment IS the assignment.
+        assignmentRecall = standing;
+      } else if (standing && standing !== assignmentRecall) {
+        // Both exist and differ. Present both rather than choosing.
+        //
+        // Recovery recall winning is right - the brief for work in flight beats the general
+        // responsibility. But ANY message can become the anchor, including one whose entire
+        // content is "read your assignment", and then the pointer SHADOWS what it points at.
+        // Observed 2026-08-21: an 830-byte pointer hid a complete 1241-byte assignment, and the
+        // seat reported an incomplete brief every wake while the task sat one field away.
+        //
+        // They answer different questions - "what work is in flight" and "what am I responsible
+        // for". Choosing between them was the bug.
+        standingAssignment = standing;
+      }
     } catch {
       // Same posture as recall: a wake with less context beats no wake at all.
-      assignmentRecall = undefined;
     }
   }
 
@@ -463,6 +479,7 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
           openWork,
           recoveryData,
           assignmentRecall,
+          standingAssignment,
           evidence,
           recoveryActionIds: recovery?.actionReceipts,
           recordRecoveryAction: workId && bus.recordRecoveryAction

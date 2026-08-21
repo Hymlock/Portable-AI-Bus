@@ -221,7 +221,8 @@ export function buildWakePrompt(
   openWork?: string,
   recoveryData?: string,
   evidence?: WakeEvidence[],
-  assignmentRecall?: string
+  assignmentRecall?: string,
+  standingAssignment?: string
 ): string {
   const lines = [
     `Seat: ${seat}`,
@@ -246,6 +247,22 @@ export function buildWakePrompt(
     ));
     lines.push('');
   }
+
+    // Presented ALONGSIDE the recall, never instead of it. A checkpointed message can be a
+    // pointer - "read your assignment" - and choosing the recall then hides the very thing it
+    // points at. They answer different questions, so the seat gets both.
+    if (standingAssignment) {
+      const escapedStanding = standingAssignment
+        .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+      lines.push('STANDING ASSIGNMENT - your ongoing responsibility, separate from the work above.');
+      lines.push(promptField(
+        escapedStanding,
+        'STANDING ASSIGNMENT',
+        'The full text is in goal.assignments for this seat.',
+        RECOVERY_LIMIT_BYTES
+      ));
+      lines.push('');
+    }
   // On a restarted runner, recoveryData and openWork are initialized from the same durable note.
   // Prefer the recovery rendering for that first wake: it labels and caps untrusted persisted
   // bytes. The else-if avoids presenting identical content twice; no competing note is discarded.
@@ -770,7 +787,7 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
         recoveryActionIds?: readonly string[];
         recordRecoveryAction?: (actionId: string) => Promise<void>;
       };
-      const { messages, openWork, recoveryData, tools, evidence, assignmentRecall } = durable;
+      const { messages, openWork, recoveryData, tools, evidence, assignmentRecall, standingAssignment } = durable;
       const messageSeqs = messages.map((message) => message.seq);
       const completedActionIds = new Set<string>();
       for (const id of durable.recoveryActionIds ?? []) completedActionIds.add(id);
@@ -940,7 +957,7 @@ export function createAgentBrain(options: AgentBrainOptions): Brain {
       };
 
       for (let round = 0; round < maxRounds; round += 1) {
-        const base = buildWakePrompt(seat, messages, openWork, recoveryData, evidence, assignmentRecall);
+        const base = buildWakePrompt(seat, messages, openWork, recoveryData, evidence, assignmentRecall, standingAssignment);
         const correction = unreportedTask
           ? 'You marked the work done without answering the task. An acknowledgement is NOT an ' +
             'answer - it says you heard the request, not what you found. An acknowledgement ' +

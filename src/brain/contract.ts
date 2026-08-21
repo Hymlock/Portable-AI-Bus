@@ -57,6 +57,8 @@ export type WakeContext = {
    * a retracted brief must not come back through recovery.
    */
   assignmentRecall?: string;
+  /** The seat's standing responsibility, when a different brief is already in flight. */
+  standingAssignment?: string;
   /**
    * Current evidence for the work this wake is continuing. Injected as labelled,
    * untrusted data. Absent when no evidence is keyed to the presented work.
