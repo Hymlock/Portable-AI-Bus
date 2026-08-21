@@ -715,3 +715,57 @@ test('a turn that threw WITHOUT sending is still retried', async () => {
     `unsent mail must come back: the brain saw ${turns} wake(s), so the message was dropped ` +
     'after a failure that had no effect - that is the stall this retain behaviour prevents');
 });
+
+// A seat that was ASSIGNED but has no open work must still wake knowing its assignment.
+//
+// Item 10 fixed the recovery half of "seat memory": a seat resuming work recalls its brief by
+// workId. The fresh-assignment half was never wired. Measured 2026-08-20: codex was assigned via
+// `mailbox assign`, woke, and replied "No incoming mail or explicit gate definitions were
+// included in this wake" - then, one wake later, woke again on a timeout with messages:0 and
+// stalled, because nothing put its responsibility in front of it. grok hit the same wall on the
+// same day. Two seats, one missing read.
+test('an assigned seat with NO open work still wakes with its assignment', async () => {
+  const { bus } = makeBus({ script: [[{ seq: 1, kind: 'task', body: 'anything' }]] });
+  let seen;
+  bus.currentAssignment = async (seat) =>
+    seat === 'codex' ? 'verify C1-C11 in the pick 3 assessment; read-only' : undefined;
+
+  await runBrain({
+    seat: 'codex',
+    bus,
+    maxWakes: 1,
+    brain: {
+      async takeTurn(context) {
+        seen = context.assignmentRecall;
+        return { done: true };
+      }
+    }
+  });
+
+  assert.equal(seen, 'verify C1-C11 in the pick 3 assessment; read-only',
+    'a seat with an assignment and no recovery woke without it - this is the bug that ' +
+    'made two seats ask for their brief to be re-sent by hand');
+});
+
+test('an open checkpoint still wins: recovery recall is the specific work in flight', async () => {
+  const { bus } = makeBus({ script: [[{ seq: 1, kind: 'task', body: 'anything' }]] });
+  let seen;
+  bus.currentAssignment = async () => 'the standing assignment';
+  bus.loadRecovery = async () => ({ seat: 'codex', workId: 42, note: 'resuming', status: 'open', actionReceipts: [] });
+  bus.recallAssignment = async () => 'the brief for the work in flight';
+
+  await runBrain({
+    seat: 'codex',
+    bus,
+    maxWakes: 1,
+    brain: {
+      async takeTurn(context) {
+        seen = context.assignmentRecall;
+        return { done: true };
+      }
+    }
+  });
+
+  assert.equal(seen, 'the brief for the work in flight',
+    'the standing assignment must not shadow the brief for work actually in progress');
+});

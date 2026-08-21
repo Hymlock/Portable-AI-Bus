@@ -1401,6 +1401,23 @@ export class MailboxStore {
    * so a seat that joins late - or returns after going dark - has no durable answer to "what
    * am I responsible for?". That is how work silently goes unowned.
    */
+  /**
+   * The seat's standing responsibility, or undefined when it has none.
+   *
+   * The counterpart to `assignGoal`, and it did not exist until 2026-08-20. `assignGoal`
+   * answered "what am I responsible for?" by WRITING it down, and nothing ever read it back on
+   * a wake — so the answer was durable and unreachable. Two seats asked for their brief to be
+   * re-sent by hand on the same day. That is the cost of a write with no read.
+   *
+   * Unlike `recallAssignment` this needs no supersession check: `assignGoal` overwrites in
+   * place, so there is no earlier version for it to resurrect.
+   */
+  async currentAssignment(seat: string): Promise<string | undefined> {
+    const state = await this.loadState();
+    const responsibility = state.goal?.assignments?.[seat];
+    return responsibility && responsibility.trim() ? responsibility : undefined;
+  }
+
   async assignGoal(seat: string, responsibility: string): Promise<MailboxState> {
     return this.withLock(async () => {
       const state = await this.loadStateUnsafe();

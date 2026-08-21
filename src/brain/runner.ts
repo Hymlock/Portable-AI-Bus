@@ -34,6 +34,8 @@ export type BusClient = {
    * come back through recovery.
    */
   recallAssignment?(seat: string, workId: number): Promise<string | undefined>;
+  /** The seat's standing responsibility from `goal.assignments`, if an operator set one. */
+  currentAssignment?(seat: string): Promise<string | undefined>;
   openRecovery?(seat: string, workId: number, note: string): Promise<RecoveryCheckpoint>;
   recordRecoveryAction?(seat: string, workId: number, actionId: string): Promise<RecoveryCheckpoint>;
   closeRecovery?(seat: string, workId: number, reason: string): Promise<unknown>;
@@ -247,6 +249,30 @@ export async function runBrain(options: RunnerOptions): Promise<RunnerSummary> {
         // proceeds with the note alone - the pre-item-10 behaviour - rather than not waking.
         assignmentRecall = undefined;
       }
+    }
+  }
+
+  // Item 10, second half. The block above only runs when there IS open work, so a seat that was
+  // ASSIGNED but has nothing in flight woke with an empty context. Measured 2026-08-20: codex was
+  // assigned via `mailbox assign`, woke, and asked for "the open verification requirements and
+  // relevant paths/commit" - the same sentence Item 10 was written about - then woke again on a
+  // timeout with messages:0 and stalled. grok hit it the same day. `goal.assignments[seat]` was
+  // written by the operator and read by nothing in this directory.
+  //
+  // Recovery recall WINS when both exist: it names the specific work in flight, while this is the
+  // standing responsibility. Never let the general shadow the particular.
+  //
+  // The "recall, never copy" rule above does not govern here, and the difference is real rather
+  // than convenient. That rule protects against a RETRACTED message returning, so it recalls a
+  // pointer and refuses a superseded source. `goal.assignments[seat]` is not a message and not a
+  // snapshot: `assign` overwrites it in place, so reading it yields the current assignment by
+  // construction and there is no earlier version for it to resurrect.
+  if (!assignmentRecall && bus.currentAssignment) {
+    try {
+      assignmentRecall = await bus.currentAssignment(seat);
+    } catch {
+      // Same posture as recall: a wake with less context beats no wake at all.
+      assignmentRecall = undefined;
     }
   }
 

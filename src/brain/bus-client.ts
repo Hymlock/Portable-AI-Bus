@@ -218,6 +218,22 @@ export function cliBusClient(options: CliBusOptions): BusClient {
     },
 
     loadRecovery(seat) { return durableMailbox.openRecoveryFor(seat); },
+
+    // Both of these were IMPLEMENTED IN THE STORE AND NEVER WIRED HERE, which is why "seat
+    // memory" survived the fix that was supposed to end it.
+    //
+    // `recallAssignment` is Item 10 (2026-08-15). It has extensive coverage — item10-recall,
+    // item21-survivable-refusal, audit-fixes, audit-round2 — and every one of those tests
+    // builds its OWN bus object with the method attached. `runner.ts` guards on
+    // `if (bus.recallAssignment)`, so against this client the answer was always no and the
+    // branch never ran in production. The tests proved the store; nothing proved the product.
+    //
+    // `currentAssignment` is the other half: a seat that was assigned but has no open work.
+    // Measured 2026-08-20, both seats on the same day — codex woke and asked for "the open
+    // verification requirements and relevant paths/commit", then woke again on a timeout with
+    // messages:0 and stalled; grok kept re-running a superseded task.
+    recallAssignment(seat, workId) { return durableMailbox.recallAssignment(seat, workId); },
+    currentAssignment(seat) { return durableMailbox.currentAssignment(seat); },
     openRecovery(seat, workId, note) { return durableMailbox.openRecovery(seat, workId, note); },
     recordRecoveryAction(seat, workId, actionId) {
       return durableMailbox.recordRecoveryAction(seat, workId, actionId);
