@@ -23,10 +23,22 @@ you have permission to redistribute. Verify the supplied kit contains the desire
 vcpkg/CommonLib material and that MSVC Build Tools and the required Windows SDK are installed or
 legally included in that payload.
 
+### Preset builds and compiler environment
+
+The devkit adapter passes an explicit jailed `-B` directory even with `--preset`; configure,
+build, test and the receipt therefore use the same build tree. For presets pinning a specific
+Visual Studio installation, set `SKSE_VCVARS64` to that installation's `vcvars64.bat` before
+both configure and build. The adapter validates this path under Program Files, reinitializes
+the environment even if another `cl.exe` is on PATH, and refuses an invalid explicit selection.
+It also selects the same installation for vcpkg and normalizes away the trailing slash, as
+required by [Microsoft's vcpkg documentation](https://learn.microsoft.com/en-us/vcpkg/users/triplets#vcpkg_visual_studio_path).
+This avoids combining a preset's older compiler with headers from automatic newer discovery.
+It does not install a compiler or waive SDK, licensing or clean-build verification.
+
 ## Install and initialize
 
 1. Install the VSIX with **Extensions: Install from VSIX...** or `code --install-extension`.
-2. Install Node.js 20+ and authenticate at least two provider CLIs; see `AUTH.md`.
+2. Install Node.js 20+ and authenticate each vendor whose named brain you will run; see `AUTH.md`.
 3. Open a trusted target workspace and run **Portable AI Bus: Initialize Workspace**.
 4. Put the release `devkit/` at `.ai-bus/toolchains/skse-devkit`, or set `SKSE_DEVKIT_ROOT`.
 5. Start from any provider session:
@@ -35,8 +47,8 @@ legally included in that payload.
    node .ai-bus/scripts/bus-up.js --root . --console claude
    ```
 
-   `codex` or `grok` is equally valid as `--console`. All three brains start by default and each
-   uses a cross-vendor chain.
+   `codex` or `grok` is equally valid as `--console`. The other two funded seats start as brains,
+   and each brain is restricted to the vendor its name represents.
 6. Run `node .ai-bus/bin/skse-devkit.js doctor --workspace .` and
    `node .ai-bus/bin/mailbox.js doctor` before assigning work.
 
@@ -44,26 +56,23 @@ legally included in that payload.
 
 - Stop brains and the harness before update. Install the newer VSIX with `--force`, reinitialize
   to refresh managed staged files, then restart `bus-up`.
-- Provider timeout/quota/auth failure falls through to **the next configured provider**. The
-  default chains cross vendor boundaries, but a custom chain is validated for distinct provider
-  *kinds*, not distinct vendors — `oauth,api` passes validation and is entirely Anthropic. Check
-  `servedBy` in `brain-<seat>.log` if you need proof a different vendor answered.
+- Provider timeout/quota/auth failure may fall through only to another authentication route for
+  the same vendor (Claude has `cli`, `oauth`, and `api`). Grok never falls through to Codex or
+  Claude, and Codex never falls through to Grok or Claude. Check `servedBy` for proof.
 - Whole-chain exhaustion is always **logged**; the baton moves only if the exhausted seat holds
   it, has a successor, is outside the five-minute cooldown, and the compare-and-move succeeds.
   Reassignment is conditional, not automatic.
-- A dead OS process still needs `bus-up` restarted; v0.2 has no service supervisor.
+- The source tools include `bus-supervise` for configured brain processes. Its presence is
+  not proof that a supervisor is running or that a provider has credits. Restart only the
+  intended seats; a live console must not also get a duplicate brain.
 - Clarification is an open dependency, not completion. Keep the goal open and resume after the
   answer arrives.
 
-> ### ⚠️ Remove Workspace Bus DELETES an operator-supplied Dev Kit
->
-> **Back up `.ai-bus/toolchains/` before running Remove.** `removeUnlocked` in `src/bus.ts`
-> executes `fs.rm(busDir, { recursive: true, force: true })` over the whole `.ai-bus` tree. It
-> has no special case for `toolchains/`, no preservation step, and no confirmation — so a
-> multi-gigabyte kit installed exactly where this document tells you to put it is destroyed
-> without warning.
->
-> This section previously claimed such payloads "are not silently deleted." That was the
-> opposite of the truth, and the code has said so since the feature was written. Keep the kit
-> outside the workspace and point at it with `SKSE_DEVKIT_ROOT` if you would rather not rely on
-> remembering.
+### Removal and operator toolchains
+
+Current `removeUnlocked` preserves `.ai-bus/toolchains/` and keeps its Git exclusion after
+removing the other bus files. The installed-extension integration test checks a retained
+operator marker and the surviving exclusion. This supersedes the historical whole-directory
+deletion warning; it does not make arbitrary files elsewhere in `.ai-bus/` persistent.
+Keep independent backups, and verify the installed extension version before relying on this
+behavior. Keeping the kit outside the workspace with `SKSE_DEVKIT_ROOT` remains supported.

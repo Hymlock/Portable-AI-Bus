@@ -45,6 +45,8 @@ export type WorkerClientOptions = {
   cursorPath?: string;
   persistCursor?: boolean;
   requestTimeoutMs?: number;
+  /** Begin a one-shot wake strictly after this durable mailbox sequence. */
+  afterSeq?: number;
   /**
    * Reconcile the delivery cursor against UNREAD state before watching.
    *
@@ -59,6 +61,8 @@ export type WorkerClientOptions = {
 export type WakeResult = {
   wake: 'message' | 'timeout';
   messages: unknown[];
+  /** Explicitly reports that the harness bounded this page and more messages remain. */
+  hasMore: boolean;
   instanceId: string;
   afterSeq: number;
 };
@@ -108,7 +112,15 @@ export async function waitForMailbox(
   let result: WakeResult | undefined;
   let operationError: unknown;
   try {
-    result = await wake(connection, options, clientId, lease, 0, requestedTimeout(options), runtime);
+    result = await wake(
+      connection,
+      options,
+      clientId,
+      lease,
+      boundedAfterSeq(options.afterSeq),
+      requestedTimeout(options),
+      runtime
+    );
   } catch (error) {
     operationError = error;
   }
@@ -239,7 +251,7 @@ export async function watchMailbox(
         const jitter = Math.max(0, Math.min(1, random()));
         const jittered = Math.max(1, Math.min(reconnectMaxMs, Math.round(exponential * (0.5 + jitter))));
         try {
-          await sleep(jittered, options.signal);
+          await sleep(isQueueFull(error) ? Math.max(jittered, queueFullBackoffMs(error)) : jittered, options.signal);
         } catch (sleepError) {
           if (!isAbort(sleepError, options.signal)) throw sleepError;
         }
@@ -375,7 +387,7 @@ async function wake(
   if (value.generation !== undefined && value.generation !== lease.generation) {
     throw new Error('Harness wake response does not match the active lease generation.');
   }
-  if ((value.wake !== 'message' && value.wake !== 'timeout') || !Array.isArray(value.messages)) {
+  if ((value.wake !== 'message' && value.wake !== 'timeout') || !Array.isArray(value.messages) || typeof value.hasMore !== 'boolean') {
     throw new Error('Harness returned a malformed wake response.');
   }
   if (value.wake === 'timeout' && value.messages.length !== 0) {
@@ -389,7 +401,7 @@ async function wake(
     if ((seq as number) > afterSeq) fresh.push(message);
     nextSeq = Math.max(nextSeq, seq as number);
   }
-  return { wake: value.wake, messages: fresh, instanceId: connection.instanceId, afterSeq: nextSeq };
+  return { wake: value.wake, messages: fresh, hasMore: value.hasMore, instanceId: connection.instanceId, afterSeq: nextSeq };
 }
 
 async function release(
@@ -451,10 +463,12 @@ async function requestJson(
     deadline.dispose();
   }
   if (!response.ok || value.ok !== true) {
-    const error = value.error as { code?: string; message?: string } | string | undefined;
+    const error = value.error as { code?: string; message?: string; retriable?: boolean; details?: Record<string, unknown> } | string | undefined;
     const message = typeof error === 'string' ? error : error?.message;
     const code = typeof error === 'object' ? error?.code : undefined;
-    throw new HarnessRequestError(response.status, code, message ?? 'unknown error');
+    const retriable = typeof error === 'object' && error?.retriable === true;
+    const details = typeof error === 'object' && error?.details && typeof error.details === 'object' ? error.details : undefined;
+    throw new HarnessRequestError(response.status, code, message ?? 'unknown error', retriable, details);
   }
   return value;
 }
@@ -487,15 +501,74 @@ async function readBoundedJson(response: Response, maximumBytes: number): Promis
   return parsed as Record<string, unknown>;
 }
 
+/** True for the harness's non-latching queue-depth refusal (HTTP 429 queue_full). */
+export function isQueueFull(error: unknown): error is HarnessRequestError {
+  return error instanceof HarnessRequestError && error.status === 429 && error.code === 'queue_full';
+}
+
+/** Back-off for a queue_full refusal: at least the harness's retryAfterMs, never less than 1 s. */
+export function queueFullBackoffMs(error: HarnessRequestError) {
+  const retryAfterMs = Number(error.details?.retryAfterMs);
+  return Math.max(1_000, Number.isFinite(retryAfterMs) ? retryAfterMs : 300_000);
+}
+
+/**
+ * Send that treats queue_full as "refused, wait, try again" rather than a failure: it backs
+ * off at least retryAfterMs and retries the SAME requestId (the harness does not record a
+ * queue_full as a failure). Never exits the process; returns the refusal after maxAttempts.
+ */
+export async function sendWithQueueBackoff(
+  options: WorkerClientOptions,
+  input: Record<string, unknown>,
+  settings: { maxAttempts?: number; requestId?: string; onRefused?: (refusal: QueueRefusal) => void | Promise<void> } = {},
+  runtime: WorkerClientRuntime = {}
+): Promise<{ sent: SeatToolResult } | { refused: QueueRefusal }> {
+  const sleep = runtime.sleep ?? abortableDelay;
+  const requestId = settings.requestId ?? randomUUID();
+  const maxAttempts = settings.maxAttempts ?? 3;
+  let refusal: QueueRefusal | undefined;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return { sent: await callSeatTool(options, 'mailbox_send', input, requestId, runtime) };
+    } catch (error) {
+      if (!isQueueFull(error)) throw error;
+      refusal = queueRefusal(error);
+      await settings.onRefused?.(refusal);
+      if (attempt < maxAttempts) await sleep(queueFullBackoffMs(error), options.signal);
+    }
+  }
+  return { refused: refusal! };
+}
+
+export type QueueRefusal = { refused: 'queue_full'; seat?: string; unread?: number; cap?: number; retryAfterMs: number; message: string };
+
+function queueRefusal(error: HarnessRequestError): QueueRefusal {
+  return {
+    refused: 'queue_full',
+    seat: typeof error.details?.seat === 'string' ? error.details.seat : undefined,
+    unread: typeof error.details?.unread === 'number' ? error.details.unread : undefined,
+    cap: typeof error.details?.cap === 'number' ? error.details.cap : undefined,
+    retryAfterMs: queueFullBackoffMs(error),
+    message: error.message
+  };
+}
+
 class HarnessRequestError extends Error {
-  constructor(readonly status: number, readonly code: string | undefined, message: string) {
+  constructor(
+    readonly status: number,
+    readonly code: string | undefined,
+    message: string,
+    readonly retriable = false,
+    readonly details?: Record<string, unknown>
+  ) {
     super(`Harness request failed (${status}${code ? ` ${code}` : ''}): ${message}`);
+    this.name = 'HarnessRequestError';
   }
 }
 
 async function runCli(argv = process.argv.slice(2)) {
   const command = argv[0];
-  const commands = new Set(['wait', 'watch', 'listen', 'status', 'inbox', 'read', 'send', 'claim', 'release', 'complete-step', 'complete-goal', 'capabilities', 'run', 'tool']);
+  const commands = new Set(['wait', 'watch', 'listen', 'status', 'inbox', 'read', 'send', 'claim', 'release', 'complete-step', 'complete-goal', 'record-evidence', 'promote-evidence', 'list-evidence', 'capabilities', 'run', 'tool']);
   if (!command || !commands.has(command)) throw new Error(cliUsage());
   validateCliArguments(command, argv.slice(1));
   const controller = new AbortController();
@@ -542,7 +615,18 @@ async function runCli(argv = process.argv.slice(2)) {
         ? 24 * 60 * 60_000
         : positiveInteger(capabilityTimeout, '--timeout-ms', 24 * 60 * 60_000)) + 10_000;
     }
-    const result = await callSeatTool(options, invocation.name, invocation.input, option(argv, '--request-id'));
+    let result: SeatToolResult;
+    try {
+      result = await callSeatTool(options, invocation.name, invocation.input, option(argv, '--request-id'));
+    } catch (error) {
+      // A full queue is a refused send, not a crash: report it and exit 4 (never 2 = halted).
+      if (isQueueFull(error)) {
+        await writeLine(process.stdout, `${JSON.stringify(queueRefusal(error))}\n`);
+        process.exitCode = 4;
+        return;
+      }
+      throw error;
+    }
     await writeLine(process.stdout, `${JSON.stringify(result)}\n`);
   } finally {
     process.removeListener('SIGINT', stop);
@@ -556,8 +640,17 @@ export function seatToolInvocation(command: string, argv: string[], seat: string
       return { name: 'mailbox_status', input: {} };
     case 'inbox':
       return { name: 'mailbox_inbox', input: { agent: seat, all: flag(argv, '--all'), afterSeq: integerOption(argv, '--after-seq', 0) } };
-    case 'read':
-      return { name: 'mailbox_read', input: { agent: seat, all: flag(argv, '--all') } };
+    case 'read': {
+      const seqs = option(argv, '--seqs');
+      return {
+        name: 'mailbox_read',
+        input: {
+          agent: seat,
+          all: flag(argv, '--all'),
+          ...(seqs === undefined ? {} : { seqs: csv(seqs, '--seqs').map((value) => positiveSequence(value, '--seqs')) })
+        }
+      };
+    }
     case 'send':
       return {
         name: 'mailbox_send',
@@ -568,7 +661,25 @@ export function seatToolInvocation(command: string, argv: string[], seat: string
           subject: requiredOption(argv, '--subject'),
           body: messageBody(argv),
           // "I have it, I am working" - do not bounce the baton to whoever is waiting.
-          ...(flag(argv, '--keep-baton') ? { keepBaton: true } : {})
+          ...(flag(argv, '--keep-baton') ? { keepBaton: true } : {}),
+          // Item 18: retract-by-replacing in one operation, rather than send-then-supersede
+          // with both instructions live in between.
+          ...(option(argv, '--supersedes') === undefined
+            ? {}
+            : { supersedes: positiveSequence(requiredOption(argv, '--supersedes'), '--supersedes') }),
+          ...(option(argv, '--supersede-reason') === undefined
+            ? {}
+            : { supersedeReason: requiredOption(argv, '--supersede-reason') })
+        }
+      };
+    case 'supersede':
+      return {
+        name: 'mailbox_supersede',
+        input: {
+          agent: seat,
+          seq: positiveSequence(requiredOption(argv, '--seq'), '--seq'),
+          by: positiveSequence(requiredOption(argv, '--by'), '--by'),
+          reason: requiredOption(argv, '--reason')
         }
       };
     case 'claim':
@@ -594,6 +705,32 @@ export function seatToolInvocation(command: string, argv: string[], seat: string
           summary: requiredOption(argv, '--summary'),
           evidence: optionalCsvOption(argv, '--evidence')
         }
+      };
+    case 'record-evidence':
+      return {
+        name: 'mailbox_record_evidence',
+        input: {
+          agent: seat,
+          subject: requiredOption(argv, '--subject'),
+          statement: requiredOption(argv, '--statement'),
+          ...(workIdOption(argv) === undefined ? {} : { workId: workIdOption(argv) })
+        }
+      };
+    case 'promote-evidence':
+      return {
+        name: 'mailbox_promote_evidence',
+        input: {
+          agent: seat,
+          id: requiredOption(argv, '--id'),
+          kind: requiredOption(argv, '--kind'),
+          ...(option(argv, '--invocation') === undefined ? {} : { invocation: requiredOption(argv, '--invocation') }),
+          ...(option(argv, '--transition') === undefined ? {} : { transition: requiredOption(argv, '--transition') })
+        }
+      };
+    case 'list-evidence':
+      return {
+        name: 'mailbox_list_evidence',
+        input: workIdOption(argv) === undefined ? {} : { workId: workIdOption(argv) }
       };
     case 'complete-step':
       return {
@@ -627,11 +764,15 @@ function cliUsage() {
     '  listen [--deadline-s N]   blocks until mail, then EXITS (for wake-on-exit runtimes)',
     '  status',
     '  inbox [--all] [--after-seq N]',
-    '  read [--all]',
+    '  read [--all] [--seqs N[,N...]]',
     '  send --to AGENT --subject TEXT (--body-file PATH | --body TEXT) [--kind KIND]',
+    '  supersede --seq N --by N --reason TEXT',
     '  claim --paths PATH[,PATH...] [--why TEXT]',
     '  release [--paths PATH[,PATH...]]',
     '  complete-step --summary TEXT [--evidence ITEM[,ITEM...]]',
+    '  record-evidence --subject TEXT --statement TEXT [--work-id N]',
+    '  promote-evidence --id ID --kind KIND [--invocation TEXT] [--transition TEXT]',
+    '  list-evidence [--work-id N]',
     '  capabilities',
     '  run --capability ID [--timeout-ms N]',
     '  tool --name TOOL [--input-json JSON]',
@@ -642,6 +783,13 @@ function cliUsage() {
 function validateOptions(options: WorkerClientOptions) {
   validateSeatOptions(options);
   requestedTimeout(options);
+  boundedAfterSeq(options.afterSeq);
+}
+
+function boundedAfterSeq(value: number | undefined) {
+  if (value === undefined) return 0;
+  if (!Number.isSafeInteger(value) || value < 0) throw new Error('afterSeq must be a non-negative safe integer.');
+  return value;
 }
 
 function validateSeatOptions(options: WorkerClientOptions) {
@@ -714,11 +862,25 @@ function flag(argv: string[], name: string) {
   return argv.includes(name);
 }
 
+function workIdOption(argv: string[]) {
+  const raw = option(argv, '--work-id');
+  if (raw === undefined) return undefined;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 1) throw new Error('--work-id must be a positive integer.');
+  return value;
+}
+
 function integerOption(argv: string[], name: string, fallback: number) {
   const raw = option(argv, name);
   if (raw === undefined) return fallback;
   const value = Number(raw);
   if (!Number.isSafeInteger(value) || value < 0) throw new Error(`${name} must be a non-negative integer.`);
+  return value;
+}
+
+function positiveSequence(raw: string, name: string) {
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 1) throw new Error(`${name} must be a positive integer.`);
   return value;
 }
 
@@ -744,12 +906,16 @@ function validateCliArguments(command: string, args: string[]) {
   const commandValues: Record<string, string[]> = {
     status: [],
     inbox: ['--after-seq'],
-    read: [],
+    read: ['--seqs'],
     send: ['--to', '--kind', '--subject', '--body', '--body-file'],
+    supersede: ['--seq', '--by', '--reason'],
     claim: ['--paths', '--why'],
     release: ['--paths'],
     'complete-step': ['--summary', '--evidence'],
     'complete-goal': ['--summary', '--evidence'],
+    'record-evidence': ['--subject', '--statement', '--work-id'],
+    'promote-evidence': ['--id', '--kind', '--invocation', '--transition'],
+    'list-evidence': ['--work-id'],
     capabilities: [],
     run: ['--capability', '--timeout-ms'],
     tool: ['--name', '--input-json']
@@ -927,6 +1093,12 @@ async function listenForMailbox(options: WorkerClientOptions, argv: string[]) {
       if (result.wake === 'message') return { listen: 'message', ...result };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      // queue_full is not a halt: back off at least retryAfterMs and keep listening.
+      if (isQueueFull(error)) {
+        retries += 1;
+        await abortableDelay(Math.min(queueFullBackoffMs(error), Math.max(1000, giveUpAt - Date.now())), options.signal);
+        continue;
+      }
       if (/bus_halted|halted/i.test(message)) return { listen: 'halted', reason: message };
       // A lease outliving the process that held it is normal on restart, not a failure.
       if (/lease_held|409|ECONNREFUSED|endpoint/i.test(message)) {

@@ -140,6 +140,7 @@ const SCRUB_ALLOW = new Set([
   'SKSE_DEVKIT_ROOT',
   'AI_BUS_VCVARS64',
   'VCPKG_ROOT',
+  'VCPKG_VISUAL_STUDIO_PATH',
   'VCPKG_DEFAULT_TRIPLET'
 ]);
 
@@ -327,7 +328,9 @@ export class SkseDevkitAdapter {
       return this.runFixed({
         action: 'configure',
         executable: cmake,
-        args: ['--preset', options.preset],
+        // Preset binaryDir must not bypass the jail or silently ignore --build-dir.
+        // Configure, build, test and the receipt must name the same directory.
+        args: ['--preset', options.preset, '-B', buildDir],
         cwd: sourceDir,
         sourceDir,
         buildDir,
@@ -687,11 +690,12 @@ async function prepareToolchainEnvironment(
 
   const bundledClDir = devkitRoot ? path.join(devkitRoot, 'tools', 'msvc', 'bin') : '';
   if (bundledClDir && await exists(path.join(bundledClDir, 'cl.exe'))) setPathEnvironment(env, prependPathList(bundledClDir, env.PATH ?? env.Path));
-  if (!(await executableOnPath('cl.exe', env))) {
+  if (env.SKSE_VCVARS64 || !(await executableOnPath('cl.exe', env))) {
     try {
       env = injectedBootstrap ? await injectedBootstrap(env) : await bootstrapMsvcEnvironment(env);
       notes.push('Initialized MSVC environment from a validated vcvars64.bat installation.');
     } catch (error) {
+      if (source.SKSE_VCVARS64) throw error; // An explicit toolchain selection must not fall back.
       notes.push(`MSVC environment bootstrap failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
@@ -703,9 +707,10 @@ async function prepareToolchainEnvironment(
 
 async function bootstrapMsvcEnvironment(source: NodeJS.ProcessEnv): Promise<NodeJS.ProcessEnv> {
   const trustedRoots = programFilesRoots(source);
-  const vcvars = await discoverVcvars64(source, trustedRoots);
+  const vcvars = source.SKSE_VCVARS64 || await discoverVcvars64(source, trustedRoots);
   if (!vcvars) throw new Error('vcvars64.bat was not found beneath a trusted Program Files Visual Studio installation.');
   if (!isTrustedVcvarsPath(vcvars, trustedRoots)) throw new Error('Discovered vcvars64.bat path failed validation.');
+  if (!(await exists(vcvars))) throw new Error('Selected vcvars64.bat does not exist.');
   const systemRoot = source.SystemRoot ?? source.SYSTEMROOT ?? source.WINDIR;
   const cmd = systemRoot ? path.join(systemRoot, 'System32', 'cmd.exe') : 'cmd.exe';
   const command = 'call "%AI_BUS_VCVARS64%" >nul && set';
@@ -713,6 +718,9 @@ async function bootstrapMsvcEnvironment(source: NodeJS.ProcessEnv): Promise<Node
   const captured = parseEnvironmentBlock(output);
   delete captured.AI_BUS_VCVARS64;
   if (!captured.PATH && !captured.Path) throw new Error('vcvars64.bat returned no PATH environment.');
+  if (source.SKSE_VCVARS64 && captured.VSINSTALLDIR) {
+    captured.VCPKG_VISUAL_STUDIO_PATH = path.resolve(captured.VSINSTALLDIR);
+  }
   return { ...source, ...captured };
 }
 

@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
+require('./helpers/require-fresh-dist')();
 const { sdkProvider } = require('../dist/brain/providers.js');
 
 test('SDK provider bounds a non-responsive request and preserves timeout evidence', async () => {

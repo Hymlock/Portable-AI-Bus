@@ -488,7 +488,7 @@ export async function activate(context: vscode.ExtensionContext) {
           everyRounds: Number(everyRaw) || null
         });
         void vscode.window.showInformationMessage(
-          `Halting: max ${state.maxRounds}; at ${state.haltPolicy.atRounds.join(',') || 'none'}; every ${state.haltPolicy.everyRounds ?? 'off'}; step ${state.haltPolicy.onStepCompletion}; goal ${state.haltPolicy.onGoalCompletion}.`
+          `Halting: at ${state.haltPolicy.atRounds.join(',') || 'none'}; every ${state.haltPolicy.everyRounds ?? 'off'}; step ${state.haltPolicy.onStepCompletion}; goal ${state.haltPolicy.onGoalCompletion}.`
         );
       });
     }),
@@ -991,7 +991,13 @@ function renderMailboxStatus(status: MailboxStatus) {
     : '<not a git repo>';
 
   return [
-    `round     ${status.round} / ${status.maxRounds}`,
+    ...(status.queueView
+      ? [
+          `queue     ${status.queueView.hot} / ${status.queueView.maxHot} hot · archived ${status.queueView.archived}`,
+          `unread    per seat vs cap ${status.queueView.maxUnreadPerSeat}: ${Object.entries(status.queueView.unread).map(([agent, count]) => `${agent} ${count}`).join(', ') || '(none)'}`
+        ]
+      : []),
+    `messages  ${status.round} sent (informational, not a limit)`,
     `halted    ${status.halted}${status.stopReason ? ` — ${status.stopReason}` : ''}`,
     `agents    ${status.agents.join(', ') || '(none)'}`,
     `commit    ${commit}`,

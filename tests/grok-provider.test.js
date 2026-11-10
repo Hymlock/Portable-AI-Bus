@@ -1,10 +1,14 @@
-﻿const assert = require('node:assert/strict');
+const assert = require('node:assert/strict');
 const test = require('node:test');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { resolveGrokCommand, resolveProvider, extractGrokAnswer } = require('../dist/brain/providers.js');
+require('./helpers/require-fresh-dist')();
+const { resolveGrokCommand, resolveProvider, extractGrokAnswer, buildGrokArgs, providerFailureText } = require('../dist/brain/providers.js');
+const { parsePlan } = require('../dist/brain/brains/agent.js');
 const { chainProviders, classifyFailure } = require('../dist/brain/chain.js');
+
+const CAPTURED_MALFORMED = path.join(__dirname, 'fixtures', 'grok-malformed.txt');
 
 test('the REAL binary is resolved, not the unspawnable npm trampoline', () => {
   // %APPDATA%\npm\grok.cmd cannot be spawned by Node 24 at all. The real binary is unpacked to
@@ -27,6 +31,17 @@ test('the REAL binary is resolved, not the unspawnable npm trampoline', () => {
   }
 });
 
+test('ITEM 11: providerFailureText keeps ConPTY errors visible and marks BROKEN', () => {
+  const text = providerFailureText({
+    code: -1,
+    stdout: '',
+    stderr: "ConPTY unavailable: Cannot find module 'node-pty'",
+    failureKind: 'broken'
+  }, 'grok exited -1');
+  assert.match(text, /^BROKEN /);
+  assert.match(text, /Cannot find module 'node-pty'/);
+});
+
 test('"Not signed in" classifies as auth, not as a generic error', () => {
   // xAI's wording matched none of the auth patterns. It fell through either way, but reported a
   // reason nobody could act on.
@@ -37,6 +52,19 @@ test('"Not signed in" classifies as auth, not as a generic error', () => {
 test('a grok link reports kind "grok", so the record names the vendor', () => {
   const provider = resolveProvider({ kind: 'grok', codex: {}, grok: { command: 'nonexistent-grok' } });
   assert.equal(provider.kind, 'grok');
+});
+
+test('Grok structured-output options precede -p and the prompt is its final argument', () => {
+  // The Grok Build CLI treats -p as the single-prompt boundary. Flags placed after the prompt
+  // leave the process in its interactive TUI, where a headless bus wake waits forever for keys.
+  const schema = { type: 'object', required: ['done'] };
+  const args = buildGrokArgs('wake', schema, 'grok-4');
+  const promptIndex = args.indexOf('-p');
+
+  assert.ok(promptIndex > args.indexOf('--json-schema'));
+  assert.ok(promptIndex > args.indexOf('--output-format'));
+  assert.ok(promptIndex > args.indexOf('--model'));
+  assert.deepEqual(args.slice(promptIndex), ['-p', 'wake']);
 });
 
 test('a signed-out grok does not stop a seat', async () => {
@@ -120,6 +148,21 @@ test('a deeply wrapped structured reply reaches the plan instead of spending rep
   assert.deepEqual(JSON.parse(extractGrokAnswer(wrapped).text), JSON.parse(plan));
 });
 
+test('captured complete Grok documents parse, while genuinely truncated input does not', () => {
+  const captures = JSON.parse(fs.readFileSync(CAPTURED_MALFORMED, 'utf8'));
+  assert.equal(captures.length, 3);
+  for (const capture of captures) {
+    const extracted = extractGrokAnswer(capture.document);
+    const parsed = parsePlan(extracted.text);
+    assert.equal(parsed.malformed, false, `${capture.name} must reach a usable plan`);
+  }
+  assert.equal(parsePlan(extractGrokAnswer(captures[2].document).text).plan.done, false,
+    'the completed third capture is a valid continuation plan, not malformed output');
+
+  const genuinelyTruncated = captures[2].document.slice(0, Math.floor(captures[2].document.length / 2));
+  assert.equal(parsePlan(extractGrokAnswer(genuinelyTruncated).text).malformed, true);
+});
+
 test('ConPTY visual wraps inside a long Grok JSON string are reversed', () => {
   // Captured live: the outer envelope's `text` value was long enough for ConPTY to insert raw
   // CRLF pairs inside the quoted JSON. JSON.parse must reject that stream until those terminal
@@ -142,7 +185,9 @@ test('ConPTY visual wraps inside a long Grok JSON string are reversed', () => {
     '}'
   ].join('\r\n');
 
-  assert.deepEqual(JSON.parse(extractGrokAnswer(stream).text), JSON.parse(plan));
+  const parsed = parsePlan(extractGrokAnswer(stream).text);
+  assert.equal(parsed.malformed, false);
+  assert.deepEqual(parsed.plan.actions, JSON.parse(plan).actions);
 });
 
 test('a direct structured plan is retained after ConPTY wraps its body string', () => {
@@ -156,7 +201,9 @@ test('a direct structured plan is retained after ConPTY wraps its body string', 
   const bodyStart = plan.indexOf('Y'.repeat(400));
   const wrapped = `${plan.slice(0, bodyStart + 90)}\r\n${plan.slice(bodyStart + 90)}`;
 
-  assert.deepEqual(JSON.parse(extractGrokAnswer(wrapped).text), JSON.parse(plan));
+  const parsed = parsePlan(extractGrokAnswer(wrapped).text);
+  assert.equal(parsed.malformed, false);
+  assert.deepEqual(parsed.plan.actions, JSON.parse(plan).actions);
 });
 
 test('nested progress and final plans select the final substantive answer', () => {
@@ -208,4 +255,9 @@ test('the parser handles the other shapes the CLI can emit', () => {
   const failed = extractGrokAnswer('{"type":"error","message":"Not signed in."}');
   assert.equal(failed.text, '');
   assert.equal(failed.error, 'Not signed in.');
+});
+
+test('an empty cancelled envelope is a provider error, not raw malformed-plan text', () => {
+  const cancelled = extractGrokAnswer(JSON.stringify({ text: '', stopReason: 'cancelled' }, null, 2));
+  assert.deepEqual(cancelled, { text: '', error: 'cancelled' });
 });

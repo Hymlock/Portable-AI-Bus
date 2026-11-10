@@ -2,7 +2,7 @@
   "name": "portable-ai-bus",
   "displayName": "Portable AI Bus",
   "description": "Chat-first multi-agent workflow staging and mailbox for Visual Studio Code workspaces.",
-  "version": "0.2.0",
+  "version": "0.3.1",
   "publisher": "local-dev",
   "preview": true,
   "license": "MIT",
@@ -15,6 +15,8 @@
     "scripts/bus-processes.js",
     "scripts/bus-console.js",
     "scripts/bus-tick.js",
+    "scripts/operator-heartbeat.js",
+    "scripts/install-bin.js",
     "scripts/bus-supervise.js",
     "scripts/build-distribution.js",
     "node_modules/**",
@@ -428,5 +430,9 @@
     "bus-mailbox": "dist/mailbox.js",
     "bus-worker": "dist/worker-client.js",
     "bus-harness": "dist/harness.js"
-  }
+  },
+  "bundleDependencies": [
+    "@anthropic-ai/sdk",
+    "node-pty"
+  ]
 }

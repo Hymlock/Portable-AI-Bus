@@ -49,6 +49,8 @@ const intervalMs = Math.max(30, Number(option('--interval-s', '240'))) * 1000;
 const once = process.argv.includes('--once');
 
 const runtime = path.join(root, '.ai-bus', 'runtime');
+const { readStaleCodeNotices, readDeadSeatNotices, readSpentSeatNotices } = require('./bus-supervise');
+const { recordBeat, heartbeatNotice } = require('./operator-heartbeat');
 
 /** Courtesy kinds, matching the runner's `ackKinds` and the brain's `RECEIPT_KINDS`. */
 const RECEIPT_KINDS = new Set(['ack', 'receipt', 'ping']);
@@ -75,17 +77,115 @@ function lastActivityMinutes() {
   }
 }
 
-/** Seats with a live brain process, by name. Windows-only detection; empty elsewhere. */
+/**
+ * Seats with a live brain process **for THIS root**, by name.
+ *
+ * ITEM 23, grok r29: this used to scan the whole machine. A brain belonging to a DIFFERENT
+ * bus on the same box made `brains:` look healthy while this root's own dead-seat notice said
+ * the seat had been gone for hours - grok observed exactly that mixed line live,
+ * `brains:codex,grok` printed alongside `DEAD-SEAT grok`.
+ *
+ * The supervisor already had this right: it uses `processesForRoot`. The operator line, which
+ * is the surface a human actually reads, did not. Same module now, so the two cannot disagree
+ * about which machine's seats they are describing.
+ *
+ * Still Windows-only detection, and that is item 23's remaining half rather than a fix: on
+ * any other platform this returns [] and the field reads NONE. Honest, but not portable, and
+ * the portability pass owns it.
+ */
+/**
+ * The durable operator notices, as tick fields.
+ *
+ * ONE definition, used by both the healthy path and the unreadable-mailbox path. They were
+ * separate for about ten minutes while fixing item 24 and that is exactly how the two drift
+ * apart until one of them silently stops reporting - which is item 22's original failure,
+ * where the file existed and the line that should have read it did not.
+ *
+ * ITEM 22: the DEAD-SEAT line prints the first-seen time, because "gone since 01:42" was the
+ * fact that actually mattered when a seat stayed dead for eight hours and every other signal
+ * read normal.
+ */
+function noticeLines(coordinationRoot, live = liveBrains()) {
+  const lines = [];
+  const stale = readStaleCodeNotices(coordinationRoot);
+  if (stale.seats.length > 0) {
+    lines.push(`STALE-CODE ${stale.seats.map((item) => item.seat).join(',')} - running brains predate dist; bus-restart, do not treat as current`);
+  }
+
+  /**
+   * ITEM 27: a dead-seat notice can outlive the death it describes.
+   *
+   * The clear happens only in the supervisor's sweep. grok observed the consequence live: a
+   * planted notice and `brains:codex,grok` printed on ONE LINE, because the seat's brain was
+   * alive and nothing had cleared the file. Its other paths are just as real - a bus run
+   * without a supervisor prints the leftover forever, and brains restarted outside the
+   * supervisor stay flagged until the next sweep.
+   *
+   * The tick deliberately does NOT clear the file. It is a reader; a reader that repairs its
+   * own input hides the writer's bug, and item 25 was exactly a writer bug that only became
+   * findable because the notice survived. So it cross-checks and SAYS the two disagree.
+   *
+   * This is only meaningful because item 23 scoped liveBrains() to --root. Before that, a
+   * brain from some other bus on the same box would have "confirmed" a seat alive here.
+   */
+  const dead = readDeadSeatNotices(coordinationRoot);
+  if (dead.seats.length > 0) {
+    const running = new Set(live);
+    const format = (item) => (item.at ? `${item.seat}(since ${String(item.at).slice(11, 19)})` : item.seat);
+    const absent = dead.seats.filter((item) => !running.has(item.seat));
+    const contradicted = dead.seats.filter((item) => running.has(item.seat));
+
+    if (absent.length > 0) {
+      lines.push(`DEAD-SEAT ${absent.map(format).join(',')} - no brain process; restarts exhausted. bus-restart, and do not read the baton as progress`);
+    }
+    if (contradicted.length > 0) {
+      lines.push(`STALE-NOTICE ${contradicted.map(format).join(',')} - flagged dead but a brain for THIS root is running; the supervisor has not swept. Trust the brain, not the file`);
+    }
+  }
+  /**
+   * A SPENT seat is alive and useless: the process runs, it answers listen, it acks mail, and
+   * it cannot think. That is the hardest state to see from outside, because every liveness
+   * signal reads "fine" - which is precisely why DEAD-SEAT above does not cover it.
+   *
+   * On 2026-08-20 one seat sent audit requests for an afternoon to a seat that had been out of
+   * providers for hours. Every one was acked and none actioned. Nothing here said so, because
+   * exhaustion lived only in the spent seat's own log.
+   */
+  const spent = readSpentSeatNotices(coordinationRoot);
+  if (spent.seats.length > 0) {
+    const fmt = (item) => (item.since ? `${item.seat}(since ${String(item.since).slice(11, 19)})` : item.seat);
+    lines.push(
+      `SPENT-SEAT ${spent.seats.map(fmt).join(',')} - alive but out of providers. `
+      + 'It will ACK mail and action none. Do not queue work here; top it up or reassign'
+    );
+  }
+
+  return lines;
+}
+
 function liveBrains() {
-  if (process.platform !== 'win32') return [];
+  /**
+   * grok r34: the `win32` early return here was CARVING, and worse than untidy.
+   *
+   * `listNodeProcesses` already has a Unix `ps` branch, and the supervisor has no platform
+   * gate at all. So on Unix this returned [] and printed `brains:NONE` while the supervisor
+   * happily enumerated the same seats - A NEW DISAGREEMENT between the two, which is the exact
+   * opposite of why item 23 moved both onto one module. I had labelled it "the portability
+   * pass owns it", which was me protecting a number rather than describing a boundary.
+   *
+   * Seat parsing goes through the same module too. The local regex missed `--seat=grok`,
+   * which `identifyNodeProcess` handles - a second way for the tick and the supervisor to
+   * describe the same machine differently.
+   */
   try {
-    const out = execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command',
-      "Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | " +
-      "Where-Object { $_.CommandLine -match 'brain[\\\\/]cli\\.js' } | " +
-      "ForEach-Object { ($_.CommandLine -split '--seat ')[1].Split(' ')[0] }"
-    ], { encoding: 'utf8', windowsHide: true });
-    return out.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+    const { listNodeProcesses, processesForRoot } = require('./bus-processes');
+    return [...new Set(
+      processesForRoot(listNodeProcesses(), root)
+        .map((item) => item.seat)
+        .filter(Boolean)
+    )].sort();
   } catch {
+    // Cannot see the process list - including the item-28 timeout. Degrade, never hang.
     return [];
   }
 }
@@ -138,14 +238,35 @@ function busState() {
   }
 }
 
+let beatCount = 0;
+
 function tick() {
   const brains = liveBrains();
   const bus = busState();
   const stamp = new Date().toISOString().slice(11, 19);
 
+  // Report the PREVIOUS beat's staleness before recording this one, or every tick would read
+  // its own fresh write and never report a gap - the check would be structurally incapable of
+  // firing. Measured 2026-08-22: the heartbeat died at tick 405 and nothing noticed for ~14
+  // hours, while `STALL? codex holds the baton with no live brain` printed correctly into a
+  // stream no living reader was attached to.
+  const heartbeat = heartbeatNotice(root);
+  recordBeat(root, { seat, tick: ++beatCount });
+
   if (bus.error) {
-    // Still a beat. A pilot woken to "the mailbox is unreadable" is exactly right.
-    console.log(`tick ${stamp} MAILBOX UNREADABLE: ${bus.error}`);
+    /**
+     * ITEM 24, grok r29: this returned before any notice line, so an unreadable mailbox
+     * SUPPRESSED the dead-seat report. A dead seat matters more when the mailbox is broken,
+     * not less - those are exactly the conditions where an operator most needs to know which
+     * seat stopped, and "MAILBOX UNREADABLE" alone does not say.
+     *
+     * The notices live on disk and do not depend on the mailbox parsing, so there is no
+     * reason for one failure to hide the other. Still a beat, and still the mailbox error
+     * first, because that is the more urgent fact.
+     */
+    const parts = [`tick ${stamp}`, `MAILBOX UNREADABLE: ${bus.error}`,
+                   ...(heartbeat ? [heartbeat] : []), ...noticeLines(root)];
+    console.log(parts.join('  '));
     return;
   }
 
@@ -158,6 +279,13 @@ function tick() {
     bus.unread.length ? `unread:${bus.unread.join(' ')}` : 'unread:none'
   ];
   if (bus.halted) parts.push('HALTED');
+
+  // Pass the brains ALREADY measured for this line. Re-querying would let `brains:` and
+  // STALE-NOTICE disagree inside a single tick, which is the contradiction item 27 exists to
+  // report rather than to create.
+  if (heartbeat) parts.push(heartbeat);
+  parts.push(...noticeLines(root, brains));
+
 
   const quietMinutes = lastActivityMinutes();
 
@@ -180,7 +308,20 @@ function tick() {
   console.log(parts.join('  '));
 }
 
-tick();
-if (!once) {
-  setInterval(tick, intervalMs);
+/**
+ * Only tick when RUN, not when REQUIRED.
+ *
+ * Without this guard, `require('./bus-tick')` printed a tick and installed a live interval as
+ * a side effect of being imported, which is why nothing had ever imported it - including the
+ * tests, which had to drive it through a subprocess. A module that cannot be loaded without
+ * doing its job cannot be unit-tested, and item 27's cross-check needed `live` injected
+ * rather than measured from the machine running the suite.
+ */
+if (require.main === module) {
+  tick();
+  if (!once) {
+    setInterval(tick, intervalMs);
+  }
 }
+
+module.exports = { noticeLines, liveBrains };

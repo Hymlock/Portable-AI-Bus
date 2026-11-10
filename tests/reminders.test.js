@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
+require('./helpers/require-fresh-dist')();
 const { ReminderTracker } = require('../dist/reminders.js');
 
 test('reminders establish a quiet baseline and report only new transitions', () => {

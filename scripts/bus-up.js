@@ -2,7 +2,7 @@
 /**
  * `bus-up` — one command that brings the whole bus into a working state.
  *
- *   node scripts/bus-up.js --root "<bus root>" [--workdir "<repo>"] [--console <seat>] [--brains a,b,c]
+ *   node scripts/bus-up.js --root "<bus root>" [--workdir "<repo>"] [--claim-repo "<repo>"] [--console <seat>] [--brains a,b,c]
  *
  * What it does, in order, and each step is idempotent so it is safe to re-run:
  *
@@ -11,7 +11,8 @@
  *   3. give the baton to the console seat ONLY IF nobody is holding it, or the holder has
  *      gone stale - never take it from an agent that is actively working
  *   4. start a detached brain for each working seat, skipping any that already has one
- *   5. print the truth: who is attended, who holds the baton, what the goal is
+ *   5. start one detached supervisor for those brains, skipping it if already running
+ *   6. print the truth: who is attended, who holds the baton, what the goal is
  *
  * Written because "initiate the bus" was five commands nobody could remember in order, and a
  * half-initiated bus looks identical to a working one until something needs to move.
@@ -37,9 +38,22 @@ function option(name, fallback) {
   return index >= 0 && index + 1 < process.argv.length ? process.argv[index + 1] : fallback;
 }
 
+function uniqueOption(name) {
+  const indexes = process.argv.flatMap((value, index) => value === name ? [index] : []);
+  if (indexes.length > 1) throw new Error(`Duplicate option: ${name}`);
+  if (indexes.length === 0) return undefined;
+  const value = process.argv[indexes[0] + 1];
+  if (value === undefined || value.startsWith('--')) throw new Error(`Missing value for ${name}.`);
+  return value;
+}
+
 const defaultRoot = path.basename(REPO) === '.ai-bus' ? path.dirname(REPO) : process.cwd();
 const root = path.resolve(option('--root', defaultRoot));
 const workdir = path.resolve(option('--workdir', root));
+const claimRepo = path.resolve(uniqueOption('--claim-repo') ?? root);
+if (!fs.statSync(claimRepo, { throwIfNoEntry: false })?.isDirectory()) {
+  throw new Error(`--claim-repo is not a directory: ${claimRepo}`);
+}
 // The three funded vendors. ANY of them can be the pilot - whichever one is holding the chat
 // interface - and the other two spin up as brains. So the brain list is DERIVED from who is
 // piloting rather than hardcoded, and there are never more than two brains.
@@ -123,7 +137,9 @@ function mailbox(args) {
 const stagedRepo = path.basename(REPO).toLowerCase() === '.ai-bus';
 const created = stagedRepo ? [] : bootstrapCoordinationRoot(REPO, root);
 if (created.length) log(`bootstrap    installed ${created.length} missing coordination asset(s)`);
-mailbox(['init', '--agents', allSeats.join(','), '--max-rounds', '550']);
+// A busy three-seat engagement crossed 535 rounds in one evening. 550 looked generous when it
+// was chosen, but in practice it was a silent shutdown scheduled fifteen messages later.
+mailbox(['init', '--agents', allSeats.join(','), '--max-rounds', '6000']);
 log(`seats        ${allSeats.join(', ')}`);
 log(`workdir      ${workdir}`);
 
@@ -157,7 +173,7 @@ if (harnessAlive()) {
 } else {
   launchHidden(
     process.execPath,
-    [path.join(DIST, 'harness.js'), 'serve', '--root', root, '--workdir', workdir, '--port', '0'],
+    [path.join(DIST, 'harness.js'), 'serve', '--root', root, '--workdir', workdir, '--claim-repo', claimRepo, '--port', '0'],
     path.join(root, '.ai-bus', 'runtime', 'harness-serve.log')
   );
   const deadline = Date.now() + 15000;
@@ -222,7 +238,27 @@ if (!holder) {
  * failure mode is a brain that does not start rather than an unbounded pile of them.
  */
 function brainRunning(seat) {
-  const matches = processesForRoot(listNodeProcesses(), root)
+  /**
+   * grok r43, recorded as a finding rather than an item-28 fail: "brainRunning's comment
+   * claims a catch the body does not implement. A COMMENT IS NOT A CATCH. Same lesson as a
+   * comment is not a timeout."
+   *
+   * The comment above has always promised fail-closed on an unreadable process list. There was
+   * no try/catch, so the promise was decoration - and item 28 made it matter, because
+   * listNodeProcesses now THROWS on a timed-out query instead of hanging. Without this, a slow
+   * process list turns "do not start a second brain" into a crash on startup.
+   *
+   * Only the READ fails closed. The explicit throw below is a deliberate signal about an
+   * ambiguous process tree and must still reach the operator.
+   */
+  let listed;
+  try {
+    listed = listNodeProcesses();
+  } catch (error) {
+    console.log(`brain:${seat} process list unreadable (${error.message.split('\n')[0]}); assuming already running`);
+    return true;
+  }
+  const matches = processesForRoot(listed, root)
     .filter((item) => item.type === 'brain' && item.seat === seat);
   if (matches.length === 0) return false;
   const exact = matches.filter((item) => samePath(item.workdir, workdir) && samePath(item.brain, brainFile));
@@ -245,6 +281,33 @@ for (const seat of brainSeats) {
     '--brain', brainFile
   ], logFile);
   log(`brain:${seat.padEnd(7)} started pid ${pid ?? '?'} -> ${logFile}`);
+}
+
+// A supervisor left as an operator-only command was no supervisor at all: the normal startup
+// path brought up brains and then left their deaths invisible. bus-up owns the exact root,
+// workdir, brain module and detached-seat set, so it is also the one place that can launch the
+// correct monitor without asking the operator to repeat configuration by hand.
+const supervisors = processesForRoot(listNodeProcesses(), root)
+  .filter((item) => item.type === 'supervisor');
+const matchingSupervisors = supervisors.filter((item) =>
+  samePath(item.workdir, workdir)
+  && samePath(item.brain, brainFile)
+  && [...item.seats].sort().join(',') === [...brainSeats].sort().join(','));
+if (supervisors.length === 1 && matchingSupervisors.length === 1) {
+  log('supervisor   already running');
+} else if (supervisors.length > 0) {
+  throw new Error(
+    `Found ${supervisors.length} supervisor process(es) for this root, but not exactly one for `
+    + `--workdir ${workdir}, --brain ${brainFile}, --seats ${brainSeats.join(',')}. Run bus-restart.`
+  );
+} else {
+  const supervisorLog = path.join(root, '.ai-bus', 'runtime', 'bus-supervise.log');
+  const supervisorPid = launchHidden(process.execPath, [
+    path.join(REPO, 'scripts', 'bus-supervise.js'),
+    '--root', root, '--workdir', workdir, '--brain', brainFile,
+    '--seats', brainSeats.join(',')
+  ], supervisorLog);
+  log(`supervisor   started pid ${supervisorPid ?? '?'} -> ${supervisorLog}`);
 }
 
 log('policy       brains remain active after each wake; clarification keeps the goal open');

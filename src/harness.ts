@@ -1,10 +1,11 @@
-import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+﻿import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as http from 'node:http';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { CapabilityRunner } from './capabilities';
-import { BusHaltedError, ClaimConflictError, MailboxStore } from './mailbox';
+import { EvidencePromotionError } from './evidence';
+import { BusHaltedError, ClaimConflictError, ClaimPathMissingError, ClaimReasonRequiredError, WholeRepositoryClaimError, MailboxStore, QueueFullError } from './mailbox';
 import { credentialWorkspaceKey } from './workspace-key';
 
 type ToolDefinition = {
@@ -60,13 +61,16 @@ type HarnessOptions = {
   maxWakeResponseBytes?: number;
   /** Repository used by capabilities; mailbox state and credentials remain under workspaceRoot. */
   workdir?: string;
+  /** Repository against which mailbox claim paths are resolved. Defaults to workspaceRoot. */
+  claimRepo?: string;
 };
 
 const DEFAULT_PORT = 47_831;
 const DEFAULT_MAX_BODY_BYTES = 1024 * 1024;
 const MAX_WAKE_MS = 30_000;
 const MAX_CONCURRENT_WAKES = 8;
-const DEFAULT_LEASE_STALE_MS = 60_000;
+/** Shared with listeners and supervisors so their recovery policy cannot drift from lease expiry. */
+export const DEFAULT_LEASE_STALE_MS = 60_000;
 const DEFAULT_LEASE_SWEEP_MS = 15_000;
 const MAX_WORKER_LEASES = 256;
 const DEFAULT_MAX_WAKE_MESSAGES = 100;
@@ -88,6 +92,7 @@ export class HarnessServer {
   readonly recoveryLockPath: string;
   readonly instanceId: string;
   readonly workdir: string;
+  readonly claimRepo: string;
   private readonly maxBodyBytes: number;
   private readonly maxConcurrentRuns: number;
   private readonly leaseStaleMs: number;
@@ -117,6 +122,7 @@ export class HarnessServer {
   constructor(readonly workspaceRoot: string, options: HarnessOptions = {}) {
     this.workspaceRoot = path.resolve(workspaceRoot);
     this.workdir = path.resolve(options.workdir ?? this.workspaceRoot);
+    this.claimRepo = path.resolve(options.claimRepo ?? this.workspaceRoot);
     this.mailbox = new MailboxStore(this.workspaceRoot);
     this.capabilities = new CapabilityRunner(this.workdir, { configRoot: this.workspaceRoot });
     this.runtimeDir = path.join(this.workspaceRoot, '.ai-bus', 'runtime', 'harness');
@@ -149,7 +155,11 @@ export class HarnessServer {
     if (this.stopping) throw new Error('A stopped HarnessServer instance cannot be restarted; create a new instance.');
     await this.ensureSafeRuntime();
     await this.mailbox.registerAgents([]);
-    const registeredAgents = (await this.mailbox.status()).agents;
+    const registeredAgents = (await this.mailbox.snapshot()).agents;
+    // Start-up prune: recount and archive eligible mail (pressure mode when the hot inbox is
+    // >= 80% of the backstop). A failure is audited and never blocks the harness.
+    await this.mailbox.archive({ auto: true, maxBatches: 20, trigger: 'start' })
+      .catch((error) => this.audit({ event: 'prune_failed', trigger: 'start', error: asMessage(error) }).catch(() => undefined));
     await this.acquireLock();
     try {
       this.server = http.createServer((request, response) => {
@@ -157,9 +167,12 @@ export class HarnessServer {
         void this.handle(request, response)
           .catch((error) => {
             const failure = httpFailure(error);
+            if (failure.details?.retryAfterMs !== undefined) {
+              response.setHeader('Retry-After', String(Math.ceil(Number(failure.details.retryAfterMs) / 1000)));
+            }
             this.respond(response, failure.status, {
               ok: false,
-              error: { code: failure.code, message: failure.message, retriable: failure.retriable }
+              error: { code: failure.code, message: failure.message, retriable: failure.retriable, ...(failure.details ? { details: failure.details } : {}) }
             });
           })
           .finally(() => {
@@ -195,7 +208,10 @@ export class HarnessServer {
       };
       await this.atomicJson(this.endpointPath, endpoint);
       await this.persistLeases();
-      this.leaseTimer = setInterval(() => void this.auditLeaseTransitions(), this.leaseSweepMs);
+      this.leaseTimer = setInterval(() => {
+        void this.auditLeaseTransitions();
+        void this.maintenanceTick();
+      }, this.leaseSweepMs);
       this.leaseTimer.unref();
       await this.audit({ event: 'server_started', instanceId: this.instanceId, port: address.port }).catch(() => undefined);
       return { host: endpoint.host, port: endpoint.port, tokenPath: this.tokenPath, seatTokenPaths: Object.fromEntries(this.seatTokenPaths) };
@@ -375,9 +391,13 @@ export class HarnessServer {
     const paths = { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 256 };
     const rounds = { type: 'array', items: { type: 'integer', minimum: 1 }, maxItems: 256 };
     return [
-      { name: 'mailbox_status', description: 'Read rounds, registered agents, unread counts, claims, and workspace commit.', inputSchema: object({}) },
+      // Seats always receive the bounded brief. `full` stays in the schema (additionalProperties
+      // is false and the list is shared) so an existing caller that passes it is not rejected,
+      // but it is honored for the operator only.
+      { name: 'mailbox_status', description: 'Read halt state, queue depth (hot, unread per seat vs cap), agents, baton, your claims, and claim counts (bounded brief status).', inputSchema: object({ full: { type: 'boolean', description: 'Operator only. Ignored for seats, which always receive the brief status.' } }) },
       { name: 'mailbox_inbox', description: 'Peek at a bounded page of unread messages without acknowledging them; use afterSeq to advance.', inputSchema: object({ agent, all: { type: 'boolean' }, afterSeq: { type: 'integer', minimum: 0 } }, ['agent']) },
-      { name: 'mailbox_read', description: 'Read and acknowledge one or all unread messages.', inputSchema: object({ agent, all: { type: 'boolean' } }, ['agent']) },
+      { name: 'mailbox_read', description: 'Read FIFO mail, or acknowledge exactly the supplied unread sequences.', inputSchema: object({ agent, all: { type: 'boolean' }, seqs: { type: 'array', items: { type: 'integer', minimum: 1 }, minItems: 1, maxItems: MAX_TOOL_MESSAGES } }, ['agent']) },
+      { name: 'mailbox_supersede', description: 'Replace one message you sent with a newer message you also sent.', inputSchema: object({ agent, seq: { type: 'integer', minimum: 1 }, by: { type: 'integer', minimum: 1 }, reason: { type: 'string' } }, ['agent', 'seq', 'by', 'reason']) },
       {
         name: 'mailbox_send',
         description: 'Send one durable coordination message.',
@@ -392,13 +412,25 @@ export class HarnessServer {
             // and everything else passes it. This was missing from the schema AND from the
             // handler below, so --keep-baton worked on the direct CLI and was silently
             // dropped on the HTTP path - which is the only path agents actually use.
-            keepBaton: { type: 'boolean' }
+            keepBaton: { type: 'boolean' },
+            // Item 18, audit finding - and it is the SAME defect the keepBaton note above
+            // records, made twice. `supersedes` reached only MailboxStore.send, so the
+            // atomic superseding send was unreachable from the HTTP path, which is the only
+            // path agents actually use. When a store gains a capability, every surface that
+            // fronts it is part of the change.
+            supersedes: { type: 'integer', minimum: 1 },
+            supersedeReason: { type: 'string' }
           },
           ['from', 'to', 'subject', 'body']
         )
       },
-      { name: 'mailbox_claim', description: 'Accumulate workspace path claims after conflict checks.', inputSchema: object({ agent, paths, why: { type: 'string' } }, ['agent', 'paths']) },
+      // Item 7: `why` is REQUIRED. A claim that cannot say what it is for is refused by the
+      // store, so the schema must say so rather than let the call fail deeper in.
+      { name: 'mailbox_claim', description: 'Hold existing workspace paths now after conflict checks; success is final and requires no acceptance step.', inputSchema: object({ agent, paths, why: { type: 'string' } }, ['agent', 'paths', 'why']) },
       { name: 'mailbox_release', description: 'Release exact paths, or all claims when paths is omitted.', inputSchema: object({ agent, paths }, ['agent']) },
+      { name: 'mailbox_record_evidence', description: 'Record an UNTRUSTED evidence claim keyed to mailbox work. This is not verification.', inputSchema: object({ agent, subject: { type: 'string' }, statement: { type: 'string' }, workId: { type: 'integer', minimum: 1 } }, ['agent', 'subject', 'statement']) },
+      { name: 'mailbox_promote_evidence', description: 'Observe the world and promote an evidence claim. The caller names a verifier kind; it cannot supply the observation.', inputSchema: object({ agent, id: { type: 'string' }, kind: { type: 'string', enum: ['commit-diff', 'runner-result', 'lifecycle-transition'] }, invocation: { type: 'string' }, transition: { type: 'string' } }, ['agent', 'id', 'kind']) },
+      { name: 'mailbox_list_evidence', description: 'List evidence records, optionally filtered to one mailbox work sequence.', inputSchema: object({ workId: { type: 'integer', minimum: 1 } }) },
       { name: 'mailbox_complete_step', description: 'Record structured step completion and apply the configured step halt policy.', inputSchema: object({ agent, summary: { type: 'string' }, evidence: paths }, ['agent', 'summary']) },
       { name: 'mailbox_complete_goal', description: 'Operator-only: record structured goal completion and apply the configured goal halt policy.', inputSchema: object({ agent, summary: { type: 'string' }, evidence: paths }, ['agent', 'summary']) },
       { name: 'mailbox_configure_halting', description: 'Operator-only: configure max/designated-round, step-completion, and goal-completion halting.', inputSchema: object({ onStepCompletion: { type: 'boolean' }, onGoalCompletion: { type: 'boolean' }, atRounds: rounds, everyRounds: { type: ['integer', 'null'], minimum: 0 } }) },
@@ -418,7 +450,13 @@ export class HarnessServer {
     if (this.stopping) throw new HarnessHttpError(503, 'server_stopping', 'Harness server is stopping.', true);
     const url = new URL(request.url ?? '/', 'http://127.0.0.1');
     if (request.method === 'GET' && url.pathname === '/v1/status') {
-      const [mailbox, allCapabilities] = await Promise.all([this.mailbox.status(), this.capabilities.list()]);
+      // Seats always get the bounded brief status (no full-state dump into a model context;
+      // ?full=1 is ignored for them). The operator gets the full status unless it asks for ?brief=1.
+      const wantBrief = principal.kind === 'seat' || url.searchParams.get('brief') === '1';
+      const [mailbox, allCapabilities] = await Promise.all([
+        wantBrief ? this.mailbox.statusBrief(principal.kind === 'seat' ? principal.id : undefined) : this.mailbox.status(),
+        this.capabilities.list()
+      ]);
       const capabilities = principal.kind === 'operator'
         ? allCapabilities
         : allCapabilities.filter((item) => (item.allowedSeats ?? []).some((seat) => seat === '*' || seat === principal.id));
@@ -561,6 +599,12 @@ export class HarnessServer {
         await this.audit({ event: 'tool_complete', principal: principalKey, requestId: request.requestId, tool: request.name, result: summarize(result) }).catch(() => undefined);
         return result;
       } catch (error) {
+        if (error instanceof QueueFullError) {
+          // Not a recorded failure: the same requestId must be retriable after the backoff.
+          await fs.rm(this.storedRequestPath(request.requestId, principalKey), { force: true }).catch(() => undefined);
+          await this.audit({ event: 'tool_refused', principal: principalKey, requestId: request.requestId, tool: request.name, code: 'queue_full', seat: error.seat, unread: error.unread, cap: error.cap, retryAfterMs: error.retryAfterMs }).catch(() => undefined);
+          throw error;
+        }
         await this.storeRequest({
           schemaVersion: 1,
           requestId: request.requestId,
@@ -648,23 +692,55 @@ export class HarnessServer {
 
   private async executeTool(principal: Principal, request: ToolRequest) {
     const input = request.input ?? {};
-    if (['mailbox_read', 'mailbox_send', 'mailbox_claim', 'mailbox_release', 'capability_run'].includes(request.name)) {
-      const status = await this.mailbox.status();
-      if (status.halted || status.round >= status.maxRounds) {
-        throw new BusHaltedError(status.stopReason ?? `round guard reached (${status.round}/${status.maxRounds}); mutating tools fail closed.`);
+    if (['mailbox_read', 'mailbox_send', 'mailbox_supersede', 'mailbox_claim', 'mailbox_release', 'mailbox_record_evidence', 'mailbox_promote_evidence', 'capability_run'].includes(request.name)) {
+      // Guard: one state.json read. No inbox scan, no git. Rounds are not a limit; only a halt
+      // refuses here. Queue depth is enforced inside send under the lock.
+      const state = await this.mailbox.snapshot();
+      await this.auditQueuePressure(state, principal.kind === 'seat' ? principal.id : 'operator', request.name);
+      if (state.halted) {
+        throw new BusHaltedError(state.stopReason ?? 'bus halted');
       }
     }
     switch (request.name) {
       case 'mailbox_status':
-        return this.mailbox.status();
+        // `full` is operator-only; a seat always gets the bounded brief.
+        return input.full === true && principal.kind !== 'seat'
+          ? this.mailbox.status()
+          : this.mailbox.statusBrief(principal.kind === 'seat' ? principal.id : undefined);
       case 'mailbox_inbox': {
         const afterSeq = input.afterSeq === undefined ? 0 : requireInteger(input.afterSeq, 'afterSeq');
         if (afterSeq < 0) throw new InputValidationError('afterSeq must be non-negative.');
-        const messages = (await this.mailbox.inbox(this.authorizedAgent(principal, input.agent))).filter((message) => message.seq > afterSeq);
-        return input.all === true ? this.pageWakeMessages(messages.slice(0, MAX_TOOL_MESSAGES)) : messages.slice(0, 1);
+        const pending = (await this.mailbox.inbox(this.authorizedAgent(principal, input.agent))).filter((message) => message.seq > afterSeq);
+        const limit = input.all === true ? MAX_TOOL_MESSAGES : 1;
+        const messages = this.pageWakeMessages(pending.slice(0, limit));
+        return { messages, hasMore: pending.length > messages.length };
       }
-      case 'mailbox_read':
-        return this.mailbox.read(this.authorizedAgent(principal, input.agent), input.all === true, MAX_TOOL_MESSAGES);
+      case 'mailbox_read': {
+        const agent = this.authorizedAgent(principal, input.agent);
+        if (input.seqs === undefined) {
+          // One scan: the store reports whether unread mail remains.
+          const { messages, hasMore } = await this.mailbox.readWithMore(agent, input.all === true, MAX_TOOL_MESSAGES);
+          return { messages, hasMore };
+        }
+        const messages = await this.mailbox.acknowledge(agent, input.seqs as number[]);
+        return { messages, hasMore: (await this.mailbox.inbox(agent)).length > 0 };
+      }
+      case 'mailbox_supersede': {
+        const agent = this.authorizedAgent(principal, input.agent);
+        try {
+          return await this.mailbox.supersedeMessage(
+            requireInteger(input.seq, 'seq'),
+            requireInteger(input.by, 'by'),
+            requireString(input.reason, 'reason', 1_000),
+            agent
+          );
+        } catch (error) {
+          if (error instanceof Error && /may supersede only messages it sent itself/.test(error.message)) {
+            throw new HarnessHttpError(403, 'forbidden', error.message);
+          }
+          throw error;
+        }
+      }
       case 'mailbox_send':
         const from = this.authorizedAgent(principal, input.from);
         const to = requireAgent(input.to);
@@ -680,18 +756,60 @@ export class HarnessServer {
           // silently undo that.
           ...(input.keepBaton === undefined
             ? {}
-            : { keepBaton: optionalBoolean(input.keepBaton, 'keepBaton') })
+            : { keepBaton: optionalBoolean(input.keepBaton, 'keepBaton') }),
+          // Item 18: same forwarding discipline. The store owns every rule about what a
+          // supersession means, including refusing to supersede a message this seat did not
+          // send; passing `undefined` through keeps that the single definition.
+          ...(input.supersedes === undefined
+            ? {}
+            : { supersedes: requireInteger(input.supersedes, 'supersedes') }),
+          ...(input.supersedeReason === undefined
+            ? {}
+            : { supersedeReason: requireString(input.supersedeReason, 'supersedeReason', 1_000) })
         });
-      case 'mailbox_claim':
-        return this.mailbox.claim({
+      case 'mailbox_claim': {
+        const requested = requireStringArray(input.paths, 'paths');
+        const held = await this.mailbox.claim({
           agent: this.authorizedAgent(principal, input.agent),
-          paths: requireStringArray(input.paths, 'paths'),
-          why: optionalString(input.why, 1_000)
+          paths: requested,
+          why: optionalString(input.why, 1_000),
+          repoRoot: this.claimRepo
         });
+        return {
+          status: 'HELD NOW',
+          message: 'The requested paths are HELD NOW. No acceptance or further claim step is required.',
+          requested,
+          held
+        };
+      }
       case 'mailbox_release':
         return this.mailbox.release(
           this.authorizedAgent(principal, input.agent),
           input.paths === undefined ? undefined : requireStringArray(input.paths, 'paths')
+        );
+      case 'mailbox_record_evidence':
+        return this.mailbox.recordEvidence({
+          agent: this.authorizedAgent(principal, input.agent),
+          subject: requireString(input.subject, 'subject', 500),
+          statement: requireString(input.statement, 'statement', 4_096),
+          workId: input.workId === undefined ? undefined : requireInteger(input.workId, 'workId')
+        });
+      case 'mailbox_promote_evidence': {
+        const kind = requireString(input.kind, 'kind', 40);
+        if (kind !== 'commit-diff' && kind !== 'runner-result' && kind !== 'lifecycle-transition') {
+          throw new InputValidationError('kind must be commit-diff, runner-result, or lifecycle-transition.');
+        }
+        return this.mailbox.promoteEvidence({
+          agent: this.authorizedAgent(principal, input.agent),
+          id: requireString(input.id, 'id', 200),
+          kind,
+          invocation: optionalString(input.invocation, 1_000) || undefined,
+          transition: optionalString(input.transition, 200) || undefined
+        });
+      }
+      case 'mailbox_list_evidence':
+        return this.mailbox.listEvidence(
+          input.workId === undefined ? undefined : requireInteger(input.workId, 'workId')
         );
       case 'mailbox_complete_step':
         return this.mailbox.complete({
@@ -758,7 +876,7 @@ export class HarnessServer {
   }
 
   private async assertRegisteredAgent(agent: string) {
-    if (!(await this.mailbox.status()).agents.includes(agent)) {
+    if (!(await this.mailbox.snapshot()).agents.includes(agent)) {
       throw new HarnessHttpError(403, 'unknown_seat', `Recipient ${agent} is not a registered seat.`);
     }
   }
@@ -938,6 +1056,38 @@ export class HarnessServer {
     return this.leaseWrite;
   }
 
+  private maintenanceRunning = false;
+  private readonly queuePressureAuditedAt = new Map<string, number>();
+
+  /** Timer path: cheap due check every sweep; archive only when the interval elapsed. */
+  private async maintenanceTick() {
+    if (this.maintenanceRunning || this.stopping) return;
+    this.maintenanceRunning = true;
+    try {
+      const outcome = await this.mailbox.maintenanceTick();
+      if (outcome.ran && outcome.report && outcome.report.archived > 0) {
+        await this.audit({ event: 'prune', trigger: 'timer', mode: outcome.report.mode, archived: outcome.report.archived, hot: outcome.report.hotAfter }).catch(() => undefined);
+      }
+    } catch (error) {
+      await this.audit({ event: 'prune_failed', trigger: 'timer', error: asMessage(error) }).catch(() => undefined);
+    } finally {
+      this.maintenanceRunning = false;
+    }
+  }
+
+  /** At most one queue_pressure audit per seat per 10 minutes, from the state counter only. */
+  private async auditQueuePressure(state: Awaited<ReturnType<MailboxStore['snapshot']>>, principal: string, tool: string) {
+    const cap = this.mailbox.retentionOf(state).maxUnreadPerSeat;
+    const now = Date.now();
+    for (const [seat, unread] of Object.entries(state.queue?.unread ?? {})) {
+      if (unread < Math.ceil(cap * 0.8)) continue;
+      const last = this.queuePressureAuditedAt.get(seat) ?? 0;
+      if (now - last < 10 * 60_000) continue;
+      this.queuePressureAuditedAt.set(seat, now);
+      await this.audit({ event: 'queue_pressure', seat, unread, cap, principal, tool }).catch(() => undefined);
+    }
+  }
+
   private async auditLeaseTransitions() {
     const now = Date.now();
     for (const [key, lease] of this.leases) {
@@ -999,7 +1149,8 @@ class HarnessHttpError extends Error {
     readonly status: number,
     readonly code: string,
     message: string,
-    readonly retriable = false
+    readonly retriable = false,
+    readonly details?: Record<string, unknown>
   ) {
     super(message);
     this.name = 'HarnessHttpError';
@@ -1017,7 +1168,22 @@ function httpFailure(error: unknown) {
   if (error instanceof HarnessHttpError) return error;
   if (error instanceof InputValidationError) return new HarnessHttpError(400, 'invalid_request', error.message);
   if (error instanceof BusHaltedError) return new HarnessHttpError(423, 'bus_halted', error.message);
-  if (error instanceof ClaimConflictError) return new HarnessHttpError(409, 'claim_conflict', error.message);
+  if (error instanceof QueueFullError) {
+    return new HarnessHttpError(429, 'queue_full', error.message, true, {
+      seat: error.seat,
+      unread: error.unread,
+      cap: error.cap,
+      retryAfterMs: error.retryAfterMs,
+      scope: error.scope
+    });
+  }
+  if (error instanceof ClaimConflictError) return new HarnessHttpError(409, 'claim_conflict', error.message, true);
+  if (error instanceof ClaimPathMissingError) return new HarnessHttpError(400, 'claim_path_missing', error.message);
+  // Items 7 and 13. Both are bad requests the caller can fix, not server faults — a 500 would
+  // tell a seat "the bus is broken" when the answer is "say why" or "claim fewer paths".
+  if (error instanceof ClaimReasonRequiredError) return new HarnessHttpError(400, 'claim_reason_required', error.message);
+  if (error instanceof WholeRepositoryClaimError) return new HarnessHttpError(400, 'claim_too_broad', error.message);
+  if (error instanceof EvidencePromotionError) return new HarnessHttpError(409, 'evidence_not_promoted', error.message);
   if (error instanceof SyntaxError) return new HarnessHttpError(400, 'invalid_json', error.message);
   return new HarnessHttpError(500, 'internal_error', asMessage(error), true);
 }
@@ -1194,15 +1360,20 @@ function mintToken(principal: string) {
 async function runCli(argv = process.argv.slice(2)) {
   const command = argv[0];
   if (command !== 'serve') {
-    throw new Error('Usage: harness.js serve [--root PATH] [--workdir REPO] [--port N]');
+    throw new Error('Usage: harness.js serve [--root PATH] [--workdir REPO] [--claim-repo PATH] [--port N]');
   }
   const root = option(argv, '--root') ?? path.resolve(__dirname, '..', '..');
   const workdir = option(argv, '--workdir') ?? root;
+  const claimRepo = path.resolve(uniqueOption(argv, '--claim-repo') ?? root);
   const port = Number(option(argv, '--port') ?? DEFAULT_PORT);
   if (!Number.isInteger(port) || port < 0 || port > 65_535) {
     throw new Error('port must be an integer from 0 through 65535.');
   }
-  const server = new HarnessServer(root, { workdir });
+  const claimRepoStat = await fs.stat(claimRepo).catch(() => undefined);
+  if (!claimRepoStat?.isDirectory()) {
+    throw new Error(`--claim-repo is not a directory: ${claimRepo}`);
+  }
+  const server = new HarnessServer(root, { workdir, claimRepo });
   const endpoint = await server.start(port);
   process.stdout.write(`Portable AI Bus harness listening at http://${endpoint.host}:${endpoint.port}\n`);
   process.stdout.write(`Bearer token: ${endpoint.tokenPath}\n`);
@@ -1217,6 +1388,15 @@ async function runCli(argv = process.argv.slice(2)) {
 function option(argv: string[], name: string) {
   const index = argv.indexOf(name);
   return index >= 0 ? argv[index + 1] : undefined;
+}
+
+function uniqueOption(argv: string[], name: string) {
+  const indexes = argv.flatMap((value, index) => value === name ? [index] : []);
+  if (indexes.length > 1) throw new Error(`Duplicate option: ${name}`);
+  if (indexes.length === 0) return undefined;
+  const value = argv[indexes[0] + 1];
+  if (value === undefined || value.startsWith('--')) throw new Error(`Missing value for ${name}.`);
+  return value;
 }
 
 if (require.main === module) {

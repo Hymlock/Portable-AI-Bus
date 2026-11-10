@@ -7,6 +7,17 @@ const path = require('node:path');
 const vscode = require('vscode');
 const net = require('node:net');
 const { promisify } = require('node:util');
+/**
+ * Item 26, the edge grok recorded in r37 without reopening the item: this file loads `dist/`
+ * but is not a `.test.js`, so `node --test tests/*.test.js` never sees it and the item-26
+ * sweep does not cover it. Grok called it outside the MEASURED footgun, which is fair - it is
+ * launched by the vscode driver, not by hand.
+ *
+ * Added anyway. "Outside the measured case" is how the next measured case gets made, and this
+ * loads dist exactly like the files that misled me. One line, and it cannot make a green
+ * weaker - it only speaks when dist is older than src.
+ */
+require('./helpers/require-fresh-dist')();
 const { credentialWorkspaceKey } = require('../dist/workspace-key.js');
 const { WorkspaceBus } = require('../dist/bus.js');
 
@@ -38,6 +49,7 @@ async function run() {
   await vscode.commands.executeCommand('portableAiBus.initializeWorkspace');
   for (const relative of [
     '.ai-bus/bin/mailbox.js', '.ai-bus/bin/harness.js', '.ai-bus/bin/worker-client.js',
+    '.ai-bus/bin/evidence.js', '.ai-bus/bin/claim-walk.js',
     '.ai-bus/bin/workspace-key.js', '.ai-bus/bin/brain/cli.js',
     '.ai-bus/bin/brain/process-host.js', '.ai-bus/brains/agent-seat.js',
     '.ai-bus/scripts/bus-up.js', '.ai-bus/scripts/bus-restart.js', '.ai-bus/scripts/bus-processes.js',
@@ -214,6 +226,7 @@ async function assertInstalledExtension() {
   assert.notEqual(normalizePath(extension.extensionPath), normalizePath(sourceRoot), 'installed smoke must not load the source checkout');
   for (const relative of [
     'dist/extension.js', 'dist/harness.js', 'dist/mailbox.js', 'dist/worker-client.js',
+    'dist/evidence.js', 'dist/claim-walk.js',
     'dist/workspace-key.js', 'dist/brain/cli.js', 'dist/brain/process-host.js',
     'brains/agent-seat.js', 'scripts/bus-up.js', 'scripts/bus-restart.js', 'scripts/bus-processes.js',
     'scripts/bus-console.js', 'scripts/bus-tick.js',

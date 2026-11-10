@@ -1,6 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { chainProviders, classifyFailure } = require('../dist/brain/chain.js');
+require('./helpers/require-fresh-dist')();
+const { chainProviders, classifyFailure, classifyGiveUp } = require('../dist/brain/chain.js');
 
 const ok = (kind, text) => ({
   kind,
@@ -115,11 +116,65 @@ test('failure classification covers the shapes providers actually emit', () => {
   assert.equal(classifyFailure("You've hit your session limit · resets 2:50pm"), 'rate-limit');
   assert.equal(classifyFailure('too many concurrent sessions'), 'rate-limit');
   assert.equal(classifyFailure('You have run out of credits'), 'quota');
+  assert.equal(classifyFailure('402 Payment Required'), 'quota',
+    'bare HTTP 402 must stay SPENT, not collapse into BROKEN or mixed');
   assert.equal(classifyFailure('429 Too Many Requests'), 'rate-limit');
   assert.equal(classifyFailure('401 Unauthorized'), 'auth');
   assert.equal(classifyFailure('ENOENT'), 'unavailable');
+  assert.equal(classifyFailure("ConPTY unavailable: Cannot find module 'node-pty'"), 'unavailable',
+    'the measured 2026-08-15 outage string must not collapse to generic error');
+  assert.equal(classifyFailure("Cannot find module 'node-pty'"), 'unavailable');
   assert.equal(classifyFailure('something nobody predicted'), 'error',
     'an unknown failure must still classify, and still fall through');
+});
+
+test('ITEM 11 RED-then-green: a missing node-pty reports BROKEN, not SPENT', async () => {
+  const measured = "ConPTY unavailable: Cannot find module 'node-pty'";
+  const events = [];
+  const reply = await chainProviders([
+    fails('grok', measured)
+  ], { log: (event, data) => events.push({ event, data }) }).ask('ping');
+
+  assert.equal(classifyGiveUp(reply.attempts), 'broken');
+  assert.equal(reply.giveUp, 'broken');
+  assert.equal(reply.broken, true);
+  assert.equal(reply.exhausted, true, 'nobody served; exhausted still means the chain gave up');
+  const broken = events.find((entry) => entry.event === 'chain-broken');
+  assert.ok(broken, 'operator-visible event must be chain-broken');
+  assert.match(broken.data.error, /Cannot find module 'node-pty'/);
+  assert.equal(events.some((entry) => entry.event === 'chain-exhausted'), false,
+    'must not announce SPENT / out of providers for a transport failure');
+});
+
+test('ITEM 11 regression: a genuine 402 still reports SPENT', async () => {
+  for (const detail of [
+    '402 insufficient_quota - you have run out of credits',
+    '402 Payment Required'
+  ]) {
+    const events = [];
+    const reply = await chainProviders([
+      fails('cli', detail)
+    ], { log: (event, data) => events.push({ event, data }) }).ask('ping');
+
+    assert.equal(reply.giveUp, 'spent', detail);
+    assert.equal(reply.broken, false, detail);
+    assert.equal(reply.exhausted, true, detail);
+    assert.equal(events.some((entry) => entry.event === 'chain-exhausted'), true, detail);
+    assert.equal(events.some((entry) => entry.event === 'chain-broken'), false, detail);
+  }
+});
+
+test('ITEM 11 mixed reasons do not collapse to out of providers', async () => {
+  const events = [];
+  const reply = await chainProviders([
+    fails('cli', 'insufficient_quota'),
+    fails('grok', "ConPTY unavailable: Cannot find module 'node-pty'")
+  ], { log: (event, data) => events.push({ event, data }) }).ask('ping');
+
+  assert.equal(reply.giveUp, 'mixed');
+  assert.equal(reply.broken, false);
+  assert.equal(events.some((entry) => entry.event === 'chain-mixed'), true);
+  assert.equal(events.some((entry) => entry.event === 'chain-exhausted'), false);
 });
 
 test('an empty chain is refused at construction', () => {
@@ -181,4 +236,50 @@ test('a quota failure does NOT retry - the wallet will not refill in 15 seconds'
   const reply = await chain.ask('hello');
   assert.equal(calls, 1, 'quota is not retryable; retrying wastes time on a certainty');
   assert.equal(reply.servedBy, 'api');
+});
+
+test('a single-link chain retries one generic throw and can recover', async () => {
+  let calls = 0;
+  const flaky = {
+    kind: 'cli',
+    async ask() {
+      calls += 1;
+      if (calls === 1) throw new Error('ECONNRESET transient socket blip');
+      return { text: 'answered on the bounded retry', isError: false };
+    },
+    async probe() { return { ok: true, detail: '' }; }
+  };
+  const reply = await chainProviders([flaky]).ask('hello');
+
+  assert.equal(reply.text, 'answered on the bounded retry');
+  assert.equal(calls, 2);
+  assert.equal(reply.exhausted, false);
+});
+
+test('a single-link chain gives up after the bounded generic retry', async () => {
+  let calls = 0;
+  const broken = {
+    kind: 'cli',
+    async ask() { calls += 1; throw new Error('socket stays broken'); },
+    async probe() { return { ok: false, detail: '' }; }
+  };
+  const reply = await chainProviders([broken]).ask('hello');
+
+  assert.equal(calls, 2, 'the default is one retry, not an infinite loop');
+  assert.equal(reply.exhausted, true);
+  assert.equal(reply.attempts[0].detail, 'socket stays broken');
+});
+
+test('single-link auth, quota, and unavailable failures are not retried', async () => {
+  for (const detail of ['401 unauthorized', 'insufficient_quota', 'ENOENT command not found']) {
+    let calls = 0;
+    const provider = {
+      kind: 'cli',
+      async ask() { calls += 1; return { text: detail, isError: true }; },
+      async probe() { return { ok: false, detail }; }
+    };
+    const reply = await chainProviders([provider]).ask('hello');
+    assert.equal(calls, 1, `${detail} is an answer, not a transient generic blip`);
+    assert.equal(reply.exhausted, true);
+  }
 });

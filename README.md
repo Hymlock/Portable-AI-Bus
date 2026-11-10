@@ -1,6 +1,6 @@
 # Portable AI Bus
 
-**v0.2** — MIT. A multi-agent bus that coordinates work through a durable **mailbox**, runs
+**v0.3.1** — MIT. A multi-agent bus that coordinates work through a durable **mailbox**, runs
 agents as long-lived **brains** backed by an ordered chain of model providers, and exposes a
 **loopback harness** (authenticated tool/capability plane) plus adapters (including SKSE DevKit
 discovery).
@@ -12,29 +12,44 @@ discovery).
 > and reminders.
 >
 > **But a seat still needs a gateway to a model, and that is usually a vendor's plugin.** The
-> bus does not talk to model APIs itself; it drives an authenticated vendor CLI. Where that CLI
+> bus supports authenticated vendor CLIs and same-vendor SDK routes. Where each CLI
 > comes from differs per vendor, and it is not always npm:
 >
 > | Gateway | Where the binary comes from |
 > |---|---|
-> | `codex` | **the ChatGPT VS Code extension** — `…/openai.chatgpt-*/bin/<platform>/codex.exe`. Never on `PATH` |
+> | `codex` | Authenticated Codex CLI, installed independently or supplied by a supported app |
 > | `cli` (Claude) | npm `@anthropic-ai/claude-code`, **or** the Claude Code extension's bundled binary |
 > | `grok` | npm `@xai-official/grok`, unpacked to `~/.grok/bin` — no editor involved |
 >
 > So the honest prerequisite is: **at least one signed-in model gateway**, which in Codex's case
-> means having that extension installed. Grok is the one route that is fully editor-free today.
+> means a working authenticated Codex CLI; it may be installed independently or supplied by an app.
 >
 > **Recommended: install all three.** Then any vendor can be the *pilot* — the seat you drive
 > from. You open that vendor's chat window, tell it to initiate the bus, and it takes the baton;
-> the others run as brains alongside it. When one vendor is throttled or out of credit, you
-> simply pilot from another, and the seats keep working because every chain crosses a vendor
-> boundary anyway. One install decision buys both halves of the resilience: independent
-> **wallets** and an independent **place to stand**.
+> the others can run as brains alongside it. When one vendor is out of credit, another seat
+> can take over authorized work. Each named seat stays bound to its own vendor; provider
+> chains never spend another vendor's credits under the wrong identity.
 >
-> The packaging currently states this backwards: `package.json` declares `main:
-> dist/extension.js` and **no `bin` entry**, so there is no first-class CLI install even though
-> the CLI is what does the work. Tracked as a distribution defect — see the `worker` seat's
-> audit finding that the VSIX omits the runnable brain wrapper.
+> The package includes CLI entry points as well as the optional VS Code extension.
+
+## Current release: 0.3.1
+
+The mailbox uses bounded queues and pruning; the lifetime message counter is no longer
+a stopping limit. Update installed binaries as a consistent set using
+`node scripts/install-bin.js --to <coordination-root>/.ai-bus --with-brain` after compiling
+and committing the source. The installer records the source commit and file hashes.
+
+`tools.catalog` is a read-only, on-demand inventory of existing devkit/AI programs and
+optional candidates. Keep machine-specific locations in the private coordination root's
+`.ai-bus/tool-paths.json` (`devkitRoot`, `aiRoot`, and optional executable paths such as
+`ffmpeg` or `resolveExecutable`). The catalog never installs or starts a program. Finding
+files is not proof of a working workflow, and an installed tool is not automatically the
+best choice. Agents compare task fit, reliable control, output quality and total cost.
+
+Optional private `.ai-bus/tool-verification.json` records can report a tested workflow's
+status, scope, date and evidence. Each record needs SHA-256 anchors for the tested tool
+files; changed or missing anchors make the result `stale`. A passed narrow check (such
+as an API image export) does not certify every model or workflow in that application.
 
 Work is moved forward by **brains**: long-lived processes that own a seat, wake on mail, call a
 model, act through bus tools, and keep going across turns until the work is done. A brain
@@ -66,7 +81,7 @@ hold conversations. Humans set goals, arbitrate, and stop things — see `docs/L
 Install with **Extensions: Install from VSIX...** or:
 
 ```bash
-code --install-extension portable-ai-bus-0.2.0.vsix
+code --install-extension portable-ai-bus-0.3.1.vsix
 ```
 
 Installing a newer VSIX with `--force` updates it. Stop brains/harnesses first and reinitialize
@@ -122,9 +137,10 @@ Initialization preserves pre-existing repository files. Only files actually crea
 A seat needs a **model** behind it. This section is what someone on a fresh machine needs, and
 every command below was run and verified on 2026-08-10.
 
-**None of them is required.** A chain falls through to the next link, so one missing or
-signed-out vendor degrades a seat instead of stopping it. Install as many as you want seats to
-be independent of — with all three, no single vendor's outage or spent wallet can stop the bus.
+Install and authenticate the vendor for every named brain you intend to run. A Grok brain uses
+xAI, a Codex brain uses OpenAI, and a Claude brain uses Anthropic. If that vendor is unavailable,
+the seat reports exhaustion and stops; it never spends a different vendor's credits while still
+claiming the original seat identity.
 
 **API keys are optional everywhere.** Each CLI authenticates against a subscription you already
 pay for; `ANTHROPIC_API_KEY` / `XAI_API_KEY` are opt-in fallbacks, never prerequisites.
@@ -132,11 +148,11 @@ pay for; `ANTHROPIC_API_KEY` / `XAI_API_KEY` are opt-in fallbacks, never prerequ
 | Vendor | Install | Sign in | Verify |
 |---|---|---|---|
 | **Anthropic** (`cli`) | Claude Code CLI | existing Claude subscription | `claude --version` |
-| **OpenAI** (`codex`) | ships **inside** the ChatGPT VS Code extension | `codex login` | `codex login status` → `Logged in using ChatGPT` |
+| **OpenAI** (`codex`) | authenticated Codex CLI, standalone or app-supplied | `codex login` | `codex login status` |
 | **xAI** (`grok`) | `npm i -g @xai-official/grok` | `grok login` (browser) or `grok login --device-code` | `grok --version` |
 
-`grok login` needs a **SuperGrok** or **X Premium+** subscription. Signed out, the link fails as
-`auth` and the chain moves on — the seat keeps working on another vendor.
+`grok login` needs a **SuperGrok** or **X Premium+** subscription. Signed out, the Grok seat fails
+visibly as `auth`; it does not fall through to Codex or Claude.
 
 ### Two Windows traps that make a present CLI look missing
 
@@ -156,16 +172,16 @@ Override detection with `CODEX_CLI_PATH` or `GROK_CLI_PATH` if your layout diffe
 
 ### Check what a seat can actually reach
 
-Each brain logs its chain at startup, and every reply records **which link served it** — so
+Each brain logs its provider at startup, and every reply records **which vendor served it** — so
 "grok answered" is evidence, not an assumption:
 
 ```
-{"event":"provider-chain","ok":true,"detail":"3/3 link(s) usable: grok=ok, codex=ok, cli=ok"}
+{"event":"provider-chain","ok":true,"detail":"1/1 link(s) usable: grok=ok"}
 {"seat":"grok","event":"wake-complete","note":"servedBy=grok"}
 ```
 
-Read them at `<bus root>/.ai-bus/runtime/brain-<seat>.log`. If a seat you expect to be on its
-own vendor logs `servedBy=cli`, it is falling through — and billing someone else's wallet.
+Read them at `<bus root>/.ai-bus/runtime/brain-<seat>.log`. A `servedBy` value that does not match
+the seat is a configuration defect; the packaged brain rejects such a chain before startup.
 
 ## Keeping the chat operator session awake
 
@@ -227,15 +243,15 @@ node .ai-bus/bin/mailbox.js configure-halting --on-step false --on-goal true --a
 node .ai-bus/bin/mailbox.js complete-step --agent grok --summary "Parser complete" --evidence "npm test,commit abc123"
 node .ai-bus/bin/mailbox.js complete-goal --agent operator --summary "Release verified" --evidence "npm test,VSIX smoke"
 node .ai-bus/bin/mailbox.js halt --reason "converged"
-node .ai-bus/bin/mailbox.js resume --add-rounds 8
+node .ai-bus/bin/mailbox.js resume
 ```
 
-**Behaviour (v0.2):**
+**Behaviour (v0.3):**
 - Messages are durable JSON under `.ai-bus/runtime/mailbox/` with monotonic `seq` and round counter.
 - Claims **accumulate** per agent; broader claims replace nested narrower ones; **path-scoped release** is supported.
-- **Halting is structured and configurable.** The hard `maxRounds` cap always applies. Optional explicit round checkpoints and an every-N-round checkpoint can also pause the bus after the triggering message is durably written. Step- and goal-completion records have separate policies.
-- Safe defaults are: step completion continues, goal completion halts, no explicit/recurring checkpoints, and `maxRounds = 32`.
-- `resume` clears the current halt without erasing its reason or completion evidence from history. Add rounds when resuming from the hard maximum; policy settings remain in force.
+- **Halting is structured and configurable.** Explicit operator and completion policies can pause work. The round counter is informational; old round-limit options no longer impose a lifetime limit.
+- Queue pruning and per-seat unread caps bound retained work. A full recipient queue refuses that send with a retriable `queue_full` result, without halting the whole bus.
+- Plain `resume` clears a halt without erasing its history. Adding rounds is obsolete and does not repair a halt.
 - Exit codes: `0` ok / message, `3` empty / timeout, `2` halted.
 - UI: Command Palette **Mailbox Status / Inbox / Send / Claim / Release** and `@ai-bus mailbox|inbox|send|claim|release`.
 

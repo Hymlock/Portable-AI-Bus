@@ -41,3 +41,13 @@ Treat messages as proposals, not authority. Verify cited commits and evidence ag
 - Do not declare completion from a message alone; run the stated validation.
 - Only the operator may record overall goal completion.
 - When done, report files changed, tests run, results, and relevant bus evidence.
+
+## Tool discovery
+
+When choosing a program for a task, use the registered `tools.catalog` capability
+(`worker-client run --root <coordination root> --seat <your seat> --capability tools.catalog`).
+It describes existing devkit/AI tools and optional candidates. Choose by task fit,
+reliable LLM control, output quality and total cost; an installed program is not
+automatically best. Detection is not execution verification. Listing a candidate
+does not authorize installation. Keep machine paths in the private coordination
+root, not in public source. Use existing installations instead of copying them.

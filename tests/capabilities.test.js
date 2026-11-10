@@ -1,9 +1,30 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
+const fsSync = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
+require('./helpers/require-fresh-dist')();
 const { CapabilityRunner } = require('../dist/capabilities.js');
+
+// Two paths can name one directory and still differ as strings. On Windows a
+// path may carry 8.3 short components - the GitHub runner's temp directory is
+// C:\Users\RUNNER~1\... - and a child process reports its cwd expanded.
+// fs.realpath alone is NOT enough here: it resolves links but leaves 8.3 names
+// untouched. Only the native variant expands them, so that is what makes
+// 'is this the same directory' a question about directories and not spelling.
+function sameDirectory(a, b) {
+  return canonicalDirectory(a) === canonicalDirectory(b);
+}
+
+function canonicalDirectory(value) {
+  const resolved = path.resolve(value);
+  try {
+    return fsSync.realpathSync.native(resolved).toLowerCase();
+  } catch {
+    return resolved.toLowerCase();
+  }
+}
 
 async function workspace(capabilities) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'portable-ai-bus-cap-'));
@@ -57,7 +78,17 @@ test('central config and receipts can be separated from the capability worktree'
 
   const runner = new CapabilityRunner(workdir, { configRoot: coordinationRoot });
   const receipt = await runner.run('where');
-  assert.equal(path.resolve(receipt.stdout.tail), path.resolve(workdir));
+  assert.ok(
+    sameDirectory(receipt.stdout.tail, workdir),
+    `capability ran in ${receipt.stdout.tail}, which is not the workspace ${workdir}`
+  );
+  // The claim under test is SEPARATION, so relaxing the comparison above must not
+  // relax that. If cwd ever became the config root, the assertion above would still
+  // hold under a broken canonicaliser that collapsed everything; this one would not.
+  assert.ok(
+    !sameDirectory(receipt.stdout.tail, coordinationRoot),
+    'capability ran in the config root - the two roots are not separated'
+  );
   assert.equal(receipt.command.args[0], '${bus}/where.cjs');
   await fs.access(path.join(coordinationRoot, '.ai-bus', 'runtime', 'receipts', 'latest.json'));
   await assert.rejects(fs.access(path.join(workdir, '.ai-bus', 'runtime', 'receipts', 'latest.json')));
@@ -152,6 +183,24 @@ test('capability child receives an explicitly inherited dev-kit root without lea
   assert.deepEqual(JSON.parse(receipt.stdout.tail), { kit: process.env[kitName], secret: null });
 });
 
+test('Windows compiler discovery may explicitly inherit ProgramFiles(x86) without widening environment access', async (t) => {
+  const name = 'ProgramFiles(x86)';
+  const previous = process.env[name];
+  process.env[name] = path.join(os.tmpdir(), 'compiler-tools');
+  const root = await workspace([{
+    id: 'compiler-env', command: process.execPath,
+    args: ['-e', `process.stdout.write(process.env[${JSON.stringify(name)}] || 'missing')`],
+    inheritEnv: [name], timeoutMs: 5000
+  }]);
+  t.after(async () => {
+    if (previous === undefined) delete process.env[name]; else process.env[name] = previous;
+    await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  });
+  const receipt = await new CapabilityRunner(root).run('compiler-env');
+  assert.equal(receipt.status, 'passed');
+  assert.equal(receipt.stdout.tail, process.env[name]);
+});
+
 test('shipped capability template exposes a fixed safe Dev Kit workflow to every registered seat', async () => {
   const template = JSON.parse(await fs.readFile(path.resolve(__dirname, '..', 'templates', 'capabilities.json'), 'utf8'));
   const byId = new Map(template.capabilities.map((item) => [item.id, item]));
@@ -171,6 +220,7 @@ test('shipped capability template exposes a fixed safe Dev Kit workflow to every
     assert.ok(byId.get(id).inheritEnv.includes('VCPKG_ROOT'));
     assert.ok(byId.get(id).inheritEnv.includes('INCLUDE'));
     assert.ok(byId.get(id).inheritEnv.includes('LIB'));
+    assert.ok(byId.get(id).inheritEnv.includes('ProgramFiles(x86)'));
   }
 });
 

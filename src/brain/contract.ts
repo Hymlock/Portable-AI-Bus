@@ -27,12 +27,43 @@ export type BrainMessage = {
   body: string;
 };
 
+export type WakeEvidence = {
+  id: string;
+  workId: number;
+  subject: string;
+  statement: string;
+  trust: 'untrusted' | 'verified';
+  invalidateReason?: string;
+};
+
 /** Everything a brain is given for one wake. */
 export type WakeContext = {
   seat: string;
   reason: WakeReason;
   /** Mail drained for this wake. May be empty on a timeout wake. */
   messages: BrainMessage[];
+  /**
+   * Durable summary supplied by the previous unfinished wake.
+   *
+   * Model sessions do not survive runner iterations. This is the explicit bridge that lets a
+   * continuation wake know what it said it was continuing after the assigning mail was consumed.
+   * Absent when there is no unfinished work.
+   */
+  openWork?: string;
+  /**
+   * Item 10. The assignment `openWork` is FOR, recalled from the source message the checkpoint
+   * already points at. `openWork` says what the seat was DOING; this says what it was ASKED to
+   * do. Absent when there is no open work, when the source is gone, or when it was SUPERSEDED -
+   * a retracted brief must not come back through recovery.
+   */
+  assignmentRecall?: string;
+  /** The seat's standing responsibility, when a different brief is already in flight. */
+  standingAssignment?: string;
+  /**
+   * Current evidence for the work this wake is continuing. Injected as labelled,
+   * untrusted data. Absent when no evidence is keyed to the presented work.
+   */
+  evidence?: WakeEvidence[];
   /** Bus tools, already bound to this seat. Calling them is how a brain acts. */
   tools: BrainTools;
   /** How many tool calls remain before the runner caps this wake. */
@@ -45,7 +76,17 @@ export type WakeContext = {
  * brain nobody can reason about, and `mailbox_send` is how a seat reports without stopping.
  */
 export type BrainTools = {
-  send(input: { to: string; kind: string; subject: string; body: string; keepBaton?: boolean }): Promise<unknown>;
+  /**
+   * `supersedes` is item 18's atomic superseding send: retract an earlier message BY sending
+   * its replacement, so there is no window in which both are current. `supersede()` below is
+   * still the two-step form for retracting something already sent on its own.
+   */
+  send(input: {
+    to: string; kind: string; subject: string; body: string; keepBaton?: boolean;
+    supersedes?: number; supersedeReason?: string;
+  }): Promise<unknown>;
+  /** Replace an earlier message sent by this seat with a newer message from the same seat. */
+  supersede(input: { seq: number; by: number; reason: string }): Promise<unknown>;
   status(): Promise<Record<string, unknown>>;
   claim(paths: string[], why: string): Promise<unknown>;
   release(paths?: string[]): Promise<unknown>;
@@ -62,6 +103,21 @@ export type BrainTools = {
    * Same lesson as the seat roster: a model given no inventory invents a plausible one.
    */
   listCapabilities(): Promise<string[]>;
+  /**
+   * Persist an UNTRUSTED claim keyed to mailbox work. Promotion is a separate
+   * observed action; recording is not verification.
+   */
+  recordEvidence?(input: { subject: string; statement: string; workId?: number }): Promise<unknown>;
+  /**
+   * Ask the bus to observe the world and promote a claim. The seat names a
+   * verifier kind; it cannot supply the observation.
+   */
+  promoteEvidence?(input: {
+    id: string;
+    kind: string;
+    invocation?: string;
+    transition?: string;
+  }): Promise<unknown>;
 };
 
 export type WakeResult = {
@@ -75,7 +131,10 @@ export type WakeResult = {
   done: boolean;
   /** Set by the runner when the budget ran out before the brain said it was done. */
   capped?: boolean;
-  /** Optional one-line summary for the runner's log. */
+  /**
+   * Optional one-line summary for the runner's log. When `done` is false, this is also the
+   * durable description supplied to the next continuation wake.
+   */
   note?: string;
   /**
    * Every provider in the chain is spent. NOT the same as an error: an error is a bad wake,
@@ -83,6 +142,22 @@ export type WakeResult = {
    * into a baton hand-off rather than letting the seat go quietly silent.
    */
   exhausted?: boolean;
+  /**
+   * Transport or dependency failure, not an empty wallet. Distinct from `exhausted`:
+   * the remedy is fix-the-machine, not reassign-because-spent.
+   */
+  broken?: boolean;
+  /**
+   * The wake did not produce a usable plan, so mail presented to it must remain unread.
+   * The runner normally commits a transactional inbox read after the turn succeeds.
+   */
+  retainMessages?: boolean;
+  /**
+   * Work is valid but cannot proceed until an external condition changes (for example, a
+   * path claim is held by another seat). Blocked mail remains unread without consuming the
+   * poison-message retry budget.
+   */
+  blocked?: boolean;
 };
 
 export type Brain = {
@@ -92,6 +167,8 @@ export type Brain = {
   start?(): Promise<void>;
   /** Optional: called on shutdown, best-effort. */
   stop?(): Promise<void>;
+  /** Forget per-message execution state after the runner commits or parks that mail. */
+  settleMessages?(seqs: number[], outcome: 'committed' | 'parked'): Promise<void> | void;
 };
 
 export type BrainFactory = (options: {

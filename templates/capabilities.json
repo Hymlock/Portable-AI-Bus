@@ -2,6 +2,16 @@
   "version": 1,
   "capabilities": [
     {
+      "id": "tools.catalog",
+      "description": "Discover existing devkit/AI tools and optional candidates without installing or starting them; detection is not execution verification.",
+      "category": "discovery",
+      "command": "node",
+      "args": ["${bus}/.ai-bus/bin/tool-catalog.js", "--root", "${bus}"],
+      "cwd": "${workspace}",
+      "timeoutMs": 30000,
+      "allowedSeats": ["*"]
+    },
+    {
       "id": "bus.doctor",
       "description": "Validate mailbox state, schemas, sequencing, claims, and transactional artifacts.",
       "category": "coordination",
@@ -29,7 +39,7 @@
       "args": ["${bus}/.ai-bus/bin/skse-devkit.js", "doctor", "--workspace", "${workspace}"],
       "cwd": "${workspace}",
       "timeoutMs": 60000,
-      "inheritEnv": ["SKSE_DEVKIT_ROOT", "VCPKG_ROOT", "VCPKG_DEFAULT_TRIPLET", "VSINSTALLDIR", "VCINSTALLDIR", "VCToolsInstallDir", "VCToolsVersion", "VisualStudioVersion", "WindowsSdkDir", "WindowsSDKVersion", "UniversalCRTSdkDir", "UCRTVersion", "VSCMD_ARG_TGT_ARCH", "VSCMD_VER", "INCLUDE", "LIB", "LIBPATH", "EXTERNAL_INCLUDE", "CXX", "CC", "CMAKE_RC_COMPILER", "CMAKE_MT"],
+      "inheritEnv": ["ProgramFiles", "ProgramFiles(x86)", "ProgramW6432", "SKSE_VCVARS64", "SKSE_DEVKIT_ROOT", "VCPKG_ROOT", "VCPKG_DEFAULT_TRIPLET", "VSINSTALLDIR", "VCINSTALLDIR", "VCToolsInstallDir", "VCToolsVersion", "VisualStudioVersion", "WindowsSdkDir", "WindowsSDKVersion", "UniversalCRTSdkDir", "UCRTVersion", "VSCMD_ARG_TGT_ARCH", "VSCMD_VER", "INCLUDE", "LIB", "LIBPATH", "EXTERNAL_INCLUDE", "CXX", "CC", "CMAKE_RC_COMPILER", "CMAKE_MT"],
       "allowedSeats": ["*"]
     },
     {
@@ -40,7 +50,7 @@
       "args": ["${bus}/.ai-bus/bin/skse-devkit.js", "configure", "--workspace", "${workspace}"],
       "cwd": "${workspace}",
       "timeoutMs": 600000,
-      "inheritEnv": ["SKSE_DEVKIT_ROOT", "VCPKG_ROOT", "VCPKG_DEFAULT_TRIPLET", "VSINSTALLDIR", "VCINSTALLDIR", "VCToolsInstallDir", "VCToolsVersion", "VisualStudioVersion", "WindowsSdkDir", "WindowsSDKVersion", "UniversalCRTSdkDir", "UCRTVersion", "VSCMD_ARG_TGT_ARCH", "VSCMD_VER", "INCLUDE", "LIB", "LIBPATH", "EXTERNAL_INCLUDE", "CXX", "CC", "CMAKE_RC_COMPILER", "CMAKE_MT"],
+      "inheritEnv": ["ProgramFiles", "ProgramFiles(x86)", "ProgramW6432", "SKSE_VCVARS64", "SKSE_DEVKIT_ROOT", "VCPKG_ROOT", "VCPKG_DEFAULT_TRIPLET", "VSINSTALLDIR", "VCINSTALLDIR", "VCToolsInstallDir", "VCToolsVersion", "VisualStudioVersion", "WindowsSdkDir", "WindowsSDKVersion", "UniversalCRTSdkDir", "UCRTVersion", "VSCMD_ARG_TGT_ARCH", "VSCMD_VER", "INCLUDE", "LIB", "LIBPATH", "EXTERNAL_INCLUDE", "CXX", "CC", "CMAKE_RC_COMPILER", "CMAKE_MT"],
       "allowedSeats": ["*"]
     },
     {
@@ -51,7 +61,7 @@
       "args": ["${bus}/.ai-bus/bin/skse-devkit.js", "build", "--workspace", "${workspace}"],
       "cwd": "${workspace}",
       "timeoutMs": 600000,
-      "inheritEnv": ["SKSE_DEVKIT_ROOT", "VCPKG_ROOT", "VCPKG_DEFAULT_TRIPLET", "VSINSTALLDIR", "VCINSTALLDIR", "VCToolsInstallDir", "VCToolsVersion", "VisualStudioVersion", "WindowsSdkDir", "WindowsSDKVersion", "UniversalCRTSdkDir", "UCRTVersion", "VSCMD_ARG_TGT_ARCH", "VSCMD_VER", "INCLUDE", "LIB", "LIBPATH", "EXTERNAL_INCLUDE", "CXX", "CC", "CMAKE_RC_COMPILER", "CMAKE_MT"],
+      "inheritEnv": ["ProgramFiles", "ProgramFiles(x86)", "ProgramW6432", "SKSE_VCVARS64", "SKSE_DEVKIT_ROOT", "VCPKG_ROOT", "VCPKG_DEFAULT_TRIPLET", "VSINSTALLDIR", "VCINSTALLDIR", "VCToolsInstallDir", "VCToolsVersion", "VisualStudioVersion", "WindowsSdkDir", "WindowsSDKVersion", "UniversalCRTSdkDir", "UCRTVersion", "VSCMD_ARG_TGT_ARCH", "VSCMD_VER", "INCLUDE", "LIB", "LIBPATH", "EXTERNAL_INCLUDE", "CXX", "CC", "CMAKE_RC_COMPILER", "CMAKE_MT"],
       "allowedSeats": ["*"]
     },
     {
@@ -62,7 +72,7 @@
       "args": ["${bus}/.ai-bus/bin/skse-devkit.js", "test", "--workspace", "${workspace}"],
       "cwd": "${workspace}",
       "timeoutMs": 600000,
-      "inheritEnv": ["SKSE_DEVKIT_ROOT", "VCPKG_ROOT", "VCPKG_DEFAULT_TRIPLET", "VSINSTALLDIR", "VCINSTALLDIR", "VCToolsInstallDir", "VCToolsVersion", "VisualStudioVersion", "WindowsSdkDir", "WindowsSDKVersion", "UniversalCRTSdkDir", "UCRTVersion", "VSCMD_ARG_TGT_ARCH", "VSCMD_VER", "INCLUDE", "LIB", "LIBPATH", "EXTERNAL_INCLUDE", "CXX", "CC", "CMAKE_RC_COMPILER", "CMAKE_MT"],
+      "inheritEnv": ["ProgramFiles", "ProgramFiles(x86)", "ProgramW6432", "SKSE_VCVARS64", "SKSE_DEVKIT_ROOT", "VCPKG_ROOT", "VCPKG_DEFAULT_TRIPLET", "VSINSTALLDIR", "VCINSTALLDIR", "VCToolsInstallDir", "VCToolsVersion", "VisualStudioVersion", "WindowsSdkDir", "WindowsSDKVersion", "UniversalCRTSdkDir", "UCRTVersion", "VSCMD_ARG_TGT_ARCH", "VSCMD_VER", "INCLUDE", "LIB", "LIBPATH", "EXTERNAL_INCLUDE", "CXX", "CC", "CMAKE_RC_COMPILER", "CMAKE_MT"],
       "allowedSeats": ["*"]
     },
     {

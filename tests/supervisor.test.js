@@ -6,6 +6,10 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 
 const SUPERVISOR = path.join(__dirname, '..', 'scripts', 'bus-supervise.js');
+const BUS_UP = path.join(__dirname, '..', 'scripts', 'bus-up.js');
+const BUS_RESTART = path.join(__dirname, '..', 'scripts', 'bus-restart.js');
+const { staleCodeWarning, syncStaleCodeNotices, readStaleCodeNotices, staleCodeNoticePath } = require(SUPERVISOR);
+const { unreadyBrainCodeMarkers } = require(BUS_RESTART);
 
 /**
  * The supervisor closes the one hole the architecture has admitted since day one: the runner
@@ -46,10 +50,16 @@ test('every bin entry points at a file that exists', () => {
   }
 });
 
-test('it refuses to restart a seat past its limit, and says a human is needed', () => {
+test('DELTA H: restart exhaustion cools down but never abandons a dead seat permanently', () => {
   const source = fs.readFileSync(SUPERVISOR, 'utf8');
-  assert.match(source, /NOT restarting\. Needs a human\./,
-    'giving up must be stated out loud - a supervisor that silently stops trying is a lie');
+  assert.match(source, /DEFAULT_LEASE_STALE_MS/,
+    'restart recovery must derive from the same lease-stale policy as the harness');
+  assert.match(source, /cooling down, then retrying/,
+    'a spent burst must be visible and bounded');
+  assert.match(source, /opening a fresh budget/,
+    'the five-restart guard must not turn into permanent unattended death');
+  assert.doesNotMatch(source, /NOT restarting\. Needs a human\./,
+    'permanent supervisor silence is the same deaf-seat failure in another layer');
 });
 
 test('a dead seat is restarted with the SAME root and workdir it was given', () => {
@@ -58,4 +68,120 @@ test('a dead seat is restarted with the SAME root and workdir it was given', () 
   const source = fs.readFileSync(SUPERVISOR, 'utf8');
   assert.match(source, /'--root', root, '--seat', seat, '--brain', brainFile, '--workdir', workdir/,
     'the supervisor must reproduce the original launch arguments exactly');
+});
+
+test('bus-up starts exactly one detached supervisor for its brain seats', () => {
+  const source = fs.readFileSync(BUS_UP, 'utf8');
+  assert.match(source, /type === 'supervisor'/,
+    'idempotent bus-up must detect an existing supervisor instead of spawning duplicates');
+  assert.match(source, /bus-supervise\.js/,
+    'the normal bus startup path must actually launch the shipped supervisor');
+  assert.match(source, /'--seats', brainSeats\.join\(','\)/,
+    'the supervisor must watch exactly the detached brains, never the live console seat');
+  assert.match(source, /supervisor[^\n]*already running|already supervised/i,
+    'operators need visible proof that supervision is active');
+});
+
+test('bus-restart replaces and verifies the supervisor with the rest of the runtime', () => {
+  const source = fs.readFileSync(BUS_RESTART, 'utf8');
+  assert.match(source, /item\.type === 'supervisor'/,
+    'restart must stop the old monitor rather than leave a mismatched supervisor behind');
+  assert.match(source, /supervisors\.length !== 1/,
+    'restart is not verified unless exactly one configured supervisor came back');
+});
+
+test('bus-restart verifies a live brain by its matching loaded-code marker, not an active lease', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'portable-ai-bus-restart-marker-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const distRoot = path.join(root, 'dist');
+  fs.mkdirSync(path.join(root, '.ai-bus', 'runtime'), { recursive: true });
+  fs.mkdirSync(path.join(distRoot, 'brain'), { recursive: true });
+  fs.writeFileSync(path.join(distRoot, 'brain', 'cli.js'), 'loaded code');
+  const loadedDistMtimeMs = fs.statSync(path.join(distRoot, 'brain', 'cli.js')).mtimeMs;
+  fs.writeFileSync(path.join(root, '.ai-bus', 'runtime', 'brain-grok.code.json'), JSON.stringify({
+    pid: 4242,
+    distRoot,
+    loadedDistMtimeMs
+  }));
+
+  assert.deepEqual(unreadyBrainCodeMarkers({
+    root,
+    brains: ['grok'],
+    processes: [{ seat: 'grok', pid: 4242 }],
+    distRoot
+  }), []);
+
+  const source = fs.readFileSync(BUS_RESTART, 'utf8');
+  assert.doesNotMatch(source, /leases\.json|Fresh lease verification/,
+    'a healthy but busy seat may have no ACTIVE lease between wakes');
+});
+
+test('it names a live seat whose loaded dist is older than dist on disk', () => {
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'portable-ai-bus-stale-code-'));
+  try {
+    const distRoot = path.join(fixture, 'dist');
+    const runtime = path.join(fixture, '.ai-bus', 'runtime');
+    fs.mkdirSync(path.join(distRoot, 'brain'), { recursive: true });
+    fs.mkdirSync(runtime, { recursive: true });
+    fs.writeFileSync(path.join(distRoot, 'brain', 'cli.js'), 'new build');
+    fs.writeFileSync(path.join(runtime, 'brain-codex.code.json'), JSON.stringify({
+      pid: 42, distRoot, loadedDistMtimeMs: 1
+    }));
+
+    const warning = staleCodeWarning({ coordinationRoot: fixture, seat: 'codex', pid: 42, distRoot });
+    assert.match(warning, /codex stale-code/);
+    assert.match(warning, /dist changed/);
+  } finally {
+    fs.rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+test('stale-code detection warns but never restarts', () => {
+  const source = fs.readFileSync(SUPERVISOR, 'utf8');
+  assert.match(source, /\$\{warning\} - NOT restarting\./,
+    'a code change mid-wake is hazardous; the supervisor must report it without surprise restart');
+  assert.match(source, /syncStaleCodeNotices/,
+    'a log line nobody reads is not a signal; the notice must land on disk for bus-tick');
+  assert.doesNotMatch(source, /startBrain\(seat\).*stale|stale[\s\S]{0,80}startBrain/,
+    'stale-code must not become an automatic rollout');
+});
+
+test('stale-code persists a notice an operator surface can read, and deletes it when clear', () => {
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'portable-ai-bus-stale-notice-'));
+  try {
+    const warning = 'codex stale-code: dist changed after pid 42 loaded it';
+    const written = syncStaleCodeNotices(fixture, new Map([['codex', warning]]), () => '2026-08-14T23:07:33.000Z');
+    assert.equal(written.autoRestart, false);
+    assert.equal(written.seats.length, 1);
+    assert.equal(written.seats[0].seat, 'codex');
+    assert.equal(written.seats[0].warning, warning);
+
+    const fromDisk = readStaleCodeNotices(fixture);
+    assert.deepEqual(fromDisk.seats.map((item) => item.seat), ['codex']);
+    assert.equal(fromDisk.autoRestart, false);
+
+    const cleared = syncStaleCodeNotices(fixture, new Map([['codex', undefined]]));
+    assert.equal(cleared, undefined);
+    assert.equal(fs.existsSync(staleCodeNoticePath(fixture)), false);
+    assert.deepEqual(readStaleCodeNotices(fixture).seats, []);
+  } finally {
+    fs.rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+test('stale-code notice merge leaves unchecked seats alone and drops a dead seat', () => {
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'portable-ai-bus-stale-merge-'));
+  try {
+    syncStaleCodeNotices(fixture, new Map([
+      ['codex', 'codex stale-code: dist changed'],
+      ['grok', 'grok stale-code: dist changed']
+    ]));
+    const afterUnchecked = syncStaleCodeNotices(fixture, new Map([['claude', undefined]]));
+    assert.deepEqual(afterUnchecked.seats.map((item) => item.seat), ['codex', 'grok']);
+
+    const afterDeath = syncStaleCodeNotices(fixture, new Map([['grok', undefined]]));
+    assert.deepEqual(afterDeath.seats.map((item) => item.seat), ['codex']);
+  } finally {
+    fs.rmSync(fixture, { recursive: true, force: true });
+  }
 });

@@ -92,7 +92,9 @@ async function* fromVscodeStream(stream: AsyncIterable<vscode.LanguageModelTextP
 
 function workspaceTools(mailbox: MailboxStore, capabilities: CapabilityRunner, seat: string, token: vscode.CancellationToken): WorkerTool[] {
   return [
-    tool('mailbox_status', 'Read bus rounds, halt state, agents, unread counts, and claims.', {}, async () => mailbox.status()),
+    // Brief by default: the full status (every claim, every seat) is an operator view and
+    // must not be fed to a model on every turn.
+    tool('mailbox_status', 'Read halt state, agents, unread counts, queue depth and your claims (brief).', {}, async () => mailbox.statusBrief(seat)),
     tool('mailbox_inbox', 'Peek at this seat inbox without acknowledging messages.', {
       type: 'object', properties: { all: { type: 'boolean' } }, additionalProperties: false
     }, async (input) => {
@@ -108,7 +110,11 @@ function workspaceTools(mailbox: MailboxStore, capabilities: CapabilityRunner, s
     tool('mailbox_send', 'Send a durable message from this seat to a registered seat.', {
       type: 'object',
       properties: {
-        to: { type: 'string' }, kind: { type: 'string' }, subject: { type: 'string' }, body: { type: 'string' }
+        to: { type: 'string' }, kind: { type: 'string' }, subject: { type: 'string' }, body: { type: 'string' },
+        // Item 18, audit finding: `supersedes` existed only on MailboxStore.send, so every
+        // caller that reaches the store through a tool surface silently dropped it. A
+        // capability no caller can invoke is not implemented.
+        supersedes: { type: 'integer', minimum: 1 }, supersedeReason: { type: 'string' }
       },
       required: ['to', 'subject', 'body'], additionalProperties: false
     }, async (input) => {
@@ -120,15 +126,28 @@ function workspaceTools(mailbox: MailboxStore, capabilities: CapabilityRunner, s
         to,
         kind: optionalString(input.kind, 'kind', 100) || 'note',
         subject: requiredString(input.subject, 'subject', 1_000),
-        body: requiredString(input.body, 'body', 256 * 1024)
+        body: requiredString(input.body, 'body', 256 * 1024),
+        // Forwarded, not defaulted: `undefined` must reach the store so its own rule about
+        // what a bare send means stays the single definition.
+        ...(input.supersedes === undefined ? {} : { supersedes: requiredInteger(input.supersedes, 'supersedes') }),
+        ...(input.supersedeReason === undefined
+          ? {}
+          : { supersedeReason: optionalString(input.supersedeReason, 'supersedeReason', 1_000) })
       });
     }),
-    tool('mailbox_claim', 'Claim workspace-relative paths for this seat.', {
+    tool('mailbox_claim', 'Hold existing workspace-relative paths now; a successful result is final and needs no acceptance step.', {
       type: 'object', properties: { paths: { type: 'array', items: { type: 'string' } }, why: { type: 'string' } },
       required: ['paths'], additionalProperties: false
     }, async (input) => {
       await requireRunning(mailbox);
-      return mailbox.claim({ agent: seat, paths: stringArray(input.paths, 'paths'), why: optionalString(input.why, 'why', 1_000) });
+      const requested = stringArray(input.paths, 'paths');
+      const held = await mailbox.claim({ agent: seat, paths: requested, why: optionalString(input.why, 'why', 1_000) });
+      return {
+        status: 'HELD NOW',
+        message: 'The requested paths are HELD NOW. No acceptance or further claim step is required.',
+        requested,
+        held
+      };
     }),
     tool('mailbox_release', 'Release exact paths held by this seat, or all when paths is omitted.', {
       type: 'object', properties: { paths: { type: 'array', items: { type: 'string' } } }, additionalProperties: false
@@ -165,9 +184,12 @@ function tool(name: string, description: string, inputSchema: object, execute: W
 }
 
 async function requireRunning(mailbox: MailboxStore) {
-  const status = await mailbox.status();
-  if (status.halted || status.round >= status.maxRounds) {
-    throw new BusHaltedError(status.stopReason ?? `round guard reached (${status.round}/${status.maxRounds})`);
+  // Rounds are no longer a limit: only an explicit halt stops the seat. The queue-depth guard
+  // is enforced by the store on send (QueueFullError), not here. snapshot() is lock-free state
+  // only - no message scan, no git - so this per-turn check stays cheap.
+  const status = await mailbox.snapshot();
+  if (status.halted) {
+    throw new BusHaltedError(status.stopReason ?? 'bus halted');
   }
   return status;
 }

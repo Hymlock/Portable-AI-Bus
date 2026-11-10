@@ -4,6 +4,7 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const { randomUUID } = require('node:crypto');
+require('./helpers/require-fresh-dist')();
 const { HarnessServer } = require('../dist/harness.js');
 
 async function setup(agents = [], maxRounds = 20, serverOptions = {}) {
@@ -14,6 +15,10 @@ async function setup(agents = [], maxRounds = 20, serverOptions = {}) {
     JSON.stringify({ version: 1, capabilities: [] }),
     'utf8'
   );
+  await fs.mkdir(path.join(root, 'src'), { recursive: true });
+  for (const name of ['held.ts', 'new.ts', 'warn.ts']) {
+    await fs.writeFile(path.join(root, 'src', name), 'fixture', 'utf8');
+  }
   const server = new HarnessServer(root, {
     token: 'test-token',
     seatTokens: Object.fromEntries(agents.map((agent) => [agent, `test-${agent}-token`])),
@@ -42,6 +47,36 @@ test('harness rejects unauthenticated clients and exposes provider-neutral tools
   assert.equal(tools.status, 200);
   assert.ok(tools.body.tools.some((item) => item.name === 'capability_run'));
   assert.ok(tools.body.tools.some((item) => item.name === 'mailbox_send'));
+  assert.ok(tools.body.tools.some((item) => item.name === 'mailbox_supersede'));
+});
+
+test('mailbox_supersede lets a seat correct only its own sent mail', async (t) => {
+  const { root, server } = await setup(['codex', 'grok']);
+  t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
+  const endpoint = JSON.parse(await fs.readFile(path.join(root, '.ai-bus', 'runtime', 'harness', 'endpoint.json'), 'utf8'));
+  const asCodex = async (name, input, requestId) => {
+    const response = await fetch(`http://127.0.0.1:${endpoint.port}/v1/tool`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer test-codex-token', 'content-type': 'application/json' },
+      body: JSON.stringify({ requestId, name, input })
+    });
+    return { status: response.status, body: await response.json() };
+  };
+  const original = await server.mailbox.send({ from: 'codex', to: 'grok', subject: 'old', body: 'stale' });
+  const correction = await server.mailbox.send({ from: 'codex', to: 'grok', subject: 'new', body: 'current' });
+  const result = await asCodex('mailbox_supersede', {
+    agent: 'codex', seq: original.seq, by: correction.seq, reason: 'corrected'
+  }, 'supersede-own');
+  assert.equal(result.status, 200);
+  assert.equal((await server.mailbox.status()).unread.grok, 1);
+
+  const foreign = await server.mailbox.send({ from: 'grok', to: 'codex', subject: 'foreign', body: 'not mine' });
+  const own = await server.mailbox.send({ from: 'codex', to: 'codex', subject: 'own', body: 'mine' });
+  const denied = await asCodex('mailbox_supersede', {
+    agent: 'codex', seq: foreign.seq, by: own.seq, reason: 'forged correction'
+  }, 'supersede-foreign');
+  assert.equal(denied.status, 403);
+  assert.match(denied.body.error.message, /only messages it sent itself/);
 });
 
 test('harness keeps coordination state separate from capability workdir', async (t) => {
@@ -75,7 +110,8 @@ test('harness request ids make repeated send requests idempotent', async (t) => 
     method: 'POST',
     body: JSON.stringify({ requestId: 'peek', name: 'mailbox_inbox', input: { agent: 'grok', all: true } })
   });
-  assert.equal(inbox.body.result.length, 1);
+  assert.equal(inbox.body.result.messages.length, 1);
+  assert.equal(inbox.body.result.hasMore, false);
 });
 
 test('concurrent duplicate request ids execute only once', async (t) => {
@@ -192,10 +228,30 @@ test('mailbox inbox tool pages with afterSeq without acknowledging messages', as
     method: 'POST', body: JSON.stringify({ requestId, name: 'mailbox_inbox', input: { agent: 'grok', all: true, afterSeq } })
   });
   const first = await tool('inbox-page-one', 0);
-  const second = await tool('inbox-page-two', first.body.result.at(-1).seq);
-  assert.deepEqual(first.body.result.map((message) => message.seq), sent.slice(0, 4).map((message) => message.seq));
-  assert.deepEqual(second.body.result.map((message) => message.seq), sent.slice(4).map((message) => message.seq));
+  const second = await tool('inbox-page-two', first.body.result.messages.at(-1).seq);
+  assert.deepEqual(first.body.result.messages.map((message) => message.seq), sent.slice(0, 4).map((message) => message.seq));
+  assert.equal(first.body.result.hasMore, true);
+  assert.deepEqual(second.body.result.messages.map((message) => message.seq), sent.slice(4).map((message) => message.seq));
+  assert.equal(second.body.result.hasMore, false);
   assert.equal((await server.mailbox.status()).unread.grok, 6);
+});
+
+test('mailbox read tool reports truncated and complete pages explicitly', async (t) => {
+  const { root, server, request } = await setup(['codex', 'grok']);
+  t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
+  const sent = [];
+  for (let index = 0; index < 6; index += 1) {
+    sent.push(await server.mailbox.send({ from: 'codex', to: 'grok', subject: `message-${index}`, body: 'one' }));
+  }
+  const read = async (requestId) => request('/v1/tool', {
+    method: 'POST', body: JSON.stringify({ requestId, name: 'mailbox_read', input: { agent: 'grok', all: true } })
+  });
+  const first = await read('read-page-one');
+  const second = await read('read-page-two');
+  assert.deepEqual(first.body.result.messages.map((message) => message.seq), sent.slice(0, 4).map((message) => message.seq));
+  assert.equal(first.body.result.hasMore, true);
+  assert.deepEqual(second.body.result.messages.map((message) => message.seq), sent.slice(4).map((message) => message.seq));
+  assert.equal(second.body.result.hasMore, false);
 });
 
 test('seat credentials cannot impersonate or acknowledge another seat', async (t) => {
@@ -302,12 +358,12 @@ test('a stranded harness recovery lock fails closed with an actionable diagnosti
 test('halt blocks claim and release mutations', async (t) => {
   const { root, server, request } = await setup(['codex']);
   t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
-  await server.mailbox.claim({ agent: 'codex', paths: ['src/held.ts'] });
+  await server.mailbox.claim({ agent: 'codex', paths: ['src/held.ts'], why: 'test fixture' });
   await server.mailbox.halt('test guard');
 
   const claim = await request('/v1/tool', {
     method: 'POST',
-    body: JSON.stringify({ requestId: 'halted-claim', name: 'mailbox_claim', input: { agent: 'codex', paths: ['src/new.ts'] } })
+    body: JSON.stringify({ requestId: 'halted-claim', name: 'mailbox_claim', input: { agent: 'codex', paths: ['src/new.ts'], why: 'harness fixture' } })
   });
   const release = await request('/v1/tool', {
     method: 'POST',
@@ -318,16 +374,66 @@ test('halt blocks claim and release mutations', async (t) => {
   assert.deepEqual((await server.mailbox.claims()).codex.map((item) => item.path), ['src/held.ts']);
 });
 
-test('round cap halts immediately after durably writing the cap message', async (t) => {
+test('the old round cap no longer halts; only an explicit halt fails tools closed', async (t) => {
   const { root, server, request } = await setup(['codex', 'grok'], 1);
   t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
-  await server.mailbox.send({ from: 'codex', to: 'grok', subject: 'one', body: 'reaches cap' });
-  assert.equal((await server.mailbox.status()).halted, true);
+  await server.mailbox.send({ from: 'codex', to: 'grok', subject: 'one', body: 'reaches old cap' });
+  await server.mailbox.send({ from: 'codex', to: 'grok', subject: 'two', body: 'past old cap' });
+  assert.equal((await server.mailbox.status()).halted, false);
+  await server.mailbox.halt('operator stop', { force: true });
   const claim = await request('/v1/tool', {
     method: 'POST',
-    body: JSON.stringify({ requestId: 'capped-claim', name: 'mailbox_claim', input: { agent: 'codex', paths: ['src/new.ts'] } })
+    body: JSON.stringify({ requestId: 'capped-claim', name: 'mailbox_claim', input: { agent: 'codex', paths: ['src/new.ts'], why: 'harness fixture' } })
   });
   assert.equal(claim.status, 423);
+  assert.deepEqual(await server.mailbox.claims(), {});
+});
+
+test('approaching a seat queue cap writes a loud harness audit warning', async (t) => {
+  const { root, server, request } = await setup(['codex'], 20);
+  t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
+  await server.mailbox.configureRetention({ maxUnreadPerSeat: 10 });
+  for (let round = 0; round < 8; round += 1) {
+    await server.mailbox.send({ from: 'codex', to: 'codex', subject: `round ${round}`, body: 'advance' });
+  }
+  const claim = await request('/v1/tool', {
+    method: 'POST',
+    body: JSON.stringify({ requestId: 'near-cap-claim', name: 'mailbox_claim', input: { agent: 'codex', paths: ['src/warn.ts'], why: 'harness fixture' } })
+  });
+  assert.equal(claim.status, 200);
+  const audit = await fs.readFile(server.auditPath, 'utf8');
+  assert.match(audit, /"event":"queue_pressure"/);
+  assert.match(audit, /"seat":"codex","unread":8,"cap":10/);
+});
+
+test('successful claim response says paths are held now with no acceptance step', async (t) => {
+  const { root, server, request } = await setup(['codex']);
+  t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
+
+  const claim = await request('/v1/tool', {
+    method: 'POST',
+    body: JSON.stringify({ requestId: 'clear-claim', name: 'mailbox_claim', input: { agent: 'codex', paths: ['src/held.ts'], why: 'harness fixture' } })
+  });
+
+  assert.equal(claim.status, 200);
+  assert.equal(claim.body.result.status, 'HELD NOW');
+  assert.match(claim.body.result.message, /HELD NOW.*No acceptance or further claim step is required/i);
+  assert.deepEqual(claim.body.result.held.map((item) => item.path), ['src/held.ts']);
+});
+
+test('harness refuses a nonexistent claim and leaves state clean', async (t) => {
+  const { root, server, request } = await setup(['codex']);
+  t.after(async () => { await server.stop(); await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
+
+  const claim = await request('/v1/tool', {
+    method: 'POST',
+    body: JSON.stringify({ requestId: 'missing-claim', name: 'mailbox_claim', input: { agent: 'codex', paths: ['bus.py'], why: 'probing a missing path' } })
+  });
+
+  assert.equal(claim.status, 400);
+  assert.equal(claim.body.error.code, 'claim_path_missing');
+  assert.equal(claim.body.error.retriable, false);
+  assert.match(claim.body.error.message, /do not exist.*bus\.py|bus\.py.*do not exist/i);
   assert.deepEqual(await server.mailbox.claims(), {});
 });
 

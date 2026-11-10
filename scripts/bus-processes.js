@@ -4,7 +4,24 @@ const { spawnSync } = require('node:child_process');
 
 function optionFromCommandLine(commandLine, name) {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const match = String(commandLine || '').match(new RegExp(`(?:^|\\s)${escaped}\\s+(?:"([^"]*)"|(\\S+))`, 'i'));
+  /**
+   * Both `--name value` and `--name=value`.
+   *
+   * grok raised the `=` form in r34 and said `identifyNodeProcess` already handled it while
+   * the tick's local regex did not. Measured, and it was the other way round in the way that
+   * matters: NEITHER handled it. `--seat=grok` returned undefined here too.
+   *
+   * That is not cosmetic. A brain launched as `--seat=grok` is invisible to this module, so
+   * the supervisor cannot match it to a seat, treats the seat as absent, and restarts it
+   * forever - while the real process keeps running. The bus would fight itself and every
+   * signal would say the seat was dead.
+   *
+   * Fixed at the source so the tick and the supervisor cannot disagree about it, which is the
+   * whole reason item 23 put them on one module.
+   */
+  const separator = '(?:\\s+|=)';
+  const match = String(commandLine || '')
+    .match(new RegExp(`(?:^|\\s)${escaped}${separator}(?:"([^"]*)"|(\\S+))`, 'i'));
   return match ? (match[1] ?? match[2]) : undefined;
 }
 
@@ -36,8 +53,40 @@ function identifyNodeProcess(processInfo) {
       commandLine
     };
   }
+  if (/bus-supervise\.js(?:"|\s)/i.test(commandLine)) {
+    return {
+      type: 'supervisor', pid, root, workdir,
+      seats: String(optionFromCommandLine(commandLine, '--seats') || '')
+        .split(',').map((seat) => seat.trim()).filter(Boolean),
+      brain: optionFromCommandLine(commandLine, '--brain'),
+      commandLine
+    };
+  }
   return undefined;
 }
+
+/**
+ * ITEM 28: the process query had NO TIMEOUT, on the operator wake path.
+ *
+ * `spawnSync` without `timeout` waits forever. `bus-tick` calls this every interval to fill
+ * the `brains:` field, so a wedged `powershell` or `ps` does not degrade the heartbeat - it
+ * STOPS it. The tick is the thing that wakes a human operator, so the failure mode is: the
+ * bus goes quiet, and the silence looks exactly like a quiet bus.
+ *
+ * Measured on 2026-08-19, on the coordinator's own watchdog rather than in a test. A monitor
+ * doing this same query every two minutes stalled mid-run: the process stayed alive, the loop
+ * never advanced, and no heartbeat fired for the better part of an hour while work continued.
+ * Hymlock noticed the silence before I did, which is the whole problem with a stalled watchdog.
+ *
+ * It is also the same defect recorded upstream in the Mantella notes - a blocking
+ * `requests.get` under a comment claiming a two-second timeout. A comment is not a timeout.
+ *
+ * On expiry `spawnSync` returns with `error` set and a null status, which the existing
+ * status check already turns into a throw; every caller here treats a throw as "cannot see
+ * the process list" and degrades rather than dying. The failure was never the error path - it
+ * was that there was no error to take.
+ */
+const PROCESS_QUERY_TIMEOUT_MS = 10_000;
 
 function listNodeProcesses() {
   if (process.platform === 'win32') {
@@ -46,17 +95,19 @@ function listNodeProcesses() {
       "@(Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | Select-Object ProcessId,CommandLine) | ConvertTo-Json -Compress"
     ].join('; ');
     const result = spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', command], {
-      encoding: 'utf8', windowsHide: true
+      encoding: 'utf8', windowsHide: true, timeout: PROCESS_QUERY_TIMEOUT_MS
     });
-    if (result.status !== 0) {
-      throw new Error(`Cannot inspect Node processes safely: ${(result.stderr || result.stdout || 'process query failed').trim()}`);
+    if (result.error || result.status !== 0) {
+      throw new Error(`Cannot inspect Node processes safely: ${(result.error?.message || result.stderr || result.stdout || 'process query failed').toString().trim()}`);
     }
     const parsed = JSON.parse((result.stdout || '[]').trim() || '[]');
     return (Array.isArray(parsed) ? parsed : [parsed]).map(identifyNodeProcess).filter(Boolean);
   }
 
-  const result = spawnSync('ps', ['-eo', 'pid=,args='], { encoding: 'utf8' });
-  if (result.status !== 0) throw new Error(`Cannot inspect Node processes safely: ${(result.stderr || '').trim()}`);
+  const result = spawnSync('ps', ['-eo', 'pid=,args='], { encoding: 'utf8', timeout: PROCESS_QUERY_TIMEOUT_MS });
+  if (result.error || result.status !== 0) {
+    throw new Error(`Cannot inspect Node processes safely: ${(result.error?.message || result.stderr || '').toString().trim()}`);
+  }
   return (result.stdout || '').split(/\r?\n/).map((line) => {
     const match = line.trim().match(/^(\d+)\s+(.+)$/);
     return match ? identifyNodeProcess({ pid: Number(match[1]), commandLine: match[2] }) : undefined;
@@ -85,8 +136,12 @@ function bootstrapCoordinationRoot(repo, root) {
   // them would drag native modules along; `scripts/`, already being executed from source; and
   // providers, templates, docs and guides, which are installation assets rather than runtime.
   const sources = [
+    [path.join(repo, 'bin', 'tool-catalog.js'), path.join(busDir, 'bin', 'tool-catalog.js')],
+    [path.join(repo, 'templates', 'tool-catalog.json'), path.join(busDir, 'bin', 'tool-catalog.defaults.json')],
     [capabilitySource, capabilityDestination],
-    [path.join(repo, 'dist', 'mailbox.js'), path.join(busDir, 'bin', 'mailbox.js')],
+      [path.join(repo, 'dist', 'mailbox.js'), path.join(busDir, 'bin', 'mailbox.js')],
+      [path.join(repo, 'dist', 'evidence.js'), path.join(busDir, 'bin', 'evidence.js')],
+      [path.join(repo, 'dist', 'claim-walk.js'), path.join(busDir, 'bin', 'claim-walk.js')],
     [path.join(repo, 'dist', 'capabilities.js'), path.join(busDir, 'bin', 'capabilities.js')],
     [path.join(repo, 'dist', 'harness.js'), path.join(busDir, 'bin', 'harness.js')],
     [path.join(repo, 'dist', 'worker-client.js'), path.join(busDir, 'bin', 'worker-client.js')],

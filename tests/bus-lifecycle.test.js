@@ -36,6 +36,16 @@ test('exact-root selection never captures a same-seat process from another Bus',
   assert.equal(samePath(first.workdir, second.workdir), false);
 });
 
+test('supervisor identity includes the configuration bus-up uses for idempotence', () => {
+  const command = 'node C:\\kit\\scripts\\bus-supervise.js --root "C:\\bus root" --workdir "D:\\repo path" --brain "C:\\kit\\brains\\agent-seat.js" --seats codex,grok';
+  const identity = identifyNodeProcess({ pid: 43, commandLine: command });
+  assert.equal(identity.type, 'supervisor');
+  assert.equal(identity.root, 'C:\\bus root');
+  assert.equal(identity.workdir, 'D:\\repo path');
+  assert.deepEqual(identity.seats, ['codex', 'grok']);
+  assert.equal(identity.brain, 'C:\\kit\\brains\\agent-seat.js');
+});
+
 test('canonical path equality resolves trailing separators and directory links', async (t) => {
   const fixture = await fsp.mkdtemp(path.join(os.tmpdir(), 'portable-ai-bus-canonical-'));
   const target = path.join(fixture, 'target');
@@ -50,12 +60,16 @@ test('coordination bootstrap installs missing config and bins without overwritin
   const fixture = await fsp.mkdtemp(path.join(os.tmpdir(), 'portable-ai-bus-lifecycle-'));
   const repo = path.join(fixture, 'repo');
   const root = path.join(fixture, 'root');
-  for (const relative of ['templates', 'dist', 'dist/adapters']) {
+  for (const relative of ['bin', 'templates', 'dist', 'dist/adapters']) {
     await fsp.mkdir(path.join(repo, relative), { recursive: true });
   }
   await fsp.mkdir(root);
   await fsp.writeFile(path.join(repo, 'templates', 'capabilities.json'), '{"version":1,"capabilities":[]}');
+  await fsp.writeFile(path.join(repo, 'bin', 'tool-catalog.js'), 'catalog');
+  await fsp.writeFile(path.join(repo, 'templates', 'tool-catalog.json'), '{"tools":[]}');
   await fsp.writeFile(path.join(repo, 'dist', 'mailbox.js'), 'mailbox');
+  await fsp.writeFile(path.join(repo, 'dist', 'evidence.js'), 'evidence');
+  await fsp.writeFile(path.join(repo, 'dist', 'claim-walk.js'), 'claim-walk');
   await fsp.writeFile(path.join(repo, 'dist', 'capabilities.js'), 'capabilities');
   await fsp.writeFile(path.join(repo, 'dist', 'harness.js'), 'harness');
   await fsp.writeFile(path.join(repo, 'dist', 'worker-client.js'), 'worker-client');
@@ -71,9 +85,13 @@ test('coordination bootstrap installs missing config and bins without overwritin
   const relative = created.map((p) => path.relative(root, p).split(path.sep).join('/')).sort();
   assert.deepEqual(relative, [
     '.ai-bus/bin/capabilities.js',
+    '.ai-bus/bin/claim-walk.js',
+    '.ai-bus/bin/evidence.js',
     '.ai-bus/bin/harness.js',
     '.ai-bus/bin/mailbox.js',
     '.ai-bus/bin/skse-devkit.js',
+    '.ai-bus/bin/tool-catalog.defaults.json',
+    '.ai-bus/bin/tool-catalog.js',
     '.ai-bus/bin/worker-client.js',
     '.ai-bus/bin/workspace-key.js',
     '.ai-bus/capabilities.json'
@@ -102,4 +120,9 @@ test('coordination bootstrap upgrades only the exact legacy default capability t
   t.after(() => fsp.rm(fixture, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   bootstrapCoordinationRoot(repo, root);
   assert.equal(await fsp.readFile(path.join(root, '.ai-bus', 'capabilities.json'), 'utf8'), current);
+  // Exercise the real compiled dependency graph, not only a hand-maintained filename list.
+  // Importing these modules must work in a fresh root without a checkout node_modules tree.
+  for (const name of ['harness.js', 'mailbox.js', 'worker-client.js']) {
+    assert.doesNotThrow(() => require(path.join(root, '.ai-bus', 'bin', name)));
+  }
 });

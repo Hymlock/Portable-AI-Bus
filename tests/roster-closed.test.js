@@ -3,6 +3,7 @@ const test = require('node:test');
 const os = require('node:os');
 const fs = require('node:fs');
 const path = require('node:path');
+require('./helpers/require-fresh-dist')();
 const { MailboxStore } = require('../dist/mailbox.js');
 
 /**
@@ -67,7 +68,10 @@ test('init is authoritative: a name dropped from --agents is retired', async () 
 
 test('retiring a seat that still holds claims is refused, not done silently', async () => {
   // Silent retirement would orphan the claim and let another seat edit the same file.
-  const store = new MailboxStore(tempRoot());
+  const root = tempRoot();
+  fs.mkdirSync(path.join(root, 'scripts'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'scripts', 'thing.js'), 'fixture');
+  const store = new MailboxStore(root);
   await store.ensureInitialized([...SEATS, 'worker'], 50);
   await store.claim({ agent: 'worker', paths: ['scripts/thing.js'], why: 'mid-flight work' });
 
@@ -81,7 +85,10 @@ test('retiring a seat that still holds claims is refused, not done silently', as
 });
 
 test('a seat listed in init keeps working normally', async () => {
-  const store = new MailboxStore(tempRoot());
+  const root = tempRoot();
+  fs.mkdirSync(path.join(root, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'src', 'bus.ts'), 'fixture');
+  const store = new MailboxStore(root);
   await store.ensureInitialized(SEATS, 50);
   await store.claim({ agent: 'codex', paths: ['src/bus.ts'], why: 'real work' });
   const message = await store.send({ from: 'codex', to: 'claude', kind: 'report', subject: 's', body: 'b' });

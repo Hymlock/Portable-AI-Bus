@@ -5,6 +5,7 @@ const path = require('node:path');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 const test = require('node:test');
+require('./helpers/require-fresh-dist')();
 const { SkseDevkitAdapter } = require('../dist/adapters/skse-devkit.js');
 const execFileAsync = promisify(execFile);
 
@@ -215,7 +216,12 @@ test('configure --preset uses fixed argv and jailed build dir', async (t) => {
   const adapter = new SkseDevkitAdapter({ workspaceRoot: workspace, explicitRoot: root });
   const receipt = await adapter.configure({ preset: 'relwithdebinfo', timeoutMs: 2_000 });
   assert.deepEqual(receipt.args.slice(0, 2), ['--preset', 'relwithdebinfo']);
+  assert.deepEqual(receipt.args.slice(2), ['-B', receipt.buildDir]);
   assert.ok(receipt.buildDir?.replace(/\\/g, '/').endsWith('DragonbornLogbookNative/build/relwithdebinfo'));
+  const explicitBuild = path.join(workspace, 'clean build');
+  const overridden = await adapter.configure({ preset: 'relwithdebinfo', buildDir: explicitBuild, timeoutMs: 2_000 });
+  assert.equal(path.resolve(overridden.buildDir), path.resolve(explicitBuild));
+  assert.deepEqual(overridden.args, ['--preset', 'relwithdebinfo', '-B', overridden.buildDir]);
 });
 
 test('path jail rejects sourceDir outside workspace and devkit', async (t) => {
@@ -247,6 +253,22 @@ test('validatePluginArtifacts finds sample preset output', async (t) => {
   assert.equal(report.dll.bytes, 4096);
   assert.equal(report.dll.sha256.length, 64);
   assert.equal(report.pdb.exists, true);
+});
+
+test('explicit Windows toolchain selection overrides discovery and never silently falls back', { skip: process.platform !== 'win32' }, async (t) => {
+  const { workspace, root } = await makeFakeDevkit();
+  t.after(() => fs.rm(workspace, { recursive: true, force: true }));
+  let called = 0;
+  const adapter = new SkseDevkitAdapter({ workspaceRoot: workspace, explicitRoot: root,
+    env: { PATH: '', SKSE_VCVARS64: 'explicit-selection' },
+    async toolchainBootstrap(env) { called++; return env; }
+  });
+  await adapter.doctor();
+  assert.equal(called, 1, 'must override even when the fixture already supplies cl.exe');
+  const refused = new SkseDevkitAdapter({ workspaceRoot: workspace, explicitRoot: root,
+    env: { PATH: '', SKSE_VCVARS64: 'untrusted-command.bat' }
+  });
+  await assert.rejects(() => refused.doctor(), /failed validation/);
 });
 
 test('CTest treats an empty suite as an error instead of false validation', async (t) => {

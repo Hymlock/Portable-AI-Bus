@@ -397,7 +397,8 @@ function validateSeatGrants(id: string, value: unknown) {
 
 function validateEnvironmentNames(id: string, value: unknown) {
   if (value === undefined) return [];
-  if (!Array.isArray(value) || value.length > 64 || value.some((item) => typeof item !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(item))) {
+  const windowsNames = new Set(['ProgramFiles(x86)', 'PROGRAMFILES(X86)']);
+  if (!Array.isArray(value) || value.length > 64 || value.some((item) => typeof item !== 'string' || (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(item) && !windowsNames.has(item)))) {
     throw new Error(`Capability ${id} has an invalid inheritEnv list.`);
   }
   return Array.from(new Set(value));

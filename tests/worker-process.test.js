@@ -4,6 +4,7 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
+require('./helpers/require-fresh-dist')();
 const { HarnessServer } = require('../dist/harness.js');
 
 test('three provider-neutral seat processes acquire, wake, and release independently', async (t) => {
@@ -11,6 +12,9 @@ test('three provider-neutral seat processes acquire, wake, and release independe
   const credentialsDir = path.join(root, '.test-credentials');
   const seats = ['codex', 'claude', 'grok'];
   await fs.mkdir(path.join(root, '.ai-bus'), { recursive: true });
+  for (const seat of seats) {
+    await fs.mkdir(path.join(root, 'work', seat), { recursive: true });
+  }
   await fs.writeFile(path.join(root, '.ai-bus', 'capabilities.json'), JSON.stringify({ version: 1, capabilities: [] }));
   const server = new HarnessServer(root, { credentialsDir });
   await server.mailbox.ensureInitialized(['dispatcher', ...seats]);
@@ -64,8 +68,9 @@ test('three provider-neutral seat processes acquire, wake, and release independe
   for (let index = 0; index < seats.length; index += 1) {
     assert.equal(reads[index].code, 0, reads[index].stderr);
     const response = JSON.parse(reads[index].stdout.trim());
-    assert.equal(response.result.length, 1);
-    assert.equal(response.result[0].to, seats[index]);
+    assert.equal(response.result.messages.length, 1);
+    assert.equal(response.result.messages[0].to, seats[index]);
+    assert.equal(response.result.hasMore, false);
   }
 
   const claims = await Promise.all(seats.map((seat) => runWorker(root, credentialsDir, seat, [

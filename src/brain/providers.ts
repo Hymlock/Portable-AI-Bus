@@ -11,7 +11,76 @@
  * user already pays for. The others exist so a seat is never blocked on one vendor's tooling.
  */
 
-import { processAvailable, runProcess } from './process-host';
+import { processAvailable, runProcess, type ProcessResult, type RunProcessOptions } from './process-host';
+import type { StallLedger } from './stall-ledger';
+
+/**
+ * Keep the process-host failure TEXT so `classifyFailure` can tell BROKEN from SPENT.
+ *
+ * cli/exec used to return `{ text: '', isError: true }` when stdout was empty, which
+ * collapsed a missing node-pty into "provider reported an error" and then into
+ * chain-exhausted / out of providers. Codex and grok already forwarded stderr; this
+ * helper is the same rule for every adapter.
+ */
+export function providerFailureText(result: ProcessResult, fallback: string): string {
+  const detail = (result.stderr || result.stdout || fallback).replace(/\s+/g, ' ').trim();
+  if (result.failureKind === 'broken' && detail && !/^broken\b/i.test(detail)) {
+    return `BROKEN ${detail}`;
+  }
+  return detail || fallback;
+}
+
+const PROVIDER_STALL_MS = 30_000;
+
+export type ProviderStallOptions = {
+  /**
+   * Durable pair shared with the runner. Absent means process-host logs stall
+   * edges only and cannot persist them — the dead wire item 12 is removing.
+   */
+  stallLedger?: StallLedger;
+  stallSeat?: string;
+  /** Override the 30s process-host stall watch. Tests use a short value. */
+  stallMs?: number;
+};
+
+/**
+ * The options every CLI adapter must hand to `runProcess`.
+ *
+ * Four call sites used to assemble this object by hand and silently drop the
+ * ledger pair. One helper means a missing `stallLedger` is a missing argument
+ * here, not a missing field at one of four sites.
+ */
+export function providerRunOptions(
+  options: ProviderStallOptions & {
+    cwd?: string;
+    env?: NodeJS.ProcessEnv;
+    timeoutMs: number;
+    windowsHide?: boolean;
+    log?: (event: string, data?: unknown) => void;
+  }
+): RunProcessOptions {
+  return {
+    cwd: options.cwd,
+    env: options.env,
+    timeoutMs: options.timeoutMs,
+    windowsHide: options.windowsHide,
+    stallMs: options.stallMs ?? PROVIDER_STALL_MS,
+    log: options.log,
+    stallLedger: options.stallLedger,
+    stallSeat: options.stallSeat
+  };
+}
+
+function inheritStall(
+  target: ProviderStallOptions | undefined,
+  inherited?: ProviderStallOptions
+): ProviderStallOptions {
+  return {
+    stallLedger: target?.stallLedger ?? inherited?.stallLedger,
+    stallSeat: target?.stallSeat ?? inherited?.stallSeat,
+    stallMs: target?.stallMs ?? inherited?.stallMs
+  };
+}
 
 export type ProviderKind = 'cli' | 'api' | 'oauth' | 'exec' | 'codex' | 'grok';
 
@@ -150,7 +219,7 @@ function nonRepoCwd(): string {
   }
 }
 
-export type CliProviderOptions = {
+export type CliProviderOptions = ProviderStallOptions & {
   /** Executable name or path. `claude` on PATH by default. */
   command?: string;
   /** Extra args inserted before the prompt. */
@@ -172,7 +241,15 @@ export function cliProvider(options: CliProviderOptions = {}): ModelProvider {
   const cwd = options.cwd ?? nonRepoCwd();
 
   async function run(args: string[], timeoutMs: number): Promise<{ code: number; stdout: string; stderr: string }> {
-    return runProcess(command, args, { cwd, timeoutMs, windowsHide: hideWindows() });
+    return runProcess(command, args, providerRunOptions({
+      cwd,
+      timeoutMs,
+      windowsHide: hideWindows(),
+      stallMs: options.stallMs,
+      stallLedger: options.stallLedger,
+      stallSeat: options.stallSeat,
+      log
+    }));
   }
 
   return {
@@ -205,9 +282,10 @@ export function cliProvider(options: CliProviderOptions = {}): ModelProvider {
       if (sessionId) args.push('--resume', sessionId);
       args.push(prompt);
 
-      const { code, stdout, stderr } = await run(args, timeoutMs);
+      const result = await run(args, timeoutMs);
+      const { code, stdout } = result;
       if (code !== 0 && !stdout.trim()) {
-        return { text: '', isError: true, ...(stderr ? { } : {}) };
+        return { text: providerFailureText(result, `cli exited ${code}`), isError: true };
       }
       try {
         const parsed = JSON.parse(stdout.slice(stdout.indexOf('{')));
@@ -333,7 +411,7 @@ export function sdkProvider(kind: 'api' | 'oauth', options: SdkProviderOptions =
 // exec - any vendor, no adapter required
 // ---------------------------------------------------------------------------
 
-export type ExecProviderOptions = {
+export type ExecProviderOptions = ProviderStallOptions & {
   command: string;
   /** `{prompt}` and `{system}` are substituted. Anything else is passed through. */
   args: string[];
@@ -341,6 +419,8 @@ export type ExecProviderOptions = {
   resultPath?: string;
   timeoutMs?: number;
   log?: (event: string, data?: unknown) => void;
+  /** Test inject. Production uses `runProcess`. */
+  run?: typeof runProcess;
 };
 
 /**
@@ -362,7 +442,15 @@ export function execProvider(options: ExecProviderOptions): ModelProvider {
   }
 
   async function run(args: string[], timeoutMs: number) {
-    return runProcess(options.command, args, { timeoutMs, windowsHide: true });
+    const launch = options.run ?? runProcess;
+    return launch(options.command, args, providerRunOptions({
+      timeoutMs,
+      windowsHide: true,
+      stallMs: options.stallMs,
+      stallLedger: options.stallLedger,
+      stallSeat: options.stallSeat,
+      log
+    }));
   }
 
   return {
@@ -376,10 +464,11 @@ export function execProvider(options: ExecProviderOptions): ModelProvider {
     },
 
     async ask(prompt, { systemPrompt = '', timeoutMs = options.timeoutMs ?? 300_000 } = {}) {
-      const { code, stdout, stderr } = await run(fill(options.args, prompt, systemPrompt), timeoutMs);
+      const result = await run(fill(options.args, prompt, systemPrompt), timeoutMs);
+      const { code, stdout, stderr } = result;
       if (code !== 0) {
         log('exec-failed', { command: options.command, code, stderr: stderr.slice(0, 200) });
-        return { text: '', isError: true };
+        return { text: providerFailureText(result, `${options.command} exited ${code}`), isError: true };
       }
       if (!options.resultPath) return { text: stdout.trim(), isError: false };
       try {
@@ -439,7 +528,7 @@ export function resolveCodexCommand(explicit?: string): string {
   return exe;
 }
 
-export type CodexProviderOptions = {
+export type CodexProviderOptions = ProviderStallOptions & {
   command?: string;
   /** Passed to `--model`. Omit to use whatever Codex is configured for. */
   model?: string;
@@ -477,7 +566,15 @@ export function codexProvider(options: CodexProviderOptions = {}): ModelProvider
   async function run(args: string[], timeoutMs: number) {
     // The process host never writes stdin. `codex exec` would otherwise wait for additional
     // piped input forever.
-    return runProcess(command, args, { cwd, timeoutMs, windowsHide: hideWindows() });
+    return runProcess(command, args, providerRunOptions({
+      cwd,
+      timeoutMs,
+      windowsHide: hideWindows(),
+      stallMs: options.stallMs,
+      stallLedger: options.stallLedger,
+      stallSeat: options.stallSeat,
+      log
+    }));
   }
 
   return {
@@ -522,7 +619,8 @@ export function codexProvider(options: CodexProviderOptions = {}): ModelProvider
       // identical to the other providers is the point: the brain must not know who answered.
       args.push(systemPrompt ? `${systemPrompt}\n\n---\n\n${prompt}` : prompt);
 
-      const { code, stdout, stderr } = await run(args, timeoutMs);
+      const result = await run(args, timeoutMs);
+      const { code, stdout, stderr } = result;
       let answer = '';
       try {
         answer = nodeFs.readFileSync(answerFile, 'utf8').trim();
@@ -532,7 +630,7 @@ export function codexProvider(options: CodexProviderOptions = {}): ModelProvider
       if (code !== 0 || !answer) {
         // The failure TEXT is returned, not swallowed, because `classifyFailure` reads it to
         // decide between backing off and abandoning this link.
-        const detail = (stderr || stdout || `codex exited ${code}`).slice(0, 400);
+        const detail = providerFailureText(result, stderr || stdout || `codex exited ${code}`).slice(0, 400);
         log('codex-failed', { code, detail });
         return { text: detail, isError: true };
       }
@@ -564,29 +662,15 @@ export function extractGrokAnswer(stdout: string): { text: string; error?: strin
   const trimmed = stdout.trim();
   if (!trimmed) return { text: '' };
 
-  // ConPTY is a terminal, not a byte pipe. Long `text` values are visually wrapped at the
-  // terminal width, which inserts raw CR/LF bytes *inside* the CLI's JSON string. JSON permits
-  // escaped `\n` there, never a literal newline, so removing only raw line breaks while inside
-  // a quoted string reverses terminal presentation without changing valid JSON semantics.
-  // Preserve escape state across the removed wrap: ConPTY can split immediately after `\`.
-  const undoTerminalStringWraps = (input: string): string => {
-    let output = '';
-    let inString = false;
-    let escaped = false;
-    for (let index = 0; index < input.length; index += 1) {
-      const ch = input[index];
-      if (inString && (ch === '\r' || ch === '\n')) continue;
-      output += ch;
-      if (escaped) { escaped = false; continue; }
-      if (ch === '\\' && inString) { escaped = true; continue; }
-      if (ch === '"') inString = !inString;
-    }
-    return output;
-  };
-
   const fromObject = (value: Record<string, unknown>): { text: string; error?: string } => {
     if (value.type === 'error' && typeof value.message === 'string') {
       return { text: '', error: value.message };
+    }
+    // A cancelled Grok turn is an explicit provider failure, not an empty answer and not the
+    // raw JSON envelope. Returning the envelope used to send a known provider cancellation into
+    // parsePlan, where it was logged as malformed and bought a repair call that could not help.
+    if (typeof value.text === 'string' && !value.text.trim() && value.stopReason === 'cancelled') {
+      return { text: '', error: 'cancelled' };
     }
     // With --json-schema Grok may emit the structured answer directly, without a `text`
     // envelope. Treating this as an unknown event falls through to the original ConPTY bytes,
@@ -627,8 +711,7 @@ export function extractGrokAnswer(stdout: string): { text: string; error?: strin
         depth -= 1;
         if (depth === 0) {
           try {
-            const candidate = undoTerminalStringWraps(trimmed.slice(i, j + 1));
-            const parsed = fromObject(JSON.parse(candidate) as Record<string, unknown>);
+            const parsed = fromObject(JSON.parse(trimmed.slice(i, j + 1)) as Record<string, unknown>);
             if (parsed.error) return parsed;          // an error is decisive; stop at once
             if (parsed.text) best = parsed;            // otherwise keep the LAST answer seen
           } catch { /* not an object we understand; keep scanning */ }
@@ -651,7 +734,7 @@ export function extractGrokAnswer(stdout: string): { text: string; error?: strin
       const inner = text.trim();
       if (!inner.startsWith('{')) break;
       try {
-        const value = JSON.parse(undoTerminalStringWraps(inner)) as Record<string, unknown>;
+        const value = JSON.parse(inner) as Record<string, unknown>;
         if (Array.isArray(value.actions) && typeof value.done === 'boolean') break;
         const parsed = fromObject(value);
         if (parsed.error) return parsed;
@@ -716,13 +799,22 @@ export function resolveGrokCommand(explicit?: string): string {
   return exe;
 }
 
-export type GrokProviderOptions = {
+export type GrokProviderOptions = ProviderStallOptions & {
   command?: string;
   model?: string;
   cwd?: string;
   timeoutMs?: number;
   log?: (event: string, data?: unknown) => void;
 };
+
+/** Build a one-shot Grok invocation, keeping every CLI option before the `-p` prompt boundary. */
+export function buildGrokArgs(prompt: string, responseSchema?: unknown, model?: string): string[] {
+  const args = ['--output-format', 'json', '--always-approve'];
+  if (responseSchema) args.push('--json-schema', JSON.stringify(responseSchema));
+  if (model) args.push('--model', model);
+  args.push('-p', prompt);
+  return args;
+}
 
 /**
  * The xAI Grok CLI as a provider — the third vendor, and the one that makes the bus genuinely
@@ -751,7 +843,16 @@ export function grokProvider(options: GrokProviderOptions = {}): ModelProvider {
       ...(userHome && !process.env.HOME ? { HOME: userHome } : {}),
       ...(grokHome ? { GROK_HOME: grokHome } : {})
     };
-    return runProcess(command, args, { cwd, timeoutMs, windowsHide: hideWindows(), env });
+    return runProcess(command, args, providerRunOptions({
+      cwd,
+      timeoutMs,
+      windowsHide: hideWindows(),
+      env,
+      stallMs: options.stallMs,
+      stallLedger: options.stallLedger,
+      stallSeat: options.stallSeat,
+      log
+    }));
   }
 
   return {
@@ -775,15 +876,14 @@ export function grokProvider(options: GrokProviderOptions = {}): ModelProvider {
       // This grants unattended tool execution, and that is the design: seats have full
       // functionality in their workdir. The boundary that keeps it safe is the WORKDIR plus git,
       // not a prompt telling a capable agent it is powerless.
-      const args = ['-p', systemPrompt ? `${systemPrompt}\n\n---\n\n${prompt}` : prompt,
-                    '--output-format', 'json', '--always-approve'];
       // Constrain decoding when the caller says what shape it needs. This is the whole reason
       // the grok seat can be trusted with structured work: the CLI enforces the schema, so
       // "reply with only JSON" stops being a request the model may decline.
-      if (responseSchema) args.push('--json-schema', JSON.stringify(responseSchema));
-      if (options.model) args.push('--model', options.model);
+      const combinedPrompt = systemPrompt ? `${systemPrompt}\n\n---\n\n${prompt}` : prompt;
+      const args = buildGrokArgs(combinedPrompt, responseSchema, options.model);
 
-      const { code, stdout, stderr } = await run(args, timeoutMs);
+      const result = await run(args, timeoutMs);
+      const { code, stdout, stderr } = result;
       const { text, error } = extractGrokAnswer(stdout);
 
       // Diagnostic, not a fix. Three parser rewrites today were aimed at shapes I reconstructed
@@ -803,7 +903,7 @@ export function grokProvider(options: GrokProviderOptions = {}): ModelProvider {
       if (error || code !== 0 || !text.trim()) {
         // The failure TEXT is returned rather than swallowed: `classifyFailure` reads it to tell
         // "not signed in" (auth - fall through now) from a rate limit (retry this same link).
-        const detail = (error || stderr || stdout || `grok exited ${code}`).slice(0, 400);
+        const detail = (error || providerFailureText(result, stderr || stdout || `grok exited ${code}`)).slice(0, 400);
         log('grok-failed', { code, detail });
         return { text: detail, isError: true };
       }
@@ -814,7 +914,7 @@ export function grokProvider(options: GrokProviderOptions = {}): ModelProvider {
 
 // ---------------------------------------------------------------------------
 
-export type ResolveOptions = {
+export type ResolveOptions = ProviderStallOptions & {
   kind?: ProviderKind;
   cli?: CliProviderOptions;
   sdk?: SdkProviderOptions;
@@ -830,13 +930,14 @@ export type ResolveOptions = {
  */
 export function resolveProvider(options: ResolveOptions = {}): ModelProvider {
   const kind = options.kind ?? (process.env.PORTABLE_AI_BUS_PROVIDER as ProviderKind | undefined) ?? 'cli';
-  if (kind === 'cli') return cliProvider(options.cli);
+  const inherited = { stallLedger: options.stallLedger, stallSeat: options.stallSeat, stallMs: options.stallMs };
+  if (kind === 'cli') return cliProvider({ ...options.cli, ...inheritStall(options.cli, inherited) });
   if (kind === 'api' || kind === 'oauth') return sdkProvider(kind, options.sdk);
-  if (kind === 'codex') return codexProvider(options.codex);
-  if (kind === 'grok') return grokProvider(options.grok);
+  if (kind === 'codex') return codexProvider({ ...options.codex, ...inheritStall(options.codex, inherited) });
+  if (kind === 'grok') return grokProvider({ ...options.grok, ...inheritStall(options.grok, inherited) });
   if (kind === 'exec') {
     if (!options.exec) throw new Error('provider "exec" needs { command, args }');
-    return execProvider(options.exec);
+    return execProvider({ ...options.exec, ...inheritStall(options.exec, inherited) });
   }
   throw new Error(`unknown provider "${kind}" - expected cli, codex, api, oauth, or exec`);
 }
@@ -850,11 +951,19 @@ export function resolveProvider(options: ResolveOptions = {}): ModelProvider {
  */
 export function resolveChain(
   configs: ResolveOptions[],
-  chainOptions?: { log?: (event: string, data?: unknown) => void }
+  chainOptions?: import('./chain').ChainOptions & ProviderStallOptions
 ) {
   if (configs.length === 0) throw new Error('resolveChain needs at least one provider config');
   // Imported lazily so `providers.ts` stays usable on its own and the two modules do not form
   // an import cycle.
   const { chainProviders } = require('./chain') as typeof import('./chain');
-  return chainProviders(configs.map((config) => resolveProvider(config)), chainOptions);
+  return chainProviders(
+    configs.map((config) => resolveProvider({
+      ...config,
+      stallLedger: config.stallLedger ?? chainOptions?.stallLedger,
+      stallSeat: config.stallSeat ?? chainOptions?.stallSeat,
+      stallMs: config.stallMs ?? chainOptions?.stallMs
+    })),
+    chainOptions
+  );
 }

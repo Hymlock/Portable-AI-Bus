@@ -1,5 +1,10 @@
 const assert = require('node:assert/strict');
+const { execFileSync } = require('node:child_process');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const test = require('node:test');
+require('./helpers/require-fresh-dist')();
 const { guardStagedPaths, coveredBy, formatGuardResult } = require('../dist/claim-guard.js');
 
 const claims = {
@@ -7,6 +12,29 @@ const claims = {
   grok: [{ path: 'src/brain/brains' }, { path: 'tests' }],
   codex: [{ path: 'src/brain/auth' }]
 };
+
+test('durable workspace claims bind to the actual repository and filesystem identity', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'claim-roots-'));
+  try {
+    const repo = path.join(root, 'project');
+    fs.mkdirSync(path.join(repo, 'src'), { recursive: true });
+    const target = path.join(repo, 'src', 'owned.ts');
+    fs.writeFileSync(target, 'export {};');
+    const info = fs.statSync(target, { bigint: true });
+    const claim = { root, path: 'project/src/owned.ts', identity: `filesystem-v1:${info.dev}:${info.ino}` };
+    assert.equal(guardStagedPaths('codex', ['src/owned.ts'], { codex: [claim] }, { repoRoot: repo }).ok, true);
+    assert.equal(guardStagedPaths('codex', ['src/owned.ts'], { codex: [{ ...claim, identity: 'filesystem-v1:0:0' }] }, { repoRoot: repo }).ok, false);
+    const wrong = guardStagedPaths('grok', ['src/owned.ts'], { codex: [claim] }, { repoRoot: repo });
+    assert.match(wrong.violations[0].reason, /claimed by codex/);
+    const other = path.join(root, 'other');
+    fs.mkdirSync(path.join(other, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(other, 'src', 'owned.ts'), 'export {};');
+    assert.equal(guardStagedPaths('codex', ['src/owned.ts'], { codex: [claim] }, { repoRoot: other }).ok, false);
+    assert.equal(guardStagedPaths('codex', ['src/owned.ts'], { codex: [{ root, path: 'project/src' }] }, { repoRoot: repo }).ok, true);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test('reproduces the real incident: claude staging grok files is refused', () => {
   // Verbatim from commit 5af3b1c, which swept grok's work into a claude commit about baton
@@ -71,4 +99,17 @@ test('the refusal message says what to do instead', () => {
 test('a seat with no claims can commit nothing but shared paths', () => {
   const result = guardStagedPaths('hymlock', ['src/brain/chain.ts'], claims);
   assert.equal(result.ok, false, 'no claims means no ownership, not blanket permission');
+});
+
+test('installed hook refuses to guess the active seat assignment', () => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-bus-claim-hook-'));
+  fs.mkdirSync(path.join(repo, '.git'), { recursive: true });
+  execFileSync(process.execPath, [
+    path.join(__dirname, '..', 'scripts', 'claim-guard-cli.js'),
+    '--root', repo, '--repo', repo, '--seat', 'codex', '--install-hook'
+  ]);
+  const hook = fs.readFileSync(path.join(repo, '.git', 'hooks', 'pre-commit'), 'utf8');
+  assert.match(hook, /BUS_SEAT names the assignment/);
+  assert.doesNotMatch(hook, /BUS_SEAT=/,
+    'install-time seat must not become a default identity for future commits');
 });

@@ -87,7 +87,7 @@ Hymlock approved the direction, so this is no longer a recommendation. What ship
 | `brain/runner.ts` | **the wake loop** — drain, wake, act, loop. Never exits on `done` |
 | `brain/bus-client.ts` | binds the runner to the harness **in process**, via `waitForMailbox` / `callSeatTool` |
 | `brain/cli.ts` | staged as `.ai-bus/bin/brain/cli.js`; long-lived wake runner plus echo brain |
-| `brains/agent-seat.js` | packaged project-neutral brain with a required cross-vendor provider chain |
+| `brains/agent-seat.js` | packaged project-neutral brain with seat/vendor identity enforcement |
 
 ```bash
 node .ai-bus/scripts/bus-up.js --root . --console grok
@@ -132,11 +132,48 @@ It woke on mail, reported, and kept running — which is the thing a chat sessio
 - **Graceful stop** on SIGINT/SIGTERM, with `brain.stop()` called.
 - **Echo-on-receipt is the default brain's behaviour**, so a seat is never silent by accident.
 
-### Still owed
+### Wake delivery is a transaction
 
-A **supervisor**. A crashed process is still a dead seat, and the reachability gap stands: an
-agent that dies is unreachable by any route the bus provides, because the route runs through the
-dead thing. The runner survives *brain* errors; it cannot survive its own process being killed.
+For transactional clients the runner peeks the oldest unread message without consuming it,
+presents it to the model, executes the plan, and acknowledges the message only after a usable
+result. `retainMessages` aborts that commit boundary. This is why one sequence can appear in
+several wake records without being a second send.
+
+Unusable results consume a per-message poison budget and eventually park the original record.
+Claim conflicts are different: the action executor reports them as retriable `BLOCKED`, the
+runner backs off, and `maxBlockedAttempts` advances without touching the poison counter. Either
+limit can park a record so FIFO delivery is no longer wedged; parking preserves the record and
+reason for explicit operator requeue.
+
+Successful actions before a later refusal enter a process-local committed-action journal keyed
+by message and stable action identity. Retrying retained mail skips those entries, preventing a
+second send or mutation. Committing or parking the message settles the journal.
+
+`done: false` creates `openWork`, which is supplied to immediate continuation wakes even after
+the assigning message has committed. This state deliberately belongs to the running process:
+completion/exhaustion clears it, and a RESTART drops it rather than pretending volatile model
+context is durable.
+
+### A live process must also be able to hear
+
+Listen failures back off and retry through a complete lease-stale interval, allowing a restarted
+brain to wait out its predecessor's lease. Terminal failure or exhaustion of that recovery
+window exits the process. The supervisor can then replace it instead of accepting an alive but
+deaf brain as progress. Restarts are burst-bounded, followed by a lease-length cooldown and a
+fresh burst; this avoids both hot loops and permanent abandonment.
+
+The supervisor also compares each live brain's loaded-code marker with the current dist tree.
+A `stale-code` line is evidence that a process predates the build, but it never triggers an
+automatic restart: liveness supervision does not guess whether an operator wants a code rollout.
+The same condition is persisted to `.ai-bus/runtime/stale-code.json` and repeated on the
+`bus-tick` line, because a warning that lives only in `bus-supervise.log` is a detector whose
+only sink is a file nobody is reading.
+
+### Supervisor now built
+
+The original reachability gap is closed by `scripts/bus-supervise.js`: a crashed process is
+detected and replaced under the bounded burst policy above. The runner still cannot survive its
+own process being killed; recovery belongs to the independently running supervisor.
 
 ## Original recommendation (kept for the reasoning)
 
@@ -152,17 +189,17 @@ dead thing. The runner survives *brain* errors; it cannot survive its own proces
 The mailbox, claims, baton and lease machinery all survive unchanged. What changes is **who runs
 the agent**: a process we own, instead of a chat UI whose turn boundary we cannot control.
 
-> **Honest caveat.** This does not make an agent immortal — a crashed process is still a dead
-> seat, and today's reachability gap stands: an agent that dies is unreachable by any means the
-> bus provides, because the route to it runs through the dead thing. A supervisor that restarts
-> a dead brain is a separate, smaller piece of work, and worth doing at the same time.
+> **Historical caveat (since resolved).** At recommendation time a crashed process was still a
+> dead seat. `scripts/bus-supervise.js` now owns that separate recovery boundary; the caveat is
+> retained here because it explains why supervision is intentionally outside the runner.
 
 ---
 
-## Provider chains — a seat outlives any one vendor's quota
+## Provider chains — same-vendor transport failover without identity fraud
 
-*(Hymlock's constraint: "What I do not want is a required specific model seat such as the Codex
-CLI that only works with Codex, and if we run out of tokens on Codex our bus has stopped.")*
+The Bus can continue through other funded seats when one vendor is exhausted. The exhausted
+seat itself must not impersonate another model: Grok remains xAI, Codex remains OpenAI, and
+Claude remains Anthropic.
 
 `resolveProvider` let a seat **choose** a provider. That was not enough — a seat still dies when
 its one provider is exhausted. `resolveChain` lets a seat **degrade**:
@@ -175,7 +212,8 @@ const provider = resolveChain([
 ]);
 ```
 
-A seat backed by three links survives two of them being spent.
+A Claude seat may use several Anthropic authentication transports. Cross-vendor chains remain a
+library capability for explicitly neutral callers, but the packaged named-seat brain rejects them.
 
 ### Two distinctions that carry the design
 
@@ -187,18 +225,14 @@ trigger `reassignBaton`.
 **An empty answer is a failure.** A silent success and a broken provider are indistinguishable
 downstream, and misreading silence is the mistake this project has made repeatedly.
 
-### Falling through is the default, deliberately
+### Falling through is constrained by seat identity
 
-Any classified failure — `quota`, `rate-limit`, `auth`, `unavailable`, or an unrecognised
-`error` — advances to the next link. **Being wrong about the reason costs one extra attempt.
-Being wrong about whether to continue costs the seat.** `fallThroughOn` can narrow it where a
-request would fail identically everywhere.
+Within an allowed same-vendor chain, classified failures may advance to the next transport.
+When that vendor is exhausted, the seat reports exhaustion and can hand off the baton to another
+seat. It never silently consumes that other seat's wallet.
 
 Twelve tests, and the fall-through was **verified by sabotage**: replacing it with `break` turns
 three of them red.
 
-> **A gap this document should not hide.** The chain is validated for at least two distinct
-> provider *kinds*, not two distinct **vendors**. `PORTABLE_AI_BUS_PROVIDER_CHAIN=oauth,api`
-> satisfies the check and is entirely Anthropic, so a single exhausted account still stops that
-> seat — the exact failure the section above claims to prevent. Default chains do cross vendors;
-> overrides are on trust.
+The packaged brain validates every configured provider kind against the seat's vendor and fails
+closed on a mismatch. Tests cover all three defaults and adversarial cross-vendor overrides.

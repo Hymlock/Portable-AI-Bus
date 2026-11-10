@@ -21,9 +21,10 @@
  * would burn tokens and hide the fault. Liveness is the one condition a supervisor can judge
  * without guessing.
  *
- * It gives up after `--max-restarts` per seat (default 5). A brain that dies immediately and
- * repeatedly has a real problem, and an infinite restart loop turns that into a token fire while
- * looking, from outside, exactly like a healthy bus.
+ * It pauses after `--max-restarts` per seat (default 5) for one harness lease-stale interval,
+ * then opens a fresh bounded burst. A brain that dies immediately and repeatedly has a real
+ * problem, but permanent give-up is itself an unattended dead seat; the cooldown prevents both
+ * a hot token-burning loop and permanent silence.
  *
  * ## Run it detached, not inside a job
  *
@@ -38,9 +39,11 @@
  *   NOT   inside PowerShell Start-Job, or any harness that reaps its process tree
  */
 
-const { spawn, spawnSync } = require('node:child_process');
+const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
+const { listNodeProcesses, processesForRoot, samePath } = require('./bus-processes');
+const { DEFAULT_LEASE_STALE_MS } = require('../dist/harness');
 
 const REPO = path.resolve(__dirname, '..');
 const DIST = fs.existsSync(path.join(REPO, 'dist', 'brain', 'cli.js'))
@@ -60,23 +63,232 @@ const maxRestarts = Number(option('--max-restarts', '5'));
 const brainFile = path.resolve(option('--brain', path.join(REPO, 'brains', 'agent-seat.js')));
 
 const restarts = new Map(seats.map((s) => [s, 0]));
+const healthySince = new Map();
+const budgetExhaustedAt = new Map();
+const staleWarnings = new Map();
 const stamp = () => new Date().toISOString().slice(11, 19);
 
-/** Seats with a live brain process. Windows-only detection; elsewhere assume healthy. */
-function liveSeats() {
-  if (process.platform !== 'win32') return new Set(seats);
-  const out = spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command',
-    "Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | " +
-    "Where-Object { $_.CommandLine -match 'brain[\\\\/]cli\\.js' } | " +
-    "ForEach-Object { ($_.CommandLine -split '--seat ')[1].Split(' ')[0] }"
-  ], { encoding: 'utf8', windowsHide: true });
-  if (out.status !== 0) {
+function latestTreeMtimeMs(directory) {
+  let latest = 0;
+  let entries;
+  try { entries = fs.readdirSync(directory, { withFileTypes: true }); } catch { return 0; }
+  for (const entry of entries) {
+    const item = path.join(directory, entry.name);
+    if (entry.isDirectory()) latest = Math.max(latest, latestTreeMtimeMs(item));
+    else if (entry.isFile()) {
+      try { latest = Math.max(latest, fs.statSync(item).mtimeMs); } catch { /* changed mid-sweep */ }
+    }
+  }
+  return latest;
+}
+
+function staleCodeWarning({ coordinationRoot, seat, pid, distRoot = DIST }) {
+  const markerFile = path.join(coordinationRoot, '.ai-bus', 'runtime', `brain-${seat}.code.json`);
+  let marker;
+  try { marker = JSON.parse(fs.readFileSync(markerFile, 'utf8')); } catch {
+    return `${seat} stale-code: running brain has no readable loaded-code marker`;
+  }
+  if (marker.pid !== pid) {
+    return `${seat} stale-code: loaded-code marker belongs to pid ${marker.pid ?? 'unknown'}, running pid is ${pid}`;
+  }
+  if (!samePath(marker.distRoot, distRoot)) {
+    return `${seat} stale-code: loaded dist ${marker.distRoot ?? 'unknown'}, expected ${distRoot}`;
+  }
+  const currentDistMtimeMs = latestTreeMtimeMs(distRoot);
+  if (!Number.isFinite(marker.loadedDistMtimeMs) || currentDistMtimeMs > marker.loadedDistMtimeMs) {
+    return `${seat} stale-code: dist changed after pid ${pid} loaded it ` +
+      `(loaded=${marker.loadedDistMtimeMs ?? 'unknown'}, current=${currentDistMtimeMs})`;
+  }
+  return undefined;
+}
+
+/**
+ * Item 9: the detector already existed. Its only sink was bus-supervise.log, which nobody
+ * reads. Persist the current stale set next to the other runtime signals so bus-tick (the
+ * operator wake line) and anything else watching disk can see it.
+ *
+ * This is deliberately not a mailbox send. send() always moves or steals the baton except
+ * on a delayed ack, and delayed acks are skipped by the runner. Mailing "you are stale"
+ * would either look like progress (item 8) or seize leadership. A file plus the tick line
+ * is the sink an operator actually receives.
+ */
+function staleCodeNoticePath(coordinationRoot) {
+  return path.join(coordinationRoot, '.ai-bus', 'runtime', 'stale-code.json');
+}
+
+function emptyStaleCodeNotices() {
+  return { version: 1, autoRestart: false, seats: [] };
+}
+
+function readStaleCodeNotices(coordinationRoot) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(staleCodeNoticePath(coordinationRoot), 'utf8'));
+    if (!parsed || parsed.version !== 1 || !Array.isArray(parsed.seats)) return emptyStaleCodeNotices();
+    return {
+      version: 1,
+      autoRestart: false,
+      updatedAt: typeof parsed.updatedAt === 'string' ? parsed.updatedAt : undefined,
+      seats: parsed.seats.filter((item) => item && typeof item.seat === 'string' && typeof item.warning === 'string')
+    };
+  } catch {
+    return emptyStaleCodeNotices();
+  }
+}
+
+function writeStaleCodeNotices(coordinationRoot, seats, now = () => new Date().toISOString()) {
+  const file = staleCodeNoticePath(coordinationRoot);
+  if (!Array.isArray(seats) || seats.length === 0) {
+    try { fs.unlinkSync(file); } catch { /* absent is the green case */ }
+    return undefined;
+  }
+  const snapshot = {
+    version: 1,
+    autoRestart: false,
+    updatedAt: now(),
+    seats: [...seats].sort((left, right) => left.seat.localeCompare(right.seat))
+  };
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, `${JSON.stringify(snapshot, null, 2)}\n`, 'utf8');
+  return snapshot;
+}
+
+/**
+ * ITEM 22: AN ABSENT SEAT IS NOT NOTICED.
+ *
+ * Measured 2026-08-19. grok's brain died on every wake for hours. This supervisor was running
+ * the whole time and behaved exactly as designed: it restarted the seat, hit the restart
+ * budget, and settled into cool-down-and-retry. Its only sink for that was `console.log`.
+ *
+ * Nobody was reading the console. The seat stayed absent, and the operator-visible signals -
+ * mailbox state, baton, `status` - all looked normal, because a seat with no brain still has a
+ * mailbox and can still hold the baton. The coordinator misdiagnosed it twice, first as "out
+ * of credits" and then as "working", before running `bus-restart` by hand and being told
+ * `missing brains=grok` in one line.
+ *
+ * This is item 9 again - a detector whose only sink is a log - in a path item 9 never covered.
+ * The stale-code notice above is the shape the project already settled on for exactly this,
+ * so a dead seat gets the same durable treatment rather than a second invented mechanism.
+ *
+ * The notice is written when the restart budget is EXHAUSTED, not on the first death: a seat
+ * that dies once and comes back is the supervisor working, and crying about it is how a
+ * signal becomes noise. It clears the moment the seat is live again, because a stale alarm
+ * about a recovered seat is worse than none - it teaches people to ignore the file.
+ */
+/**
+ * ITEM 25: only an OBSERVATION clears a liveness alarm. An assumption never does.
+ *
+ * Stated as a predicate rather than an inline `!running.assumedLive` so the rule is nameable
+ * and testable, and so the next person adding a signal to this sweep has something to reuse
+ * instead of re-deriving it. I derived it wrong once already.
+ */
+function clearsDeadSeatAlarm(running) {
+  /**
+   * grok r34: the NAME was positive and the IMPLEMENTATION was still negative.
+   *
+   * `Boolean(running) && running.assumedLive !== true` clears on an empty object, on a
+   * seat-only record, on `assumedLive: undefined`, on the STRING 'true', on `1`, and on
+   * `assumedLive: false` with no pid. Fail-open, again, in the function written to stop
+   * exactly that.
+   *
+   * Today's producers never emit those shapes - the success path always carries a pid and
+   * never sets assumedLive - so this was not live. That is not a defence. grok's words: "Still
+   * the wrong quantity. The next signal on this sweep re-derives it." A negative test asks
+   * "have I been told this is fake?"; the question is "have I SEEN it alive?", and only a real
+   * pid answers that.
+   */
+  return Boolean(running)
+    && running.assumedLive !== true
+    && Number.isSafeInteger(running.pid)
+    && running.pid >= 1;
+}
+
+/**
+ * A SPENT seat is alive and cannot think - written by the brain's exhaustion handler
+ * (src/brain/cli.ts recordSpentSeat). Read here so one place owns "which seats are unusable",
+ * whether the cause is a missing process (dead) or a missing wallet (spent).
+ */
+function readSpentSeatNotices(coordinationRoot) {
+  try {
+    const file = path.join(coordinationRoot, '.ai-bus', 'runtime', 'spent-seats.json');
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+    return Array.isArray(parsed && parsed.seats) ? parsed : { seats: [] };
+  } catch {
+    return { seats: [] };
+  }
+}
+
+function deadSeatNoticePath(coordinationRoot) {
+  return path.join(coordinationRoot, '.ai-bus', 'runtime', 'dead-seats.json');
+}
+
+function readDeadSeatNotices(coordinationRoot) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(deadSeatNoticePath(coordinationRoot), 'utf8'));
+    if (!parsed || parsed.version !== 1 || !Array.isArray(parsed.seats)) return { version: 1, seats: [] };
+    return {
+      version: 1,
+      updatedAt: typeof parsed.updatedAt === 'string' ? parsed.updatedAt : undefined,
+      seats: parsed.seats.filter((item) => item && typeof item.seat === 'string')
+    };
+  } catch {
+    return { version: 1, seats: [] };
+  }
+}
+
+/**
+ * `dead` is a Map of seat -> reason (or undefined to clear). Seats absent from the map keep
+ * whatever was recorded, for the same reason syncStaleCodeNotices does: inventing a clear for
+ * a seat nobody looked at hides a real condition.
+ */
+function syncDeadSeatNotices(coordinationRoot, dead, now = () => new Date().toISOString()) {
+  const current = new Map(readDeadSeatNotices(coordinationRoot).seats.map((item) => [item.seat, item]));
+  for (const [seat, reason] of dead) {
+    if (reason) current.set(seat, { seat, reason, at: current.get(seat)?.at ?? now() });
+    else current.delete(seat);
+  }
+  const file = deadSeatNoticePath(coordinationRoot);
+  if (current.size === 0) {
+    try { fs.unlinkSync(file); } catch { /* absent is the green case */ }
+    return { version: 1, seats: [] };
+  }
+  const snapshot = {
+    version: 1,
+    updatedAt: now(),
+    seats: [...current.values()].sort((left, right) => left.seat.localeCompare(right.seat))
+  };
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, `${JSON.stringify(snapshot, null, 2)}\n`, 'utf8');
+  return snapshot;
+}
+
+/**
+ * Merge just-checked seats into the durable notice. Seats we did not inspect (assumedLive)
+ * keep whatever was already recorded; inventing a clear would hide a real stale condition.
+ */
+function syncStaleCodeNotices(coordinationRoot, checked, now = () => new Date().toISOString()) {
+  const current = new Map(readStaleCodeNotices(coordinationRoot).seats.map((item) => [item.seat, item]));
+  for (const [seat, warning] of checked) {
+    if (warning) current.set(seat, { seat, warning, at: now() });
+    else current.delete(seat);
+  }
+  return writeStaleCodeNotices(coordinationRoot, [...current.values()], now);
+}
+
+/** Seats with the exact live brain process this supervisor owns. */
+function liveBrains() {
+  try {
+    return new Map(processesForRoot(listNodeProcesses(), root)
+      .filter((item) => item.type === 'brain'
+        && samePath(item.workdir, workdir)
+        && samePath(item.brain, brainFile))
+      .filter((item) => item.seat)
+      .map((item) => [item.seat, item]));
+  } catch {
     // Fail CLOSED: an unreadable process list must not be read as "everything died", or the
     // supervisor becomes the outage it exists to prevent.
     console.log(`tick ${stamp()} process list unreadable - assuming all seats live`);
-    return new Set(seats);
+    return new Map(seats.map((seat) => [seat, { seat, assumedLive: true }]));
   }
-  return new Set(out.stdout.split(/\r?\n/).map((s) => s.trim()).filter(Boolean));
 }
 
 function startBrain(seat) {
@@ -92,24 +304,105 @@ function startBrain(seat) {
 }
 
 function sweep() {
-  const live = liveSeats();
+  const live = liveBrains();
+  const checkedStale = new Map();
+  // Item 22: what this sweep learned about ABSENCE, written durably at the end of the tick.
+  const checkedDead = new Map();
   for (const seat of seats) {
-    if (live.has(seat)) continue;
-    const count = restarts.get(seat) ?? 0;
-    if (count >= maxRestarts) {
-      // Said once per sweep on purpose. A seat that cannot stay up is a problem for a human,
-      // and the supervisor must not quietly paper over it.
-      console.log(`tick ${stamp()} ${seat} DEAD and past ${maxRestarts} restarts - NOT restarting. Needs a human.`);
+    const running = live.get(seat);
+    if (running) {
+      /**
+       * ITEM 25. This was `checkedDead.set(seat, undefined)` unconditionally, and grok found
+       * it in r29(d): when the process list is unreadable, liveBrains() returns EVERY seat as
+       * `{ assumedLive: true }` - deliberately failing CLOSED so the supervisor does not read
+       * "I cannot see" as "everything died" and restart the world.
+       *
+       * My line then read that assumption as observation and CLEARED the durable alarm. So
+       * restarts failed closed while the notice failed OPEN, in the same tick, on the same
+       * data: a seat that really was dead had its DEAD-SEAT notice erased by a process list
+       * the supervisor could not even read.
+       *
+       * The guard immediately below already does this correctly for stale-code, and I walked
+       * straight past it. `assumedLive` means WE DO NOT KNOW, and "we do not know" must never
+       * clear an alarm - it can only decline to raise one.
+       */
+      if (clearsDeadSeatAlarm(running)) checkedDead.set(seat, undefined);
+      const firstHealthyAt = healthySince.get(seat) ?? Date.now();
+      healthySince.set(seat, firstHealthyAt);
+      if ((restarts.get(seat) ?? 0) > 0 && Date.now() - firstHealthyAt >= DEFAULT_LEASE_STALE_MS) {
+        restarts.set(seat, 0);
+        budgetExhaustedAt.delete(seat);
+        console.log(`tick ${stamp()} ${seat} stayed live through one lease-stale window - restart budget reset.`);
+      }
+      if (!running.assumedLive) {
+        const warning = staleCodeWarning({ coordinationRoot: root, seat, pid: running.pid });
+        if (warning && staleWarnings.get(seat) !== warning) console.log(`tick ${stamp()} ${warning} - NOT restarting.`);
+        if (warning) staleWarnings.set(seat, warning);
+        else staleWarnings.delete(seat);
+        checkedStale.set(seat, warning);
+      }
       continue;
     }
+    healthySince.delete(seat);
+    // A dead seat is not running stale code; it is not running. Drop its notice so a corpse
+    // cannot keep the operator-facing tick red after the process is gone.
+    checkedStale.set(seat, undefined);
+    const count = restarts.get(seat) ?? 0;
+    if (count >= maxRestarts) {
+      const exhaustedAt = budgetExhaustedAt.get(seat) ?? Date.now();
+      budgetExhaustedAt.set(seat, exhaustedAt);
+      if (Date.now() - exhaustedAt < DEFAULT_LEASE_STALE_MS) {
+        console.log(`tick ${stamp()} ${seat} DEAD after ${maxRestarts} restarts - cooling down, then retrying.`);
+        // Item 22: the durable sink. Until this, that console line was the ONLY record that a
+        // seat was gone, and nobody was reading it.
+        checkedDead.set(seat, `no brain process; ${maxRestarts} restarts failed, cooling down and retrying`);
+        continue;
+      }
+      // Permanent give-up is another silent dead seat. Open a fresh bounded burst after one
+      // harness lease-stale interval, avoiding both a hot restart loop and permanent deafness.
+      restarts.set(seat, 0);
+      budgetExhaustedAt.delete(seat);
+      console.log(`tick ${stamp()} ${seat} restart cooldown elapsed - opening a fresh budget.`);
+    }
     const pid = startBrain(seat);
-    restarts.set(seat, count + 1);
-    console.log(`tick ${stamp()} ${seat} was dead - restarted pid ${pid} (${count + 1}/${maxRestarts})`);
+    const nextCount = (restarts.get(seat) ?? 0) + 1;
+    restarts.set(seat, nextCount);
+    console.log(`tick ${stamp()} ${seat} was dead - restarted pid ${pid} (${nextCount}/${maxRestarts})`);
+  }
+  syncStaleCodeNotices(root, checkedStale);
+  syncDeadSeatNotices(root, checkedDead);
+}
+
+if (require.main === module) {
+  console.log(`supervising ${seats.join(', ')} every ${intervalMs / 1000}s (max ${maxRestarts} restarts each)`);
+  console.log(`root ${root}`);
+  console.log(`workdir ${workdir}`);
+  sweep();
+  /**
+   * `--once` runs a single sweep and exits, mirroring bus-tick.
+   *
+   * Added because grok's r34 named a real gap in my instrument rather than my code: the item-25
+   * tests exercise the PREDICATE, and "a sweep that kept the predicate and still cleared
+   * unconditionally would pass every author gate". That is true, and it can only be closed by
+   * driving the sweep itself.
+   *
+   * Useful outside the tests too - an operator can ask "what would the supervisor do right
+   * now?" without leaving a process running.
+   */
+  if (!process.argv.includes('--once')) {
+    setInterval(sweep, intervalMs);
   }
 }
 
-console.log(`supervising ${seats.join(', ')} every ${intervalMs / 1000}s (max ${maxRestarts} restarts each)`);
-console.log(`root ${root}`);
-console.log(`workdir ${workdir}`);
-sweep();
-setInterval(sweep, intervalMs);
+module.exports = { readSpentSeatNotices,
+  latestTreeMtimeMs,
+  staleCodeWarning,
+  staleCodeNoticePath,
+  readStaleCodeNotices,
+  writeStaleCodeNotices,
+  syncStaleCodeNotices,
+  deadSeatNoticePath,
+  readDeadSeatNotices,
+  syncDeadSeatNotices,
+  clearsDeadSeatAlarm
+};

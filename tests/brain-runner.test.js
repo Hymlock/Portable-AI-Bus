@@ -1,6 +1,8 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
+require('./helpers/require-fresh-dist')();
 const { runBrain } = require('../dist/brain/runner.js');
+const { createAgentBrain } = require('../dist/brain/brains/index.js');
 
 function makeBus({ script = [] } = {}) {
   const queue = script.slice();
@@ -86,6 +88,18 @@ test('a throwing brain does not kill the process', async () => {
   assert.equal(turns, 2, 'the seat stays attended and the next wake gets a fresh chance');
 });
 
+test('DELTA H: an exhausted listener escapes the runner so the process exits nonzero', async () => {
+  const { bus } = makeBus();
+  bus.listen = async () => { throw new Error('listen recovery exhausted'); };
+  const brain = { name: 'idle', async takeTurn() { return { done: true }; } };
+
+  await assert.rejects(
+    runBrain({ seat: 'claude', brain, bus, maxWakes: 2 }),
+    /listen recovery exhausted/,
+    'the runner must not translate deafness into an ordinary timeout or successful exit'
+  );
+});
+
 test('the per-wake budget caps a runaway brain without ending it', async () => {
   const { bus, sent } = makeBus({ script: [[msg(1, 'go')], [msg(2, 'go again')]] });
   const brain = {
@@ -145,6 +159,37 @@ test('a spent chain hands the baton off instead of going quiet', async () => {
   assert.equal(summary.stoppedBy, 'maxWakes', 'exhaustion must not kill the runner - credit may return');
 });
 
+test('ITEM 11: a broken chain does not hand the baton as spent', async () => {
+  const { bus } = makeBus({ script: [[msg(1, 'do work')]] });
+  const handoffs = [];
+  const events = [];
+  const brain = {
+    name: 'broken-transport',
+    async takeTurn() {
+      return {
+        done: true,
+        exhausted: false,
+        broken: true,
+        note: "BROKEN:ConPTY unavailable: Cannot find module 'node-pty'"
+      };
+    }
+  };
+  await runBrain({
+    seat: 'claude',
+    brain,
+    bus,
+    maxWakes: 1,
+    log: (event, data) => events.push({ event, data }),
+    onExhausted: async (info) => { handoffs.push(info); }
+  });
+
+  assert.equal(handoffs.length, 0, 'BROKEN must not invoke the spent-handoff');
+  const broken = events.find((entry) => entry.event === 'chain-broken');
+  assert.ok(broken);
+  assert.match(broken.data.error, /Cannot find module 'node-pty'/);
+  assert.equal(events.some((entry) => entry.event === 'chain-exhausted'), false);
+});
+
 test('a failing handoff handler does not take the runner with it', async () => {
   const { bus } = makeBus({ script: [[msg(1, 'go')]] });
   const brain = { name: 'broke', async takeTurn() { return { done: true, exhausted: true }; } };
@@ -153,4 +198,623 @@ test('a failing handoff handler does not take the runner with it', async () => {
     onExhausted: async () => { throw new Error('mailbox unreachable'); }
   });
   assert.equal(summary.stoppedBy, 'maxWakes', 'a broken handoff is not a reason to die');
+});
+
+function transactionalBus(message, injectOnAcknowledge, toolOverrides = {}) {
+  let unread = Array.isArray(message) ? message.slice() : message ? [message] : [];
+  const parked = [];
+  let acknowledgements = 0;
+  return {
+    get unread() { return unread.slice(); },
+    enqueue(message) { unread.push(message); },
+    get parked() { return parked.slice(); },
+    get acknowledgements() { return acknowledgements; },
+    client: {
+      async listen() { return unread.length ? 'mail' : 'timeout'; },
+      async peek() { return unread.slice(); },
+      async acknowledge(_seat, seqs) {
+        acknowledgements += 1;
+        if (injectOnAcknowledge) unread.push(injectOnAcknowledge);
+        const wanted = new Set(seqs);
+        const batch = seqs.map((seq) => unread.find((message) => message.seq === seq));
+        assert.equal(batch.every(Boolean), true, 'every acknowledged sequence must still be current');
+        unread = unread.filter((message) => !wanted.has(message.seq));
+        return batch;
+      },
+      async park(_seat, seq, reason) {
+        const index = unread.findIndex((message) => message.seq === seq);
+        if (index < 0) throw new Error(`message #${seq} is not unread`);
+        const [message] = unread.splice(index, 1);
+        const record = { ...message, parkedReason: reason };
+        parked.push(record);
+        return record;
+      },
+      async read() { throw new Error('transactional runner must not destructively read before the turn'); },
+      tools() {
+        return {
+          async send() { return { ok: true }; },
+          async status() { return { agents: ['claude', 'codex', 'grok'] }; },
+          async claim() { return {}; },
+          async release() { return {}; },
+          async runCapability() { return {}; },
+          async listCapabilities() { return []; },
+          ...toolOverrides
+        };
+      }
+    }
+  };
+}
+
+function oneReply(text) {
+  return {
+    kind: 'test',
+    async ask() { return { text, isError: false }; }
+  };
+}
+
+test('mail retained while a brain is down is presented on its first restarted wake without a trigger', async () => {
+  const retained = {
+    seq: 89, from: 'claude', to: 'codex', kind: 'task',
+    subject: 'arrived while down', body: 'drain me on restart'
+  };
+  const fixture = transactionalBus(retained);
+  const presented = [];
+  const restartedBrain = {
+    name: 'restarted',
+    async takeTurn(context) {
+      presented.push(...context.messages);
+      return { done: true, note: 'retained mail processed' };
+    }
+  };
+
+  // No enqueue and no synthetic listen result occurs after runBrain starts. The only wake source
+  // is the unread record that predates this runner process.
+  await runBrain({ seat: 'codex', brain: restartedBrain, bus: fixture.client, maxWakes: 1 });
+
+  assert.deepEqual(presented.map((message) => message.seq), [89],
+    'startup must reconcile the durable unread inbox before waiting for a new arrival');
+  assert.equal(fixture.unread.length, 0);
+  assert.equal(fixture.acknowledgements, 1);
+});
+
+test('a committed message is not presented again after the brain restarts', async () => {
+  const task = {
+    seq: 90, from: 'claude', to: 'codex', kind: 'task',
+    subject: 'consume once', body: 'do not replay me'
+  };
+  const fixture = transactionalBus(task);
+  const firstWake = [];
+  await runBrain({
+    seat: 'codex', bus: fixture.client, maxWakes: 1,
+    brain: {
+      name: 'first-process',
+      async takeTurn(context) {
+        firstWake.push(...context.messages);
+        return { done: true, note: 'committed' };
+      }
+    }
+  });
+
+  const restartedWake = [];
+  await runBrain({
+    seat: 'codex', bus: fixture.client, maxWakes: 1,
+    brain: {
+      name: 'restarted-process',
+      async takeTurn(context) {
+        restartedWake.push(...context.messages);
+        return { done: true };
+      }
+    }
+  });
+
+  assert.deepEqual(firstWake.map((message) => message.seq), [90]);
+  assert.deepEqual(restartedWake, [],
+    'restart reconciliation must use unread state, not indiscriminately replay mailbox history');
+  assert.equal(fixture.acknowledgements, 1,
+    'only the process that was actually presented the message may commit it');
+});
+
+test('a malformed model wake leaves its input unread, while a usable plan consumes it', async () => {
+  const task = { seq: 91, from: 'claude', to: 'codex', kind: 'task', subject: 'audit', body: 'inspect it' };
+
+  const malformedBus = transactionalBus(task);
+  const malformedBrain = createAgentBrain({
+    seat: 'codex', provider: oneReply('this is not a JSON plan'), maxRounds: 1
+  });
+  await runBrain({ seat: 'codex', brain: malformedBrain, bus: malformedBus.client, maxWakes: 1 });
+  assert.equal(malformedBus.unread.length, 1,
+    'parse failure must cost a retry, not destroy the task that paid for the wake');
+  assert.equal(malformedBus.acknowledgements, 0);
+
+  const goodBus = transactionalBus(task);
+  const goodBrain = createAgentBrain({
+    seat: 'codex',
+    provider: oneReply(JSON.stringify({
+      actions: [{ type: 'send', to: 'claude', kind: 'report', subject: 'result', body: 'verified' }],
+      done: true
+    })),
+    maxRounds: 1
+  });
+  await runBrain({ seat: 'codex', brain: goodBrain, bus: goodBus.client, maxWakes: 1 });
+  assert.equal(goodBus.unread.length, 0, 'a usable plan must commit the read');
+  assert.equal(goodBus.acknowledgements, 1,
+    'the inverse prevents a vacuous implementation that never consumes mail');
+
+  const late = { ...task, seq: 92, subject: 'arrived during model call' };
+  const racingBus = transactionalBus(task, late);
+  await runBrain({ seat: 'codex', brain: goodBrain, bus: racingBus.client, maxWakes: 1 });
+  assert.deepEqual(racingBus.unread.map((item) => item.seq), [92],
+    'committing the presented batch must not consume mail that arrived during the model call');
+});
+
+test('mail arriving during a stalled provider is received but remains unread after the presented wake commits', async () => {
+  const first = { seq: 201, from: 'claude', to: 'codex', kind: 'task', subject: 'presented', body: 'work' };
+  const late = { seq: 202, from: 'claude', to: 'codex', kind: 'task', subject: 'late', body: 'more work' };
+  const fixture = transactionalBus(first);
+  const events = [];
+  let releaseProvider;
+  let listenerRan;
+  const providerGate = new Promise((resolve) => { releaseProvider = resolve; });
+  const listenerGate = new Promise((resolve) => { listenerRan = resolve; });
+  let providerCalls = 0;
+  let activeProviders = 0;
+  let maxActiveProviders = 0;
+  const originalListen = fixture.client.listen;
+  let listeningCalls = 0;
+  fixture.client.listen = async (_seat, _seconds, afterSeq, signal) => {
+    listeningCalls += 1;
+    if (listeningCalls === 1) {
+      assert.equal(afterSeq, 201, 'the concurrent listener must skip the presented batch');
+      fixture.enqueue(late);
+      listenerRan();
+      return 'mail';
+    }
+    assert.equal(afterSeq, 202, 'the listener cursor advances without acknowledging late mail');
+    await new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }));
+    return 'timeout';
+  };
+  const brain = {
+    name: 'stalled',
+    async takeTurn() {
+      providerCalls += 1;
+      activeProviders += 1;
+      maxActiveProviders = Math.max(maxActiveProviders, activeProviders);
+      await providerGate;
+      activeProviders -= 1;
+      return { done: true, note: 'presented batch consumed' };
+    }
+  };
+
+  const running = runBrain({
+    seat: 'codex', brain, bus: fixture.client, maxWakes: 1, providerStallMs: 0,
+    log: (event, data) => events.push({ event, data })
+  });
+  await listenerGate;
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(fixture.unread.map((message) => message.seq), [201, 202],
+    'concurrent reception must be durable and non-destructive');
+  releaseProvider();
+  await running;
+
+  assert.equal(providerCalls, 1);
+  assert.equal(maxActiveProviders, 1, 'reception must never start another provider call');
+  assert.equal(fixture.acknowledgements, 1, 'the presented wake commits exactly once');
+  assert.deepEqual(fixture.unread.map((message) => message.seq), [202],
+    'mail received during the call belongs to the next transactional wake');
+  for (const event of ['provider-thinking', 'provider-stalled', 'stall-start', 'stall-resolution', 'provider-exited', 'seat-listening']) {
+    assert.equal(events.some((entry) => entry.event === event), true, `${event} must be explicit in logs`);
+  }
+  const resolution = events.find((entry) => entry.event === 'stall-resolution');
+  assert.equal(resolution.data.outcome, 'returned');
+  assert.equal(events.some((entry) => entry.event === 'chain-exhausted'), false,
+    'a stall that resolves is not exhaustion');
+  fixture.client.listen = originalListen;
+});
+
+test('every provider exit without a usable plan retains the presented batch', async () => {
+  const task = { seq: 101, from: 'claude', to: 'codex', kind: 'task', subject: 'retain me', body: 'work' };
+  const providers = [
+    { name: 'provider throw', provider: { kind: 'test', async ask() { throw new Error('transport died'); } } },
+    { name: 'error reply', provider: { kind: 'test', async ask() { return { text: 'failed', isError: true }; } } },
+    { name: 'empty reply', provider: { kind: 'test', async ask() { return { text: '', isError: false }; } } }
+  ];
+
+  for (const sample of providers) {
+    const fixture = transactionalBus(task);
+    const brain = createAgentBrain({ seat: 'codex', provider: sample.provider, maxRounds: 1 });
+    await runBrain({ seat: 'codex', brain, bus: fixture.client, maxWakes: 1 });
+    assert.deepEqual(fixture.unread.map((message) => message.seq), [101], sample.name);
+    assert.equal(fixture.acknowledgements, 0, sample.name);
+  }
+});
+
+test('a poison message is parked after its own bounded retry budget', async () => {
+  const poison = { seq: 111, from: 'claude', to: 'codex', kind: 'task', subject: 'poison', body: 'cannot parse' };
+  const fixture = transactionalBus(poison);
+  const events = [];
+  const brain = { name: 'broken', async takeTurn() { return { done: true, retainMessages: true, note: 'invalid plan' }; } };
+
+  await runBrain({
+    seat: 'codex', brain, bus: fixture.client, maxWakes: 4, maxMessageAttempts: 3,
+    log: (event, data) => events.push({ event, data })
+  });
+
+  assert.equal(fixture.unread.length, 0, 'the poison message must stop blocking the seat');
+  assert.equal(fixture.acknowledgements, 0, 'parking uses the explicit durable path, not ordinary acknowledgement');
+  assert.deepEqual(fixture.parked.map((message) => message.seq), [111]);
+  const parked = events.find((entry) => entry.event === 'message-parked');
+  assert.equal(parked.data.seq, 111);
+  assert.equal(parked.data.attempts, 3);
+  assert.match(parked.data.reason, /invalid plan/);
+});
+
+test('DELTA G: blocked work retains mail without spending poison attempts and carries openWork', async () => {
+  const task = { seq: 115, from: 'claude', to: 'codex', kind: 'task', subject: 'blocked', body: 'work' };
+  const fixture = transactionalBus(task);
+  const events = [];
+  const contexts = [];
+  const brain = {
+    name: 'blocked',
+    async takeTurn(context) {
+      contexts.push(context);
+      return {
+        done: false,
+        retainMessages: true,
+        blocked: true,
+        note: 'claim blocked: grok holds src/brain'
+      };
+    }
+  };
+
+  await runBrain({
+    seat: 'codex', brain, bus: fixture.client, maxWakes: 2, maxMessageAttempts: 1,
+    blockedBackoffMs: 1, sleep: async () => {},
+    log: (event, data) => events.push({ event, data })
+  });
+
+  assert.deepEqual(fixture.unread.map((message) => message.seq), [115]);
+  assert.equal(fixture.parked.length, 0, 'a busy claim is not poison input');
+  assert.equal(events.some((entry) => entry.event === 'message-retry'), false);
+  assert.equal(events.some((entry) => entry.event === 'message-parked'), false);
+  assert.equal(events.some((entry) => entry.event === 'wake-blocked-backoff'), true);
+  assert.equal(contexts[1].openWork, 'claim blocked: grok holds src/brain');
+});
+
+test('DELTA I: blocked work escalates after its separate bounded retry budget', async () => {
+  const task = { seq: 117, from: 'claude', to: 'codex', kind: 'task', subject: 'blocked forever', body: 'work' };
+  const fixture = transactionalBus(task);
+  const events = [];
+  const backoffs = [];
+  let providerCalls = 0;
+  const brain = {
+    name: 'blocked',
+    async takeTurn() {
+      providerCalls += 1;
+      return { done: false, retainMessages: true, blocked: true, note: 'claim blocked: grok holds src/brain' };
+    }
+  };
+
+  await runBrain({
+    seat: 'codex', brain, bus: fixture.client, maxWakes: 5, maxBlockedAttempts: 3,
+    blockedBackoffMs: 30_000, sleep: async (milliseconds) => { backoffs.push(milliseconds); },
+    log: (event, data) => events.push({ event, data })
+  });
+
+  assert.equal(providerCalls, 3, 'parking must terminate paid blocked retries');
+  assert.deepEqual(backoffs, [30_000, 30_000]);
+  assert.equal(fixture.unread.length, 0);
+  assert.deepEqual(fixture.parked.map((message) => message.seq), [117]);
+  assert.match(fixture.parked[0].parkedReason, /blocked after 3 cycles/);
+  assert.equal(events.filter((entry) => entry.event === 'message-blocked-escalated').length, 1);
+  assert.equal(events.some((entry) => entry.event === 'message-retry'), false,
+    'blocked cycles remain separate from poison-input attempts');
+});
+
+test('DELTA I: real agent retains failed mail and does not replay a committed send across wakes', async () => {
+  const task = { seq: 116, from: 'claude', to: 'codex', kind: 'task', subject: 'failure', body: 'work' };
+  let sends = 0;
+  let claims = 0;
+  const fixture = transactionalBus(task, undefined, {
+    async send() { sends += 1; return { ok: true }; },
+    async claim() {
+      claims += 1;
+      return { error: 'claim service failed', status: 500, code: 'internal_error', retriable: false };
+    }
+  });
+  const plan = JSON.stringify({
+    actions: [
+      { type: 'send', to: 'claude', kind: 'report', subject: 'partial result', body: 'evidence landed' },
+      { type: 'claim', paths: ['src/brain'], why: 'continue work' }
+    ],
+    done: false
+  });
+  let providerCalls = 0;
+  const brain = createAgentBrain({
+    seat: 'codex', maxRounds: 1,
+    provider: { kind: 'test', async ask() { providerCalls += 1; return { text: plan, isError: false }; } },
+    executePlanOptions: { claimRetryDelaysMs: [], sleep: async () => {} }
+  });
+
+  await runBrain({ seat: 'codex', brain, bus: fixture.client, maxWakes: 2, maxMessageAttempts: 2 });
+
+  assert.equal(providerCalls, 2);
+  assert.equal(sends, 1, 'the send accepted in wake one must be skipped when the plan is replayed');
+  assert.equal(claims, 2, 'the refused action itself remains retryable');
+  assert.equal(fixture.unread.length, 0);
+  assert.deepEqual(fixture.parked.map((message) => message.seq), [116]);
+});
+
+test('a message that fails then succeeds is not parked and its attempt counter resets', async () => {
+  const transient = { seq: 112, from: 'claude', to: 'codex', kind: 'task', subject: 'transient', body: 'provider blip' };
+  const fixture = transactionalBus(transient);
+  const events = [];
+  let turns = 0;
+  const brain = {
+    name: 'recovers',
+    async takeTurn() {
+      turns += 1;
+      return turns === 1
+        ? { done: true, retainMessages: true, note: 'temporary provider error' }
+        : { done: true, note: 'processed' };
+    }
+  };
+
+  await runBrain({
+    seat: 'codex', brain, bus: fixture.client, maxWakes: 2, maxMessageAttempts: 3,
+    log: (event, data) => events.push({ event, data })
+  });
+
+  assert.equal(fixture.unread.length, 0);
+  assert.equal(events.some((entry) => entry.event === 'message-parked'), false);
+  const completed = events.find((entry) => entry.event === 'message-retry-cleared');
+  assert.deepEqual(completed.data, { seat: 'codex', seq: 112, attempts: 1 });
+});
+
+test('one poison message cannot spend a later message retry budget', async () => {
+  const poison = { seq: 113, from: 'claude', to: 'codex', kind: 'task', subject: 'poison', body: 'bad' };
+  const healthy = { seq: 114, from: 'claude', to: 'codex', kind: 'task', subject: 'healthy', body: 'good' };
+  const fixture = transactionalBus([poison, healthy]);
+  const seen = [];
+  const events = [];
+  const brain = {
+    name: 'selective',
+    async takeTurn({ messages }) {
+      seen.push(messages[0].seq);
+      return messages[0].seq === poison.seq
+        ? { done: true, retainMessages: true, note: 'poison input' }
+        : { done: true, note: 'processed healthy input' };
+    }
+  };
+
+  await runBrain({
+    seat: 'codex', brain, bus: fixture.client, maxWakes: 4, maxMessageAttempts: 3,
+    log: (event, data) => events.push({ event, data })
+  });
+
+  assert.deepEqual(seen, [113, 113, 113, 114]);
+  assert.deepEqual(events.filter((entry) => entry.event === 'message-parked').map((entry) => entry.data.seq), [113]);
+  assert.equal(fixture.unread.length, 0, 'the healthy message proceeds with an untouched budget');
+});
+
+test('a thrown takeTurn retains mail; a returned usable turn commits it', async () => {
+  const task = { seq: 102, from: 'claude', to: 'codex', kind: 'task', subject: 'transaction', body: 'work' };
+  const thrown = transactionalBus(task);
+  await runBrain({
+    seat: 'codex',
+    brain: { name: 'thrower', async takeTurn() { throw new Error('brain crashed'); } },
+    bus: thrown.client,
+    maxWakes: 1
+  });
+  assert.deepEqual(thrown.unread.map((message) => message.seq), [102]);
+  assert.equal(thrown.acknowledgements, 0);
+
+  const usable = transactionalBus(task);
+  await runBrain({
+    seat: 'codex',
+    brain: { name: 'usable', async takeTurn() { return { done: true }; } },
+    bus: usable.client,
+    maxWakes: 1
+  });
+  assert.equal(usable.unread.length, 0);
+  assert.equal(usable.acknowledgements, 1);
+});
+
+// ---------------------------------------------------------------------------
+// A turn that SENT mail and then threw must not be retried.
+//
+// runner.ts set `retainMessages: true` on any brain throw. Correct for a brain that dies
+// before acting; wrong for one that answers and *then* dies - the reply has left, the inbox
+// entry is retained, and the next wake answers the same message again.
+//
+// Measured on the live bus 2026-08-20: one seat answered a single question five times
+// (rounds 2052-2056) and reported one audit four times (2081-2087). Every repeat was a paid
+// provider call. On a seat with limited quota this is the difference between degraded and dead.
+// ---------------------------------------------------------------------------
+
+/** A transactional bus: peek does not consume, acknowledge does. Unacked mail comes back. */
+function makeTransactionalBus(messages) {
+  const pending = messages.slice();
+  const sent = [];
+  const peeks = [];
+  const acked = [];
+  return {
+    sent,
+    peeks,
+    acked,
+    get pendingCount() { return pending.length; },
+    bus: {
+      async listen() { return pending.length ? 'mail' : 'timeout'; },
+      async read() { const b = pending.slice(); pending.length = 0; return b; },
+      async peek() { peeks.push(pending.map((m) => m.seq)); return pending.slice(); },
+      async acknowledge(_seat, seqs) {
+        acked.push(seqs.slice());
+        for (const seq of seqs) {
+          const at = pending.findIndex((m) => m.seq === seq);
+          if (at >= 0) pending.splice(at, 1);
+        }
+        return [];
+      },
+      tools() {
+        return {
+          async send(input) { sent.push(input); return { seq: sent.length }; },
+          async status() { return { ok: true }; },
+          async claim() { return {}; },
+          async release() { return {}; },
+          async runCapability() { return {}; }
+        };
+      }
+    }
+  };
+}
+
+test('a turn that SENT mail and then threw is not re-delivered', async () => {
+  const { bus, sent, acked } = makeTransactionalBus([msg(7, 'answer me once')]);
+  let turns = 0;
+  const brain = {
+    name: 'sends-then-dies',
+    async takeTurn(ctx) {
+      turns += 1;
+      await ctx.tools.send({ to: 'grok', kind: 'note', subject: `reply ${turns}`, body: 'done' });
+      throw new Error('provider hiccup after the reply went out');
+    }
+  };
+  await runBrain({ seat: 'claude', brain, bus, maxWakes: 3, thinkWhenIdle: false });
+
+  assert.equal(turns, 1,
+    `REGRESSION: the brain woke ${turns} times for one message. A turn with an observable ` +
+    'effect must not be retried.');
+  assert.equal(sent.length, 1,
+    `REGRESSION: the seat answered ${sent.length} times. Every repeat is a paid provider call.`);
+  assert.equal(acked.flat().includes(7), true,
+    'the answered message must be committed, not left for the next wake');
+
+  // NOT asserted: "seq 7 never appears in a later peek". The first version of this test did,
+  // and failed - peeks were [[7],[7],[],[]] with turns=1. The runner peeks CONCURRENTLY while
+  // the brain thinks (`receiveWhileThinking`), so a second peek legitimately sees the message
+  // before the acknowledge lands. That is a detail of how mail is fetched, not of whether the
+  // seat answered twice. The instrument was wrong, not the behaviour.
+});
+
+test('a turn that threw WITHOUT sending is still retried', async () => {
+  // The green control, and the property the original behaviour existed to protect. Narrowing
+  // "always retain" to "retain only when nothing was sent" must not become "never retain":
+  // a brain that dies before acting has done no work, and its message must survive.
+  const { bus, sent } = makeTransactionalBus([msg(8, 'nobody answered this')]);
+  let turns = 0;
+  const brain = {
+    name: 'dies-before-acting',
+    async takeTurn() {
+      turns += 1;
+      throw new Error('died before sending anything');
+    }
+  };
+  await runBrain({ seat: 'claude', brain, bus, maxWakes: 3, thinkWhenIdle: false });
+
+  assert.equal(sent.length, 0, 'nothing should have been sent');
+  assert.ok(turns >= 2,
+    `unsent mail must come back: the brain saw ${turns} wake(s), so the message was dropped ` +
+    'after a failure that had no effect - that is the stall this retain behaviour prevents');
+});
+
+// A seat that was ASSIGNED but has no open work must still wake knowing its assignment.
+//
+// Item 10 fixed the recovery half of "seat memory": a seat resuming work recalls its brief by
+// workId. The fresh-assignment half was never wired. Measured 2026-08-20: codex was assigned via
+// `mailbox assign`, woke, and replied "No incoming mail or explicit gate definitions were
+// included in this wake" - then, one wake later, woke again on a timeout with messages:0 and
+// stalled, because nothing put its responsibility in front of it. grok hit the same wall on the
+// same day. Two seats, one missing read.
+test('an assigned seat with NO open work still wakes with its assignment', async () => {
+  const { bus } = makeBus({ script: [[{ seq: 1, kind: 'task', body: 'anything' }]] });
+  let seen;
+  bus.currentAssignment = async (seat) =>
+    seat === 'codex' ? 'verify C1-C11 in the pick 3 assessment; read-only' : undefined;
+
+  await runBrain({
+    seat: 'codex',
+    bus,
+    maxWakes: 1,
+    brain: {
+      async takeTurn(context) {
+        seen = context.assignmentRecall;
+        return { done: true };
+      }
+    }
+  });
+
+  assert.equal(seen, 'verify C1-C11 in the pick 3 assessment; read-only',
+    'a seat with an assignment and no recovery woke without it - this is the bug that ' +
+    'made two seats ask for their brief to be re-sent by hand');
+});
+
+test('an open checkpoint still wins: recovery recall is the specific work in flight', async () => {
+  const { bus } = makeBus({ script: [[{ seq: 1, kind: 'task', body: 'anything' }]] });
+  let seen;
+  bus.currentAssignment = async () => 'the standing assignment';
+  bus.loadRecovery = async () => ({ seat: 'codex', workId: 42, note: 'resuming', status: 'open', actionReceipts: [] });
+  bus.recallAssignment = async () => 'the brief for the work in flight';
+
+  await runBrain({
+    seat: 'codex',
+    bus,
+    maxWakes: 1,
+    brain: {
+      async takeTurn(context) {
+        seen = context.assignmentRecall;
+        return { done: true };
+      }
+    }
+  });
+
+  assert.equal(seen, 'the brief for the work in flight',
+    'the standing assignment must not shadow the brief for work actually in progress');
+});
+
+// A checkpointed message must not SHADOW the standing assignment.
+//
+// Recovery recall wins over currentAssignment by design: the brief for work in flight beats the
+// general responsibility, and that is right. But any message can become the anchor - including
+// one whose only content is "read your assignment". Observed 2026-08-21: an 830-byte pointer
+// shadowed the complete 1241-byte assignment it pointed at, and the seat reported an incomplete
+// brief on every wake while the real task sat one field away.
+//
+// They answer different questions - "what work is in flight" and "what am I responsible for" -
+// so the wake presents BOTH when both exist. Choosing between them was the bug.
+test('a checkpointed pointer does not shadow the standing assignment', async () => {
+  const { bus } = makeBus({ script: [[{ seq: 1, kind: 'task', body: 'anything' }]] });
+  let seen;
+  bus.loadRecovery = async () => ({ seat: 'codex', workId: 42, note: 'resuming', status: 'open', actionReceipts: [] });
+  bus.recallAssignment = async () => 'read goal.assignments.codex for the task';
+  bus.currentAssignment = async () => 'C1 through C9, in full, with the acceptance gate';
+
+  await runBrain({
+    seat: 'codex',
+    bus,
+    maxWakes: 1,
+    brain: {
+      async takeTurn(context) {
+        seen = { recall: context.assignmentRecall, standing: context.standingAssignment };
+        return { done: true };
+      }
+    }
+  });
+
+  assert.equal(seen.recall, 'read goal.assignments.codex for the task',
+    'the work in flight is still presented');
+  assert.equal(seen.standing, 'C1 through C9, in full, with the acceptance gate',
+    'and the standing assignment is presented alongside it, not replaced by it');
+});
+
+test('with no recovery the standing assignment is still the recall field', async () => {
+  const { bus } = makeBus({ script: [[{ seq: 1, kind: 'task', body: 'anything' }]] });
+  let seen;
+  bus.currentAssignment = async () => 'the whole task';
+
+  await runBrain({
+    seat: 'codex', bus, maxWakes: 1,
+    brain: { async takeTurn(c) { seen = { recall: c.assignmentRecall, standing: c.standingAssignment }; return { done: true }; } }
+  });
+
+  assert.equal(seen.recall, 'the whole task', 'unchanged when there is no competing brief');
+  assert.equal(seen.standing, undefined, 'and not duplicated into both fields');
 });

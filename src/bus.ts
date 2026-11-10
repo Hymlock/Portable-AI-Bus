@@ -647,7 +647,10 @@ export class WorkspaceBus {
 
     const copies = [
       { from: 'bin', to: path.join(paths.busDir, 'bin') },
+      { from: 'templates/tool-catalog.json', to: path.join(paths.busDir, 'bin', 'tool-catalog.defaults.json') },
       { from: 'dist/mailbox.js', to: path.join(paths.busDir, 'bin', 'mailbox.js') },
+      { from: 'dist/evidence.js', to: path.join(paths.busDir, 'bin', 'evidence.js') },
+      { from: 'dist/claim-walk.js', to: path.join(paths.busDir, 'bin', 'claim-walk.js') },
       { from: 'dist/capabilities.js', to: path.join(paths.busDir, 'bin', 'capabilities.js') },
       { from: 'dist/harness.js', to: path.join(paths.busDir, 'bin', 'harness.js') },
       { from: 'dist/worker-client.js', to: path.join(paths.busDir, 'bin', 'worker-client.js') },
@@ -660,6 +663,7 @@ export class WorkspaceBus {
       { from: 'scripts/bus-processes.js', to: path.join(paths.busDir, 'scripts', 'bus-processes.js') },
       { from: 'scripts/bus-console.js', to: path.join(paths.busDir, 'scripts', 'bus-console.js') },
       { from: 'scripts/bus-tick.js', to: path.join(paths.busDir, 'scripts', 'bus-tick.js') },
+      { from: 'scripts/operator-heartbeat.js', to: path.join(paths.busDir, 'scripts', 'operator-heartbeat.js') },
       { from: 'node_modules/node-pty', to: path.join(paths.busDir, 'node_modules', 'node-pty') },
       { from: 'node_modules/@anthropic-ai/sdk', to: path.join(paths.busDir, 'node_modules', '@anthropic-ai', 'sdk') },
       { from: 'node_modules/@babel/runtime', to: path.join(paths.busDir, 'node_modules', '@babel', 'runtime') },

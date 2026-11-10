@@ -3,8 +3,16 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
+require('./helpers/require-fresh-dist')();
 const { HarnessServer } = require('../dist/harness.js');
-const { callSeatTool, waitForMailbox, watchMailbox } = require('../dist/worker-client.js');
+const { callSeatTool, waitForMailbox, watchMailbox, seatToolInvocation } = require('../dist/worker-client.js');
+
+test('worker-client supersede verb maps exact message identities and reason', () => {
+  assert.deepEqual(
+    seatToolInvocation('supersede', ['--seq', '12', '--by', '14', '--reason', 'corrected'], 'worker'),
+    { name: 'mailbox_supersede', input: { agent: 'worker', seq: 12, by: 14, reason: 'corrected' } }
+  );
+});
 
 const TOKEN_A = `pab1.worker.${'a'.repeat(48)}`;
 const TOKEN_B = `pab1.worker.${'b'.repeat(48)}`;
@@ -57,12 +65,13 @@ test('one-shot wait acquires, polls with its lease, and releases', async (t) => 
     timeoutMs: 123
   }, { fetch: scriptedFetch(calls, [
     json({ ok: true, instanceId: 'instance-a', leaseId: 'lease-a', generation: 2, staleAfterMs: 1000 }),
-    json({ ok: true, instanceId: 'instance-a', wake: 'message', messages: [{ seq: 7, subject: 'work' }] }),
+    json({ ok: true, instanceId: 'instance-a', wake: 'message', messages: [{ seq: 7, subject: 'work' }], hasMore: false }),
     json({ ok: true, instanceId: 'instance-a', released: true })
   ]) });
 
   assert.equal(result.wake, 'message');
   assert.equal(result.afterSeq, 7);
+  assert.equal(result.hasMore, false);
   assert.equal(result.instanceId, 'instance-a');
   assert.deepEqual(calls.map((call) => call.pathname), ['/v1/heartbeat', '/v1/wake', '/v1/workers/release']);
   assert.equal(calls[0].body.agent, 'worker');
@@ -75,6 +84,44 @@ test('one-shot wait acquires, polls with its lease, and releases', async (t) => 
   assert.equal(calls[1].query.get('generation'), '2');
   assert.equal(calls[1].query.get('afterSeq'), '0');
   assert.equal(calls[1].query.get('timeoutMs'), '123');
+});
+
+test('one-shot wait exposes truncation without advancing past the returned page', async (t) => {
+  const fixture = await clientFixture(t, 'instance-a', TOKEN_A);
+  const calls = [];
+  const result = await waitForMailbox({
+    root: fixture.root,
+    seat: 'worker',
+    credentialsDir: fixture.credentialsDir,
+    clientId: 'truncated-page',
+    timeoutMs: 123
+  }, { fetch: scriptedFetch(calls, [
+    json({ ok: true, instanceId: 'instance-a', leaseId: 'lease-a', generation: 2, staleAfterMs: 1000 }),
+    json({ ok: true, instanceId: 'instance-a', wake: 'message', messages: [{ seq: 7 }, { seq: 8 }], hasMore: true }),
+    json({ ok: true, instanceId: 'instance-a', released: true })
+  ]) });
+
+  assert.equal(result.hasMore, true);
+  assert.equal(result.afterSeq, 8);
+});
+
+test('one-shot wait can listen strictly after an already-presented batch', async (t) => {
+  const fixture = await clientFixture(t, 'instance-a', TOKEN_A);
+  const calls = [];
+  await waitForMailbox({
+    root: fixture.root,
+    seat: 'worker',
+    credentialsDir: fixture.credentialsDir,
+    clientId: 'in-flight-listener',
+    timeoutMs: 123,
+    afterSeq: 41
+  }, { fetch: scriptedFetch(calls, [
+    json({ ok: true, instanceId: 'instance-a', leaseId: 'lease-a', generation: 2, staleAfterMs: 1000 }),
+    json({ ok: true, instanceId: 'instance-a', wake: 'message', messages: [{ seq: 42, subject: 'late' }], hasMore: false }),
+    json({ ok: true, instanceId: 'instance-a', released: true })
+  ]) });
+
+  assert.equal(calls.find((call) => call.pathname === '/v1/wake').query.get('afterSeq'), '41');
 });
 
 test('one-shot wait still releases when polling fails', async (t) => {
@@ -108,8 +155,8 @@ test('watch sends a monotonic afterSeq and suppresses unchanged unread mail', as
   }, (event) => emitted.push(event), {
     fetch: scriptedFetch(calls, [
       json({ ok: true, instanceId: 'instance-a', leaseId: 'lease-a', generation: 1, staleAfterMs: 60_000 }),
-      json({ ok: true, instanceId: 'instance-a', wake: 'message', messages: [{ seq: 4, subject: 'once' }] }),
-      json({ ok: true, instanceId: 'instance-a', wake: 'message', messages: [{ seq: 4, subject: 'once' }] }),
+      json({ ok: true, instanceId: 'instance-a', wake: 'message', messages: [{ seq: 4, subject: 'once' }], hasMore: false }),
+      json({ ok: true, instanceId: 'instance-a', wake: 'message', messages: [{ seq: 4, subject: 'once' }], hasMore: false }),
       json({ ok: true, instanceId: 'instance-a', released: true })
     ]),
     sleep: async (milliseconds) => {
@@ -135,7 +182,7 @@ test('watch renews the same lease before polling beyond its renewal deadline', a
     json({ ok: true, instanceId: 'instance-a', leaseId: 'lease-a', generation: 3, renewAfterMs: 5 }),
     () => {
       clock = 5;
-      return json({ ok: true, instanceId: 'instance-a', wake: 'timeout', messages: [] });
+        return json({ ok: true, instanceId: 'instance-a', wake: 'timeout', messages: [], hasMore: false });
     },
     json({ ok: true, instanceId: 'instance-a', leaseId: 'lease-a', generation: 3, renewAfterMs: 5 }),
     () => {
@@ -180,7 +227,7 @@ test('watch re-discovers a rotated endpoint and credential with jittered backoff
       return json({ ok: true, instanceId: 'instance-b', leaseId: 'lease-b', generation: 1, staleAfterMs: 60_000 });
     }
     if (call.pathname === '/v1/wake') {
-      return json({ ok: true, instanceId: 'instance-b', wake: 'message', messages: [{ seq: 9 }] });
+      return json({ ok: true, instanceId: 'instance-b', wake: 'message', messages: [{ seq: 9 }], hasMore: false });
     }
     return json({ ok: true, instanceId: 'instance-b', released: true });
   };
@@ -229,7 +276,7 @@ test('watch fences a lost lease and reacquires with a new generation', async (t)
       json({ ok: true, instanceId: 'instance-a', leaseId: 'lease-old', generation: 1, renewAfterMs: 20_000 }),
       json({ ok: false, error: { code: 'lease_lost', message: 'lease expired' } }, 409),
       json({ ok: true, instanceId: 'instance-a', leaseId: 'lease-new', generation: 2, renewAfterMs: 20_000 }),
-      json({ ok: true, instanceId: 'instance-a', wake: 'message', messages: [{ seq: 1 }] }),
+    json({ ok: true, instanceId: 'instance-a', wake: 'message', messages: [{ seq: 1 }], hasMore: false }),
       json({ ok: true, instanceId: 'instance-a', released: true })
     ]),
     random: () => 0.5,
@@ -322,10 +369,10 @@ test('watch resets its sequence cursor only when the durable mailbox epoch chang
   }, {
     fetch: scriptedFetch(calls, [
       json({ ok: true, instanceId: 'instance-a', leaseId: 'lease-a', generation: 1, mailboxEpoch: '2026-01-01T00:00:00.000Z' }),
-      json({ ok: true, instanceId: 'instance-a', wake: 'message', messages: [{ seq: 5 }] }),
+      json({ ok: true, instanceId: 'instance-a', wake: 'message', messages: [{ seq: 5 }], hasMore: false }),
       json({ ok: false, error: { code: 'lease_lost', message: 'mailbox replaced' } }, 409),
       json({ ok: true, instanceId: 'instance-a', leaseId: 'lease-b', generation: 2, mailboxEpoch: '2026-01-02T00:00:00.000Z' }),
-      json({ ok: true, instanceId: 'instance-a', wake: 'message', messages: [{ seq: 1 }] }),
+      json({ ok: true, instanceId: 'instance-a', wake: 'message', messages: [{ seq: 1 }], hasMore: false }),
       json({ ok: true, instanceId: 'instance-a', released: true })
     ]),
     sleep: async () => undefined
@@ -342,7 +389,7 @@ test('watch persists a successful delivery cursor across process sessions', asyn
     clientId: 'durable-worker', signal: firstController.signal
   }, () => firstController.abort(), { fetch: scriptedFetch(firstCalls, [
     json({ ok: true, instanceId: 'instance-a', leaseId: 'lease-a', generation: 1, mailboxEpoch: '2026-01-01T00:00:00.000Z' }),
-    json({ ok: true, instanceId: 'instance-a', wake: 'message', messages: [{ seq: 4 }] }),
+      json({ ok: true, instanceId: 'instance-a', wake: 'message', messages: [{ seq: 4 }], hasMore: false }),
     json({ ok: true, instanceId: 'instance-a', released: true })
   ]) });
 
@@ -353,7 +400,7 @@ test('watch persists a successful delivery cursor across process sessions', asyn
     clientId: 'durable-worker', signal: secondController.signal
   }, () => secondController.abort(), { fetch: scriptedFetch(secondCalls, [
     json({ ok: true, instanceId: 'instance-a', leaseId: 'lease-b', generation: 2, mailboxEpoch: '2026-01-01T00:00:00.000Z' }),
-    json({ ok: true, instanceId: 'instance-a', wake: 'message', messages: [{ seq: 5 }] }),
+    json({ ok: true, instanceId: 'instance-a', wake: 'message', messages: [{ seq: 5 }], hasMore: false }),
     json({ ok: true, instanceId: 'instance-a', released: true })
   ]) });
   assert.equal(secondCalls.find((call) => call.pathname === '/v1/wake').query.get('afterSeq'), '4');

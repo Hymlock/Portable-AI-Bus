@@ -15,7 +15,11 @@
  * same move as every other guard here: a rule nobody can break beats a rule everyone agrees to.
  */
 
-export type Claim = { path: string; why?: string };
+import { realpathSync, statSync } from 'node:fs';
+import path from 'node:path';
+import { filesystemIdentityMaterial } from './workspace-key';
+
+export type Claim = { path: string; why?: string; root?: string; identity?: string };
 
 export type GuardResult = {
   ok: boolean;
@@ -35,6 +39,8 @@ export function coveredBy(file: string, claim: string): boolean {
 }
 
 export type GuardOptions = {
+  /** Resolve workspace-relative durable claims against their recorded root. */
+  repoRoot?: string;
   /**
    * Paths every seat may commit without claiming - lockfiles, build output, the claim registry
    * itself. Without this a strict guard blocks routine work and gets switched off, which is
@@ -42,6 +48,24 @@ export type GuardOptions = {
    */
   shared?: string[];
 };
+
+function claimCovers(file: string, claim: Claim, repoRoot?: string): boolean {
+  if (!repoRoot || !claim.root) return coveredBy(file, claim.path);
+  try {
+    const target = path.resolve(claim.root, claim.path);
+    const observed = statSync(target, { bigint: true });
+    if (claim.identity?.startsWith('filesystem-v1:') &&
+        claim.identity !== filesystemIdentityMaterial(observed.dev, observed.ino)) return false;
+    const claimed = realpathSync(target);
+    const staged = realpathSync(path.resolve(repoRoot, file));
+    const relative = path.relative(claimed, staged);
+    return relative === '' || (observed.isDirectory() && !path.isAbsolute(relative) &&
+      relative !== '..' && !relative.startsWith(`..${path.sep}`));
+  } catch {
+    // A missing/replaced target is not permission to fall back to a matching spelling.
+    return false;
+  }
+}
 
 const DEFAULT_SHARED = [
   'package-lock.json',
@@ -61,17 +85,17 @@ export function guardStagedPaths(
   options: GuardOptions = {}
 ): GuardResult {
   const shared = (options.shared ?? DEFAULT_SHARED).map(normalise);
-  const mine = (claimsBySeat[seat] ?? []).map((c) => c.path);
+  const mine = claimsBySeat[seat] ?? [];
   const violations: { path: string; reason: string }[] = [];
 
   for (const file of staged) {
     if (shared.some((s) => coveredBy(file, s))) continue;
-    if (mine.some((claim) => coveredBy(file, claim))) continue;
+    if (mine.some((claim) => claimCovers(file, claim, options.repoRoot))) continue;
 
     // Naming the OTHER owner matters more than refusing. "You staged grok's file" is
     // actionable; "unclaimed path" sends someone hunting.
     const owner = Object.entries(claimsBySeat).find(
-      ([other, claims]) => other !== seat && claims.some((c) => coveredBy(file, c.path))
+      ([other, claims]) => other !== seat && claims.some((c) => claimCovers(file, c, options.repoRoot))
     )?.[0];
 
     violations.push({
